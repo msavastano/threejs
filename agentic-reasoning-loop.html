@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agentic Reasoning Loop — Tool-Calling Network</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* --- Minimal HUD overlay --- */
+  #hud {
+    position: fixed; top: 18px; left: 20px; z-index: 10;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: rgba(180, 220, 255, 0.85);
+    pointer-events: none; user-select: none;
+    text-shadow: 0 0 8px rgba(60,140,255,0.6);
+  }
+  #hud h1 { font-size: 14px; letter-spacing: 2px; font-weight: 600; margin: 0 0 4px; }
+  #hud .sub { font-size: 11px; letter-spacing: 1px; opacity: 0.6; }
+  #status {
+    position: fixed; bottom: 18px; left: 20px; z-index: 10;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px; color: rgba(120,200,255,0.75); pointer-events: none;
+    text-shadow: 0 0 6px rgba(40,120,255,0.5);
+  }
+  #status .tool { color: #fff; }
+  #legend {
+    position: fixed; bottom: 18px; right: 20px; z-index: 10;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 10px; line-height: 1.7; text-align: right;
+    color: rgba(150,180,210,0.55); pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud">
+  <h1>AGENTIC REASONING LOOP</h1>
+  <div class="sub">LLM CORE · TOOL-CALLING NETWORK</div>
+</div>
+<div id="status">› idle</div>
+<div id="legend">drag to orbit · scroll to zoom</div>
+
+<!-- Resolve bare module specifiers to a pinned CDN build (works from file://) -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+/* =============================================================================
+ * 1. CONFIG  — pure constants, no scene objects. Tweak the look from here.
+ * ========================================================================== */
+const CONFIG = {
+  background: 0x000000,
+  coreColor: 0x7fd8ff,
+  orbitRadius: 7.5,        // distance of tool nodes from the core
+  arcHeight: 2.2,          // how much each spline bows outward
+  splineSamples: 48,       // resolution of each edge polyline
+  packetSpeed: 0.55,       // fraction of spline traversed per second
+  callIntervalMin: 0.45,   // seconds between simulated tool calls
+  callIntervalMax: 1.4,
+  starCount: 1400,
+  bloom: { strength: 1.25, radius: 0.55, threshold: 0.0 },
+  camera: { fov: 55, start: new THREE.Vector3(0, 4.5, 18) },
+};
+
+/* The tool/skill roster. This is the *data* that defines the graph topology.
+ * Swap this array (or drive it from AgentVisualizer.state) to reshape the net. */
+const TOOL_DEFS = [
+  { id: 'search',  label: 'Web Search',     color: 0x4fd1ff },
+  { id: 'fileio',  label: 'File I/O',       color: 0x7c5cff },
+  { id: 'python',  label: 'Python Exec',    color: 0x3dffa8 },
+  { id: 'fetch',   label: 'Web Fetch',      color: 0xff7ad9 },
+  { id: 'memory',  label: 'Memory Store',   color: 0xffd166 },
+  { id: 'vision',  label: 'Vision Parse',   color: 0xff6b6b },
+  { id: 'shell',   label: 'Shell',          color: 0x9bfff0 },
+];
+
+/* =============================================================================
+ * 2. AGENT STATE  — the external-facing model. Everything visual is derived
+ *    from this object, so a real agent runtime can drive the viz by mutating
+ *    it (or by calling AgentVisualizer.callTool / .setStatus).
+ * ========================================================================== */
+const AgentState = {
+  tools: TOOL_DEFS.map(t => ({ ...t, activity: 0, calls: 0 })),
+  autoplay: true,            // simulate a reasoning loop when nothing drives it
+  statusText: 'booting',
+  getTool(id) { return this.tools.find(t => t.id === id); },
+};
+
+/* =============================================================================
+ * 3. SCENE SETUP
+ * ========================================================================== */
+const app = document.getElementById('app');
+const statusEl = document.getElementById('status');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(CONFIG.background, 1);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000000, 0.018);
+
+const camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, innerWidth / innerHeight, 0.1, 200);
+camera.position.copy(CONFIG.camera.start);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.35;
+controls.minDistance = 9;
+controls.maxDistance = 40;
+
+scene.add(new THREE.AmbientLight(0x223344, 1.0));
+
+/* Root group so the entire network can be rotated/repositioned as one unit. */
+const network = new THREE.Group();
+scene.add(network);
+
+/* =============================================================================
+ * 4. GRAPH GEOMETRY  — built from AgentState. Returns a graph object holding
+ *    node meshes, curves and the THREE.Points / THREE.LineSegments layers.
+ * ========================================================================== */
+function distributeOnSphere(i, n, radius) {
+  // Fibonacci sphere for an even orbital spread of tool nodes.
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  const y = 1 - (i / Math.max(1, n - 1)) * 2;
+  const r = Math.sqrt(Math.max(0, 1 - y * y));
+  const theta = golden * i;
+  return new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r).multiplyScalar(radius);
+}
+
+function makeNodeMesh(color, radius, emissiveIntensity) {
+  const geo = new THREE.SphereGeometry(radius, 24, 24);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x05080d,
+    emissive: new THREE.Color(color),
+    emissiveIntensity,
+    roughness: 0.35,
+    metalness: 0.1,
+  });
+  return new THREE.Mesh(geo, mat);
+}
+
+function buildGraph(state) {
+  const nodes = [];      // interactive sphere meshes (core + tools)
+  const edges = [];      // { curve, fromCore:true, tool }
+  const pointPositions = [];
+  const pointColors = [];
+
+  // --- Core node -----------------------------------------------------------
+  const core = makeNodeMesh(CONFIG.coreColor, 1.15, 1.6);
+  core.userData = { id: 'core', base: 1.15, baseEmissive: 1.6, pulse: 0 };
+  network.add(core);
+  nodes.push(core);
+  addPoint(new THREE.Vector3(0, 0, 0), CONFIG.coreColor, 1);
+
+  // A faint inner shell around the core for a "thinking" halo.
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(1.7, 32, 32),
+    new THREE.MeshBasicMaterial({ color: CONFIG.coreColor, transparent: true, opacity: 0.06, side: THREE.BackSide })
+  );
+  network.add(halo);
+
+  // --- Tool nodes + splines -----------------------------------------------
+  const n = state.tools.length;
+  state.tools.forEach((tool, i) => {
+    const pos = distributeOnSphere(i, n, CONFIG.orbitRadius);
+    const mesh = makeNodeMesh(tool.color, 0.5, 0.9);
+    mesh.position.copy(pos);
+    mesh.userData = { id: tool.id, base: 0.5, baseEmissive: 0.9, pulse: 0, tool };
+    network.add(mesh);
+    nodes.push(mesh);
+    tool.mesh = mesh;
+
+    addPoint(pos, tool.color, 0.7);
+
+    // Spline from core to tool: a quadratic bezier bowed outward.
+    const mid = pos.clone().multiplyScalar(0.5);
+    const perp = new THREE.Vector3().crossVectors(pos, new THREE.Vector3(0, 1, 0));
+    if (perp.lengthSq() < 1e-4) perp.set(1, 0, 0);
+    perp.normalize().multiplyScalar(CONFIG.arcHeight * 0.4);
+    mid.add(pos.clone().normalize().multiplyScalar(CONFIG.arcHeight)).add(perp);
+    const curve = new THREE.QuadraticBezierCurve3(new THREE.Vector3(0, 0, 0), mid, pos.clone());
+    edges.push({ curve, tool });
+  });
+
+  // --- THREE.Points : the graph node layer (glowing vertices) -------------
+  const pGeo = new THREE.BufferGeometry();
+  pGeo.setAttribute('position', new THREE.Float32BufferAttribute(pointPositions, 3));
+  pGeo.setAttribute('color', new THREE.Float32BufferAttribute(pointColors, 3));
+  const pMat = new THREE.PointsMaterial({
+    size: 0.55, vertexColors: true, transparent: true, opacity: 0.9,
+    blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+  });
+  const points = new THREE.Points(pGeo, pMat);
+  network.add(points);
+
+  // --- THREE.LineSegments : the spline edges ------------------------------
+  const segPos = [];
+  const segCol = [];
+  const coreCol = new THREE.Color(CONFIG.coreColor);
+  edges.forEach(({ curve, tool }) => {
+    const pts = curve.getPoints(CONFIG.splineSamples);
+    const toolCol = new THREE.Color(tool.color);
+    for (let s = 0; s < pts.length - 1; s++) {
+      segPos.push(pts[s].x, pts[s].y, pts[s].z, pts[s + 1].x, pts[s + 1].y, pts[s + 1].z);
+      const c0 = coreCol.clone().lerp(toolCol, s / pts.length);
+      const c1 = coreCol.clone().lerp(toolCol, (s + 1) / pts.length);
+      segCol.push(c0.r, c0.g, c0.b, c1.r, c1.g, c1.b);
+    }
+  });
+  const lGeo = new THREE.BufferGeometry();
+  lGeo.setAttribute('position', new THREE.Float32BufferAttribute(segPos, 3));
+  lGeo.setAttribute('color', new THREE.Float32BufferAttribute(segCol, 3));
+  const lMat = new THREE.LineBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.28,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const lines = new THREE.LineSegments(lGeo, lMat);
+  network.add(lines);
+
+  return { nodes, core, halo, edges, points, lines };
+
+  function addPoint(v, color, mul) {
+    pointPositions.push(v.x, v.y, v.z);
+    const c = new THREE.Color(color).multiplyScalar(mul);
+    pointColors.push(c.r, c.g, c.b);
+  }
+}
+
+/* Background starfield — a second THREE.Points layer for depth. */
+function buildStars() {
+  const pos = [];
+  for (let i = 0; i < CONFIG.starCount; i++) {
+    const r = 40 + Math.random() * 60;
+    const t = Math.random() * Math.PI * 2;
+    const p = Math.acos(2 * Math.random() - 1);
+    pos.push(r * Math.sin(p) * Math.cos(t), r * Math.sin(p) * Math.sin(t), r * Math.cos(p));
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({
+    color: 0x335577, size: 0.18, transparent: true, opacity: 0.7,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const stars = new THREE.Points(geo, mat);
+  scene.add(stars);
+  return stars;
+}
+
+const graph = buildGraph(AgentState);
+const stars = buildStars();
+
+/* =============================================================================
+ * 5. DATA PACKETS  — pooled glowing spheres that ride the splines.
+ *    A packet goes core -> tool (outbound), triggers the node, then returns.
+ * ========================================================================== */
+const packetGeo = new THREE.SphereGeometry(0.16, 12, 12);
+const packetPool = [];
+const activePackets = [];
+
+function spawnPacket(edge) {
+  let p = packetPool.pop();
+  if (!p) {
+    const mat = new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    p = new THREE.Mesh(packetGeo, mat);
+    network.add(p);
+  }
+  p.visible = true;
+  p.material.color.set(edge.tool.color);
+  p.userData = { edge, t: 0, dir: 1, delivered: false };
+  activePackets.push(p);
+  return p;
+}
+
+function retirePacket(p) {
+  p.visible = false;
+  const idx = activePackets.indexOf(p);
+  if (idx !== -1) activePackets.splice(idx, 1);
+  packetPool.push(p);
+}
+
+/* The "receive" reaction (Requirement 4): scale up + flare emissive. */
+function triggerNode(mesh) {
+  mesh.userData.pulse = 1;
+  if (mesh.userData.tool) {
+    mesh.userData.tool.activity = 1;
+    mesh.userData.tool.calls++;
+  }
+}
+
+/* =============================================================================
+ * 6. EXTERNAL DRIVER API  — what a real agent loop would call.
+ * ========================================================================== */
+const AgentVisualizer = {
+  state: AgentState,
+  callTool(id) {
+    const edge = graph.edges.find(e => e.tool.id === id);
+    if (!edge) return false;
+    spawnPacket(edge);
+    triggerNode(graph.core);                 // core fires a request
+    AgentState.statusText = 'calling ' + edge.tool.label;
+    return true;
+  },
+  setAutoplay(v) { AgentState.autoplay = !!v; },
+  setStatus(text) { AgentState.statusText = text; },
+};
+window.AgentVisualizer = AgentVisualizer;     // <- drive from console / runtime
+
+/* =============================================================================
+ * 7. ANIMATION LOOP  — delta-time driven, decoupled from frame rate.
+ * ========================================================================== */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(
+  new THREE.Vector2(innerWidth, innerHeight),
+  CONFIG.bloom.strength, CONFIG.bloom.radius, CONFIG.bloom.threshold
+);
+composer.addPass(bloom);
+
+const clock = new THREE.Clock();
+let nextCall = 0;
+
+function scheduleAutoCall(elapsed) {
+  if (!AgentState.autoplay || elapsed < nextCall) return;
+  // Simulate a reasoning step: pick a (weighted-random) tool to invoke.
+  const tool = AgentState.tools[Math.floor(Math.random() * AgentState.tools.length)];
+  AgentVisualizer.callTool(tool.id);
+  nextCall = elapsed + THREE.MathUtils.lerp(CONFIG.callIntervalMin, CONFIG.callIntervalMax, Math.random());
+}
+
+function updatePackets(dt) {
+  for (let i = activePackets.length - 1; i >= 0; i--) {
+    const p = activePackets[i];
+    const u = p.userData;
+    u.t += dt * CONFIG.packetSpeed * u.dir;
+
+    if (u.dir === 1 && u.t >= 1) {
+      // Arrived at the tool node -> deliver the call, then head back.
+      u.t = 1; u.dir = -1; u.delivered = true;
+      triggerNode(u.edge.tool.mesh);
+      AgentState.statusText = u.edge.tool.label + ' → returning result';
+    } else if (u.dir === -1 && u.t <= 0) {
+      // Returned to core -> result integrated.
+      triggerNode(graph.core);
+      retirePacket(p);
+      continue;
+    }
+    const pos = u.edge.curve.getPoint(THREE.MathUtils.clamp(u.t, 0, 1));
+    p.position.copy(pos);
+    const s = 1 + 0.4 * Math.sin(u.t * Math.PI);   // swell mid-flight
+    p.scale.setScalar(s);
+  }
+}
+
+function updateNodes(dt) {
+  graph.nodes.forEach(mesh => {
+    const u = mesh.userData;
+    if (u.pulse > 0) u.pulse = Math.max(0, u.pulse - dt * 2.2);
+    const k = u.pulse;
+    mesh.scale.setScalar(u.base * (1 + 0.7 * k) / u.base);  // relative to base mesh
+    mesh.material.emissiveIntensity = u.baseEmissive + k * 3.5;
+    if (u.tool) u.tool.activity = Math.max(0, u.tool.activity - dt * 1.5);
+  });
+  // Gentle core breathing.
+  const breathe = 1 + 0.04 * Math.sin(clock.elapsedTime * 1.5);
+  graph.core.scale.multiplyScalar(breathe);
+  graph.halo.scale.setScalar(1 + 0.06 * Math.sin(clock.elapsedTime * 1.2));
+  graph.halo.material.opacity = 0.05 + 0.04 * (0.5 + 0.5 * Math.sin(clock.elapsedTime * 1.5));
+}
+
+let frame = 0;
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);   // clamp to avoid jumps on tab refocus
+  const elapsed = clock.elapsedTime;
+
+  scheduleAutoCall(elapsed);
+  updatePackets(dt);
+  updateNodes(dt);
+
+  network.rotation.y += dt * 0.04;
+  stars.rotation.y -= dt * 0.005;
+  controls.update();
+  composer.render();
+
+  if ((frame++ & 7) === 0) {
+    statusEl.innerHTML = '› <span class="tool">' + AgentState.statusText + '</span>';
+  }
+}
+animate();
+
+/* =============================================================================
+ * 8. RESIZE
+ * ========================================================================== */
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+  bloom.setSize(innerWidth, innerHeight);
+});
+
+AgentState.statusText = 'reasoning…';
+</script>
+</body>
+</html>

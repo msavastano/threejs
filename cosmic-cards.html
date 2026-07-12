@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cosmic Cards · Three.js Hover Experiment</title>
+<style>
+  :root { --fg: #e8ecff; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #04040c; }
+  body {
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    color: var(--fg);
+    cursor: default;
+  }
+  #scene { position: fixed; inset: 0; display: block; }
+  .ui {
+    position: fixed; left: 0; right: 0; top: 0;
+    padding: 34px 44px 0; pointer-events: none;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    z-index: 5;
+  }
+  .ui .title {
+    font-size: 13px; letter-spacing: 0.42em; text-transform: uppercase;
+    font-weight: 600; color: #aeb8ff;
+    text-shadow: 0 0 18px rgba(120,140,255,0.55);
+  }
+  .ui .sub {
+    margin-top: 8px; font-size: 11px; letter-spacing: 0.16em;
+    color: #6f78a8; text-transform: uppercase;
+  }
+  .ui .hint {
+    font-size: 11px; letter-spacing: 0.18em; color: #5a6390;
+    text-transform: uppercase; text-align: right;
+  }
+  #loader {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: #04040c; z-index: 10; transition: opacity 0.8s ease;
+    letter-spacing: 0.4em; font-size: 12px; color: #6f78a8; text-transform: uppercase;
+  }
+  #loader.hidden { opacity: 0; pointer-events: none; }
+  .vignette {
+    position: fixed; inset: 0; pointer-events: none; z-index: 4;
+    background: radial-gradient(ellipse at center, transparent 52%, rgba(0,0,5,0.55) 100%);
+  }
+</style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div class="vignette"></div>
+  <div class="ui">
+    <div>
+      <div class="title">Stellar Atlas</div>
+      <div class="sub">Deep-field survey · sector 7</div>
+    </div>
+    <div class="hint">Hover to focus · move to tilt</div>
+  </div>
+  <div id="loader">Calibrating optics</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+  (function () {
+    const canvas = document.getElementById('scene');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x04040c, 0.018);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 200);
+    camera.position.set(0, 0, 30);
+
+    // ---------- Card data (cosmic theme) ----------
+    const CARDS = [
+      { code: 'NEBULA-7',     name: 'Stellar Nursery',  tag: 'IONIZED HYDROGEN', c1: '#ff5d8f', c2: '#7b2ff7', glow: '#ff79b0' },
+      { code: 'KEPLER-442b',  name: 'Super-Earth',      tag: 'HABITABLE ZONE',   c1: '#36d1dc', c2: '#1a6fd4', glow: '#67e8f9' },
+      { code: 'SGR A*',       name: 'Event Horizon',    tag: 'SUPERMASSIVE',     c1: '#f7971e', c2: '#b91d73', glow: '#ffb454' },
+      { code: 'AURORA FIELD', name: 'Magnetosphere',    tag: 'SOLAR WIND',       c1: '#43e97b', c2: '#159957', glow: '#7dffb0' },
+      { code: 'TITAN DRIFT',  name: 'Methane Seas',     tag: 'CRYOGENIC',        c1: '#e9d362', c2: '#a07c2a', glow: '#ffe89a' },
+      { code: 'QUASAR-3C',    name: 'Active Nucleus',   tag: 'RADIO LOUD',       c1: '#a18cd1', c2: '#4a2dd6', glow: '#c9b6ff' },
+    ];
+
+    // ---------- Rounded-rect helper for canvas ----------
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    // ---------- Build a card face texture on canvas ----------
+    function makeBackTexture(d) {
+      const W = 512, H = 680;
+      const cv = document.createElement('canvas');
+      cv.width = W; cv.height = H;
+      const ctx = cv.getContext('2d');
+      const pad = 14, r = 46;
+      // glass gradient body
+      const g = ctx.createLinearGradient(0, 0, W, H);
+      g.addColorStop(0, 'rgba(20,22,46,0.92)');
+      g.addColorStop(1, 'rgba(8,9,22,0.96)');
+      roundRect(ctx, pad, pad, W - pad * 2, H - pad * 2, r);
+      ctx.fillStyle = g; ctx.fill();
+      // top color wash
+      const wash = ctx.createLinearGradient(0, pad, 0, H * 0.55);
+      wash.addColorStop(0, hexA(d.c1, 0.30));
+      wash.addColorStop(1, 'rgba(0,0,0,0)');
+      roundRect(ctx, pad, pad, W - pad * 2, H - pad * 2, r);
+      ctx.fillStyle = wash; ctx.fill();
+      // border stroke
+      ctx.lineWidth = 2.5;
+      const bg = ctx.createLinearGradient(0, 0, W, H);
+      bg.addColorStop(0, hexA(d.c1, 0.85));
+      bg.addColorStop(0.5, hexA(d.glow, 0.35));
+      bg.addColorStop(1, hexA(d.c2, 0.85));
+      roundRect(ctx, pad + 1, pad + 1, W - pad * 2 - 2, H - pad * 2 - 2, r);
+      ctx.strokeStyle = bg; ctx.stroke();
+      // subtle grid lines
+      ctx.save();
+      roundRect(ctx, pad, pad, W - pad * 2, H - pad * 2, r); ctx.clip();
+      ctx.strokeStyle = 'rgba(255,255,255,0.035)'; ctx.lineWidth = 1;
+      for (let y = 60; y < H; y += 46) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+      ctx.restore();
+      const tex = new THREE.CanvasTexture(cv);
+      tex.anisotropy = 8;
+      return tex;
+    }
+
+    // planet / orb layer (drawn separately for parallax depth)
+    function makeOrbTexture(d) {
+      const W = 512, H = 680;
+      const cv = document.createElement('canvas');
+      cv.width = W; cv.height = H;
+      const ctx = cv.getContext('2d');
+      const cx = W / 2, cy = H * 0.40, R = 118;
+      // outer glow halo
+      const halo = ctx.createRadialGradient(cx, cy, R * 0.4, cx, cy, R * 2.2);
+      halo.addColorStop(0, hexA(d.glow, 0.55));
+      halo.addColorStop(0.4, hexA(d.glow, 0.16));
+      halo.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = halo; ctx.fillRect(0, 0, W, H);
+      // planet body
+      const body = ctx.createRadialGradient(cx - R * 0.4, cy - R * 0.4, R * 0.1, cx, cy, R);
+      body.addColorStop(0, d.glow);
+      body.addColorStop(0.5, d.c1);
+      body.addColorStop(1, d.c2);
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fillStyle = body; ctx.fill();
+      // shadow terminator
+      const term = ctx.createRadialGradient(cx + R * 0.55, cy + R * 0.45, R * 0.2, cx, cy, R);
+      term.addColorStop(0, 'rgba(0,0,0,0)');
+      term.addColorStop(1, 'rgba(0,0,10,0.62)');
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fillStyle = term; ctx.fill();
+      // orbit ring
+      ctx.save();
+      ctx.translate(cx, cy); ctx.scale(1, 0.34); ctx.rotate(-0.35);
+      ctx.beginPath(); ctx.arc(0, 0, R * 1.7, 0, Math.PI * 2);
+      ctx.lineWidth = 4; ctx.strokeStyle = hexA(d.glow, 0.5); ctx.stroke();
+      ctx.restore();
+      // specular highlight
+      const spec = ctx.createRadialGradient(cx - R * 0.45, cy - R * 0.5, 0, cx - R * 0.45, cy - R * 0.5, R * 0.6);
+      spec.addColorStop(0, 'rgba(255,255,255,0.5)');
+      spec.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fillStyle = spec; ctx.fill();
+      const tex = new THREE.CanvasTexture(cv);
+      tex.anisotropy = 8;
+      return tex;
+    }
+
+    // text / content layer (closest to viewer for parallax pop)
+    function makeTextTexture(d) {
+      const W = 512, H = 680;
+      const cv = document.createElement('canvas');
+      cv.width = W; cv.height = H;
+      const ctx = cv.getContext('2d');
+      ctx.textAlign = 'left';
+      // tag pill
+      ctx.font = '600 19px Inter, sans-serif';
+      const tw = ctx.measureText(d.tag).width;
+      roundRect(ctx, 54, 470, tw + 44, 40, 20);
+      ctx.fillStyle = hexA(d.glow, 0.16); ctx.fill();
+      ctx.strokeStyle = hexA(d.glow, 0.6); ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = d.glow;
+      ctx.fillText(d.tag, 76, 496);
+      // code (small caps label)
+      ctx.font = '700 20px Inter, sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.fillText(spaced(d.code), 56, 88);
+      // name (big)
+      ctx.font = '800 52px Inter, sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = hexA(d.glow, 0.8); ctx.shadowBlur = 22;
+      wrap(ctx, d.name, 56, 580, 400, 52);
+      ctx.shadowBlur = 0;
+      // baseline detail line
+      ctx.font = '500 16px Inter, sans-serif';
+      ctx.fillStyle = 'rgba(180,190,230,0.55)';
+      ctx.fillText('· classified luminous object', 56, 626);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.anisotropy = 8;
+      return tex;
+    }
+
+    function makeSheenTexture() {
+      const S = 256;
+      const cv = document.createElement('canvas'); cv.width = S; cv.height = S;
+      const ctx = cv.getContext('2d');
+      const g = ctx.createRadialGradient(S/2, S/2, 0, S/2, S/2, S/2);
+      g.addColorStop(0, 'rgba(255,255,255,0.55)');
+      g.addColorStop(0.35, 'rgba(255,255,255,0.12)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
+      return new THREE.CanvasTexture(cv);
+    }
+    const sheenTex = makeSheenTexture();
+
+    function wrap(ctx, text, x, y, maxW, lh) {
+      const words = text.split(' '); let line = '', yy = y;
+      for (const w of words) {
+        const test = line + w + ' ';
+        if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line.trim(), x, yy); line = w + ' '; yy += lh; }
+        else line = test;
+      }
+      ctx.fillText(line.trim(), x, yy);
+    }
+    function spaced(s) { return s.split('').join(' '); }
+    function hexA(hex, a) {
+      const h = hex.replace('#', '');
+      const r = parseInt(h.substr(0,2),16), g = parseInt(h.substr(2,2),16), b = parseInt(h.substr(4,2),16);
+      return `rgba(${r},${g},${b},${a})`;
+    }
+
+    // ---------- Build cards ----------
+    const CARD_W = 5.0, CARD_H = 6.64;
+    const cols = 3, rows = 2, gapX = 6.0, gapY = 7.8;
+    const cards = [];
+    const cardGroup = new THREE.Group();
+    scene.add(cardGroup);
+
+    CARDS.forEach((d, i) => {
+      const cx = (i % cols - (cols - 1) / 2) * gapX;
+      const cy = -(Math.floor(i / cols) - (rows - 1) / 2) * gapY;
+
+      const group = new THREE.Group();
+      group.position.set(cx, cy, 0);
+
+      const planeBack = new THREE.PlaneGeometry(CARD_W, CARD_H);
+      const back = new THREE.Mesh(planeBack, new THREE.MeshBasicMaterial({ map: makeBackTexture(d), transparent: true }));
+      back.userData.isCard = true; back.userData.index = i;
+      group.add(back);
+
+      const orb = new THREE.Mesh(new THREE.PlaneGeometry(CARD_W, CARD_H), new THREE.MeshBasicMaterial({ map: makeOrbTexture(d), transparent: true }));
+      orb.position.z = 0.35;
+      group.add(orb);
+
+      const text = new THREE.Mesh(new THREE.PlaneGeometry(CARD_W, CARD_H), new THREE.MeshBasicMaterial({ map: makeTextTexture(d), transparent: true }));
+      text.position.z = 0.7;
+      group.add(text);
+
+      // glow halo behind card (fake bloom)
+      const halo = new THREE.Mesh(new THREE.PlaneGeometry(CARD_W * 1.9, CARD_H * 1.7),
+        new THREE.MeshBasicMaterial({ map: sheenTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, color: new THREE.Color(d.glow), opacity: 0 }));
+      halo.position.z = -0.6;
+      group.add(halo);
+
+      // sheen (light following cursor)
+      const sheen = new THREE.Mesh(new THREE.PlaneGeometry(CARD_W * 1.2, CARD_W * 1.2),
+        new THREE.MeshBasicMaterial({ map: sheenTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0 }));
+      sheen.position.z = 0.85;
+      group.add(sheen);
+
+      cardGroup.add(group);
+      cards.push({
+        group, back, orb, text, halo, sheen, base: new THREE.Vector2(cx, cy),
+        hover: 0, tiltX: 0, tiltY: 0, localX: 0, localY: 0, phase: Math.random() * Math.PI * 2
+      });
+    });
+
+    // ---------- Starfield ----------
+    function makeStars(count, spread, size, colorBias) {
+      const geo = new THREE.BufferGeometry();
+      const pos = new Float32Array(count * 3);
+      const col = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        pos[i*3] = (Math.random() - 0.5) * spread;
+        pos[i*3+1] = (Math.random() - 0.5) * spread;
+        pos[i*3+2] = -Math.random() * spread * 0.6 - 6;
+        const t = Math.random();
+        const c = new THREE.Color().setHSL(0.55 + colorBias * t * 0.25, 0.6, 0.6 + Math.random() * 0.4);
+        col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
+      }
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      const mat = new THREE.PointsMaterial({ size, vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending });
+      return new THREE.Points(geo, mat);
+    }
+    const starsFar = makeStars(2600, 160, 0.22, 0.2);
+    const starsNear = makeStars(900, 120, 0.42, 0.8);
+    scene.add(starsFar, starsNear);
+
+    // ---------- Nebula clouds (soft additive sprites) ----------
+    const nebulaColors = ['#3b1d6e', '#1d3a6e', '#5e1d57'];
+    const nebulas = [];
+    nebulaColors.forEach((col, i) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(70, 70),
+        new THREE.MeshBasicMaterial({ map: sheenTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, color: new THREE.Color(col), opacity: 0.5 }));
+      m.position.set((i - 1) * 28, (i % 2 ? 12 : -14), -34 - i * 6);
+      scene.add(m); nebulas.push(m);
+    });
+
+    // ---------- Interaction ----------
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2(-2, -2);
+    const targetCam = new THREE.Vector2(0, 0);
+    let hoveredIndex = -1;
+
+    window.addEventListener('pointermove', (e) => {
+      pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+      pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      targetCam.x = pointer.x; targetCam.y = pointer.y;
+    });
+    window.addEventListener('pointerleave', () => { pointer.x = -2; pointer.y = -2; });
+
+    function fit() {
+      const w = window.innerWidth, h = window.innerHeight;
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      // pull camera back on narrow screens so the whole grid fits
+      const span = (cols - 1) * gapX + CARD_W;
+      const need = (span / 2) / Math.tan((camera.fov * Math.PI / 180) / 2) / camera.aspect;
+      camera.position.z = Math.max(26, need * 1.08);
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', fit);
+    fit();
+
+    // ---------- Animate ----------
+    const clock = new THREE.Clock();
+    const lerp = (a, b, t) => a + (b - a) * t;
+
+    function tick() {
+      const t = clock.getElapsedTime();
+      const dt = Math.min(clock.getDelta(), 0.05);
+
+      // hover detection
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects(cards.map(c => c.back));
+      hoveredIndex = hits.length ? hits[0].object.userData.index : -1;
+      let hitUV = hits.length ? hits[0].uv : null;
+
+      cards.forEach((c, i) => {
+        const isHover = i === hoveredIndex;
+        c.hover = lerp(c.hover, isHover ? 1 : 0, 1 - Math.pow(0.001, dt));
+
+        // tilt target from local pointer position over the card
+        let tx = 0, ty = 0;
+        if (isHover && hitUV) {
+          c.localX = (hitUV.x - 0.5);   // -0.5..0.5
+          c.localY = (hitUV.y - 0.5);
+          ty = c.localX * 0.55;          // rotate around Y by horizontal pos
+          tx = -c.localY * 0.55;         // rotate around X by vertical pos
+        }
+        c.tiltX = lerp(c.tiltX, tx, 1 - Math.pow(0.0001, dt));
+        c.tiltY = lerp(c.tiltY, ty, 1 - Math.pow(0.0001, dt));
+
+        // idle float
+        const floatY = Math.sin(t * 0.7 + c.phase) * 0.12;
+        const idleRot = Math.sin(t * 0.5 + c.phase) * 0.04;
+
+        c.group.rotation.x = c.tiltX + idleRot * (1 - c.hover);
+        c.group.rotation.y = c.tiltY + idleRot * 0.6 * (1 - c.hover);
+        const lift = c.hover * 2.6;
+        c.group.position.set(c.base.x, c.base.y + floatY, lift);
+        const s = 1 + c.hover * 0.08;
+        c.group.scale.setScalar(s);
+
+        // parallax: push content layers apart with hover + slide opposite to tilt
+        c.orb.position.z = 0.35 + c.hover * 0.5;
+        c.text.position.z = 0.7 + c.hover * 1.1;
+        c.orb.position.x = -c.localX * c.hover * 0.5;
+        c.orb.position.y = -c.localY * c.hover * 0.5;
+        c.text.position.x = -c.localX * c.hover * 0.9;
+        c.text.position.y = -c.localY * c.hover * 0.9;
+
+        // glow halo + sheen
+        c.halo.material.opacity = c.hover * 0.55;
+        c.sheen.material.opacity = c.hover * 0.6;
+        c.sheen.position.x = c.localX * CARD_W * 0.6;
+        c.sheen.position.y = c.localY * CARD_H * 0.6;
+      });
+
+      // parallax camera drift
+      camera.position.x = lerp(camera.position.x, targetCam.x * 2.4, 0.05);
+      camera.position.y = lerp(camera.position.y, targetCam.y * 1.6, 0.05);
+      camera.lookAt(0, 0, 0);
+
+      starsFar.rotation.z += dt * 0.005;
+      starsNear.rotation.z -= dt * 0.012;
+      starsNear.position.x = -targetCam.x * 1.5;
+      starsNear.position.y = -targetCam.y * 1.0;
+      nebulas.forEach((n, i) => { n.rotation.z += dt * (0.01 + i * 0.004); });
+
+      renderer.render(scene, camera);
+      requestAnimationFrame(tick);
+    }
+    clock.getDelta();
+    tick();
+
+    // hide loader
+    setTimeout(() => { document.getElementById('loader').classList.add('hidden'); }, 500);
+    window.__cosmicReady = true;
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>The Time Cathedral</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #05030a; }
+  body { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  #scene { display: block; width: 100%; height: 100%; }
+
+  #hud {
+    position: fixed; top: 20px; left: 22px; z-index: 5; pointer-events: none;
+    color: #c9b98a; text-shadow: 0 0 12px rgba(120, 90, 40, 0.8);
+  }
+  #hud .title { font-size: 13px; letter-spacing: 0.42em; text-transform: uppercase; }
+  #hud .sub { margin-top: 6px; font-size: 10px; letter-spacing: 0.3em; opacity: 0.55; text-transform: uppercase; }
+  #rewindTag {
+    margin-top: 10px; font-size: 11px; letter-spacing: 0.4em; text-transform: uppercase;
+    color: #ff7a5a; text-shadow: 0 0 14px rgba(255, 90, 50, 0.9);
+    opacity: 0; transition: opacity 0.25s ease;
+  }
+  #rewindTag.on { opacity: 1; animation: flick 0.5s steps(2) infinite; }
+  @keyframes flick { 50% { opacity: 0.55; } }
+
+  #hint {
+    position: fixed; bottom: 18px; left: 0; right: 0; text-align: center; z-index: 5;
+    color: #6f6647; font-size: 10px; letter-spacing: 0.32em; text-transform: uppercase;
+    pointer-events: none; text-shadow: 0 0 8px rgba(0,0,0,0.9);
+  }
+
+  #overlay {
+    position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 22px;
+    background: radial-gradient(ellipse at center, rgba(20,12,40,0.35) 0%, rgba(5,3,10,0.86) 75%);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    transition: opacity 0.9s ease;
+  }
+  #overlay.gone { opacity: 0; pointer-events: none; }
+  #overlay .big {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: clamp(28px, 5vw, 56px); letter-spacing: 0.34em; text-transform: uppercase;
+    color: #e7d3a2; text-shadow: 0 0 30px rgba(180, 130, 50, 0.7), 0 0 60px rgba(120, 80, 200, 0.4);
+    text-align: center; padding-left: 0.34em;
+  }
+  #overlay .tag {
+    color: #8a7f5e; font-size: 11px; letter-spacing: 0.4em; text-transform: uppercase;
+    max-width: 540px; text-align: center; line-height: 1.9; opacity: 0.8;
+  }
+  #enterBtn {
+    margin-top: 8px; padding: 13px 30px; border: 1px solid rgba(200, 170, 90, 0.5);
+    border-radius: 999px; background: rgba(30, 22, 12, 0.4); color: #ecdcae;
+    font-family: inherit; font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase;
+    cursor: pointer; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    box-shadow: 0 0 24px rgba(180, 130, 50, 0.25), inset 0 0 12px rgba(200, 160, 80, 0.08);
+    transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease;
+  }
+  #enterBtn:hover { transform: translateY(-1px); box-shadow: 0 0 34px rgba(220, 170, 80, 0.5); background: rgba(50, 38, 20, 0.5); }
+  #enterBtn:active { transform: translateY(0); }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="hud">
+  <div class="title">The Time Cathedral</div>
+  <div class="sub">Where time is visible</div>
+  <div id="rewindTag">◈ Time Rewinding ◈</div>
+</div>
+
+<div id="hint">drag to orbit · scroll to zoom · press R to rewind</div>
+
+<div id="overlay">
+  <div class="big">The Time Cathedral</div>
+  <div class="tag">A cathedral where time itself is visible — clocks beyond counting, pendulums in harmonic motion, rivers of light, and stained glass charting the heavens. Every breath it rewinds, and begins again.</div>
+  <button id="enterBtn">▶ Enter the Cathedral</button>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ============================================================
+// CONFIG
+// ============================================================
+const NAVE_HALF_W = 34;
+const NAVE_LEN = 220;
+const VAULT_PEAK = 70;
+const COL_HEIGHT = 44;
+
+const CONFIG = {
+  rewind:    { interval: 90, duration: 7 },
+  bloom:     { strength: 1.15, radius: 0.62, threshold: 0.82 },
+  camera:    { fov: 60, start: new THREE.Vector3(0, 16, -96), target: new THREE.Vector3(0, 24, 28),
+               minDist: 12, maxDist: 190, maxPolarAngle: Math.PI * 0.495, autoRotate: 0.3 },
+  fog:       { color: 0x06040d, density: 0.0066 },
+  clocks:    { handZOffset: 0.03 },
+  pendulums: { count: 40, amplitude: 0.46 },
+  gears:     { count: 42, variants: 5 },
+  particles: { count: 7000, streams: 6, lutSize: 512, baseSpeed: 0.035 },
+  shafts:    { count: 14 },
+  candles:   { realLights: 6 },
+  audio:     { bellDecay: 6, chimeMin: 8, chimeMax: 13, reverbDecay: 3 },
+};
+
+// ============================================================
+// Helpers
+// ============================================================
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const easeInOut = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const rand = (a, b) => a + Math.random() * (b - a);
+const dummy = new THREE.Object3D();
+const _rotZ = new THREE.Matrix4();
+const _trans = new THREE.Matrix4();
+const _scale = new THREE.Matrix4();
+const _v3 = new THREE.Vector3();
+
+// Shared GLSL noise chunk
+const NOISE_GLSL = `
+  float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float noise2(vec2 p){
+    vec2 i = floor(p), f = fract(p);
+    float a = h21(i), b = h21(i + vec2(1.0, 0.0)), c = h21(i + vec2(0.0, 1.0)), d = h21(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  }
+`;
+
+// ============================================================
+// Renderer / scene / camera / controls
+// ============================================================
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(CONFIG.fog.color);
+scene.fog = new THREE.FogExp2(CONFIG.fog.color, CONFIG.fog.density);
+
+const camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, innerWidth / innerHeight, 0.5, 1200);
+camera.position.copy(CONFIG.camera.start);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.autoRotate = true;
+controls.autoRotateSpeed = CONFIG.camera.autoRotate;
+controls.minDistance = CONFIG.camera.minDist;
+controls.maxDistance = CONFIG.camera.maxDist;
+controls.maxPolarAngle = CONFIG.camera.maxPolarAngle;
+controls.enablePan = false;
+controls.target.copy(CONFIG.camera.target);
+
+// ============================================================
+// Lighting (HDR env + sun + candles)
+// ============================================================
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envRT = pmrem.fromScene(new RoomEnvironment(renderer), 0.04);
+scene.environment = envRT.texture;
+pmrem.dispose();
+
+const hemi = new THREE.HemisphereLight(0x2a3258, 0x0a0608, 0.35);
+scene.add(hemi);
+
+const sun = new THREE.DirectionalLight(0xffd9a0, 2.6);
+sun.position.set(58, 92, 36);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 10;
+sun.shadow.camera.far = 260;
+sun.shadow.camera.left = -75;
+sun.shadow.camera.right = 75;
+sun.shadow.camera.top = 90;
+sun.shadow.camera.bottom = -12;
+sun.shadow.bias = -0.0004;
+scene.add(sun);
+const sunTarget = new THREE.Object3D();
+sunTarget.position.set(0, 18, 10);
+scene.add(sunTarget);
+sun.target = sunTarget;
+
+// Candle real lights + emissive glow meshes
+const candleLights = [];
+const candleMeshes = [];
+const candleMat = new THREE.MeshBasicMaterial({ color: 0xffcb6a });
+const candleGeo = new THREE.SphereGeometry(0.45, 10, 10);
+function addCandle(x, y, z, isLight) {
+  const m = new THREE.Mesh(candleGeo, candleMat);
+  m.position.set(x, y, z);
+  scene.add(m);
+  candleMeshes.push({ mesh: m, base: 1.0 });
+  if (isLight) {
+    const l = new THREE.PointLight(0xffb062, 36, 34, 2.0);
+    l.position.set(x, y + 0.6, z);
+    scene.add(l);
+    candleLights.push({ light: l, base: 36, phase: Math.random() * 100 });
+  }
+}
+const candleZs = [-78, -46, -18, 12, 44, 76];
+candleZs.forEach((z, i) => {
+  const side = i % 2 === 0 ? 1 : -1;
+  addCandle(side * (NAVE_HALF_W - 6), 5.5, z, i < CONFIG.candles.realLights);
+  addCandle(-side * (NAVE_HALF_W - 6), 5.5, z + 8, false);
+  addCandle(side * 8, 4.2, z - 4, false);
+});
+
+// ============================================================
+// Global state + rewind
+// ============================================================
+const state = {
+  direction: 1,
+  simPhase: 0,
+  rewindAmount: 0,
+  phase: 'NORMAL',
+  nextRewind: CONFIG.rewind.interval,
+  rewindElapsed: 0,
+  chimeTimer: 4,
+};
+const rewindTagEl = document.getElementById('rewindTag');
+
+function triggerRewind() {
+  if (state.phase !== 'NORMAL') return;
+  state.phase = 'REWINDING';
+  state.rewindElapsed = 0;
+  rewindTagEl.classList.add('on');
+  if (bells.ctx) bells.rewindChime();
+}
+
+function updateRewind(dt) {
+  if (state.phase === 'NORMAL') {
+    state.nextRewind -= dt;
+    if (state.nextRewind <= 0) triggerRewind();
+  } else {
+    state.rewindElapsed += dt;
+    const dur = CONFIG.rewind.duration;
+    const t = clamp(state.rewindElapsed / dur, 0, 1);
+    state.rewindAmount = Math.sin(t * Math.PI); // 0 -> 1 -> 0
+    state.direction = (t > 0.14 && t < 0.86) ? -1 : 1;
+    if (t >= 1) {
+      state.phase = 'NORMAL';
+      state.direction = 1;
+      state.rewindAmount = 0;
+      state.nextRewind = CONFIG.rewind.interval;
+      rewindTagEl.classList.remove('on');
+    }
+  }
+}
+
+addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') triggerRewind();
+});
+
+// ============================================================
+// Post-processing: RenderPass -> Bloom -> Fracture -> Output
+// ============================================================
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloom = new UnrealBloomPass(
+  new THREE.Vector2(innerWidth, innerHeight),
+  CONFIG.bloom.strength, CONFIG.bloom.radius, CONFIG.bloom.threshold
+);
+composer.addPass(bloom);
+
+const FractureShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime: { value: 0 },
+    uFracture: { value: 0 },
+    uResolution: { value: new THREE.Vector2(innerWidth, innerHeight) },
+  },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uTime; uniform float uFracture; uniform vec2 uResolution;
+    varying vec2 vUv;
+    float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    void main(){
+      vec2 uv = vUv;
+      float f = uFracture;
+      float blk = step(0.62, h21(floor(uv.y * 28.0) + floor(uTime * 9.0))) * f;
+      uv.x += (h21(floor(uv.y * 40.0) + floor(uTime * 11.0)) - 0.5) * 0.06 * blk;
+      uv.x += sin(uv.y * 90.0 + uTime * 6.0) * 0.0025 * f;
+      uv.y += sin(uv.x * 70.0 + uTime * 5.0) * 0.0025 * f;
+      float amt = 0.0012 + f * 0.018;
+      vec3 col;
+      col.r = texture2D(tDiffuse, uv + vec2(amt, 0.0)).r;
+      col.g = texture2D(tDiffuse, uv).g;
+      col.b = texture2D(tDiffuse, uv - vec2(amt, 0.0)).b;
+      col *= 1.0 - 0.12 * f * sin(uv.y * uResolution.y * 1.4);
+      col *= 1.0 - 0.16 * f;
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+};
+const fracturePass = new ShaderPass(FractureShader);
+composer.addPass(fracturePass);
+
+const outputPass = new OutputPass();
+composer.addPass(outputPass);
+
+// ============================================================
+// Materials
+// ============================================================
+const stoneMat = new THREE.MeshStandardMaterial({ color: 0x2a2630, roughness: 0.88, metalness: 0.04, envMapIntensity: 0.4 });
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x171320, roughness: 0.34, metalness: 0.25, envMapIntensity: 0.5 });
+const trimMat = new THREE.MeshStandardMaterial({ color: 0x3a3340, roughness: 0.5, metalness: 0.6 });
+const brassMat = new THREE.MeshStandardMaterial({ color: 0xc89a3e, metalness: 0.92, roughness: 0.32, emissive: 0x2a1c00, emissiveIntensity: 0.25 });
+
+// ============================================================
+// Architecture
+// ============================================================
+// Floor
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(NAVE_HALF_W * 2 + 24, NAVE_LEN + 24), floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// Pointed-arch shape (cross-section for vault, and for windows)
+function archShape(w, h) {
+  const s = new THREE.Shape();
+  s.moveTo(-w, 0);
+  s.lineTo(-w, h * 0.6);
+  s.quadraticCurveTo(-w * 0.6, h * 1.12, 0, h);
+  s.quadraticCurveTo(w * 0.6, h * 1.12, w, h * 0.6);
+  s.lineTo(w, 0);
+  s.lineTo(-w, 0);
+  return s;
+}
+
+// Barrel vault ceiling
+const vaultGeo = new THREE.ExtrudeGeometry(archShape(NAVE_HALF_W, VAULT_PEAK), { depth: NAVE_LEN, bevelEnabled: false });
+vaultGeo.translate(0, 0, -NAVE_LEN / 2);
+vaultGeo.computeVertexNormals();
+const vaultMat = stoneMat.clone();
+vaultMat.side = THREE.BackSide;
+const vault = new THREE.Mesh(vaultGeo, vaultMat);
+vault.receiveShadow = true;
+scene.add(vault);
+
+// Clustered Gothic column (merged), then instanced copies merged into one geometry
+function columnClusterGeometry() {
+  const H = COL_HEIGHT;
+  const parts = [];
+  const c1 = new THREE.CylinderGeometry(1.1, 1.35, H, 14); c1.translate(0, H / 2, 0); parts.push(c1);
+  const d = 1.5;
+  for (const [dx, dz] of [[d, d], [d, -d], [-d, d], [-d, -d]]) {
+    const s = new THREE.CylinderGeometry(0.4, 0.46, H, 8); s.translate(dx, H / 2, dz); parts.push(s);
+  }
+  const cap = new THREE.BoxGeometry(3.4, 1.8, 3.4); cap.translate(0, H + 0.9, 0); parts.push(cap);
+  const base = new THREE.BoxGeometry(3.8, 1.3, 3.8); base.translate(0, 0.65, 0); parts.push(base);
+  return mergeGeometries(parts, false);
+}
+const colProto = columnClusterGeometry();
+const colParts = [];
+for (let z = -100; z <= 100; z += 18) {
+  colParts.push(colProto.clone().translate(-(NAVE_HALF_W - 2.5), 0, z));
+  colParts.push(colProto.clone().translate((NAVE_HALF_W - 2.5), 0, z));
+}
+const columns = new THREE.Mesh(mergeGeometries(colParts, false), stoneMat);
+columns.castShadow = true;
+columns.receiveShadow = true;
+scene.add(columns);
+
+// Transverse arch ribs along the vault + a ridge beam
+function archPoints(w, h, N) {
+  const pts = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const x = -w + 2 * w * t;
+    let y;
+    if (t < 0.5) {
+      const tt = t / 0.5, u = 1 - tt;
+      y = u * u * (h * 0.6) + 2 * u * tt * (h * 1.12) + tt * tt * h;
+    } else {
+      const tt = (t - 0.5) / 0.5, u = 1 - tt;
+      y = u * u * h + 2 * u * tt * (h * 1.12) + tt * tt * (h * 0.6);
+    }
+    pts.push(new THREE.Vector3(x, y, 0));
+  }
+  return pts;
+}
+const ribParts = [];
+for (let z = -100; z <= 100; z += 18) {
+  const curve = new THREE.CatmullRomCurve3(archPoints(NAVE_HALF_W - 1, VAULT_PEAK - 1, 24));
+  const tube = new THREE.TubeGeometry(curve, 48, 0.32, 8, false);
+  tube.translate(0, 0, z);
+  ribParts.push(tube);
+}
+const ribs = new THREE.Mesh(mergeGeometries(ribParts, false), trimMat);
+scene.add(ribs);
+
+const ridge = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, NAVE_LEN + 10), trimMat);
+ridge.position.set(0, VAULT_PEAK - 0.4, 0);
+scene.add(ridge);
+
+// Apse back wall + side wall window frames (dark stone surrounds behind the glass)
+const apseWall = new THREE.Mesh(new THREE.PlaneGeometry(NAVE_HALF_W * 2, VAULT_PEAK), stoneMat);
+apseWall.position.set(0, VAULT_PEAK / 2, NAVE_LEN / 2 + 4);
+apseWall.rotation.y = Math.PI; // face -Z (toward the camera) so it isn't back-face culled
+apseWall.receiveShadow = true;
+scene.add(apseWall);
+
+// ============================================================
+// Stained glass (procedural shader)
+// ============================================================
+const glassUniforms = {
+  uSimTime: { value: 0 },
+  uRewind: { value: 0 },
+  uTintA: { value: new THREE.Color(0x1a2a6c) },
+  uTintB: { value: new THREE.Color(0x6e1a2a) },
+  uTintC: { value: new THREE.Color(0x2a1462) },
+};
+const glassMat = new THREE.ShaderMaterial({
+  uniforms: glassUniforms,
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform float uSimTime; uniform float uRewind; uniform vec3 uTintA; uniform vec3 uTintB; uniform vec3 uTintC;
+    varying vec2 vUv;
+    ${NOISE_GLSL}
+    void main(){
+      vec2 uv = vUv;
+      uv.x += uRewind * 0.02 * sin(uv.y * 40.0 + uSimTime * 6.0);
+      vec2 cols = vec2(5.0, 8.0);
+      vec2 g = uv * cols;
+      vec2 cell = floor(g);
+      vec2 f = fract(g);
+      float lw = 0.07;
+      float panel = step(lw, f.x) * step(lw, f.y) * step(lw, 1.0 - f.x) * step(lw, 1.0 - f.y);
+      float ch = h21(cell);
+      float spd = 0.15 + ch * 0.5;
+      float ang = uSimTime * spd + ch * 6.2831;
+      vec2 sun = vec2(cos(ang), sin(ang)) * 0.30 + 0.5;
+      float sunDisc = smoothstep(0.14, 0.03, length(f - sun));
+      vec2 moon = vec2(cos(ang + 3.1415), sin(ang + 3.1415)) * 0.30 + 0.5;
+      float moonDisc = smoothstep(0.10, 0.03, length(f - moon));
+      float st = step(0.965, h21(cell * 13.1 + floor(uSimTime * 2.0 + ch * 5.0)));
+      vec3 base = mix(uTintA, uTintB, ch);
+      base = mix(base, uTintC, uv.y);
+      float cau = noise2(f * 6.0 + vec2(uSimTime * 0.3, ch * 3.0));
+      vec3 col = base * (0.5 + 0.5 * cau);
+      col += vec3(1.0, 0.85, 0.5) * sunDisc * 2.6;
+      col += vec3(0.6, 0.7, 1.0) * moonDisc * 1.8;
+      col += vec3(0.7, 0.8, 1.0) * st * 2.0;
+      vec3 lead = vec3(0.015, 0.012, 0.02);
+      vec3 outc = mix(lead, col, panel);
+      float vig = smoothstep(0.0, 0.25, uv.x) * smoothstep(1.0, 0.75, uv.x) * smoothstep(0.0, 0.1, uv.y) * smoothstep(1.0, 0.85, uv.y);
+      outc *= 0.4 + 0.6 * vig;
+      gl_FragColor = vec4(outc, 1.0);
+    }
+  `,
+  side: THREE.DoubleSide,
+});
+
+function addGlassWindow(w, h, x, y, z, ry) {
+  const geo = new THREE.ShapeGeometry(archShape(w, h));
+  const m = new THREE.Mesh(geo, glassMat);
+  m.position.set(x, y, z);
+  m.rotation.y = ry;
+  scene.add(m);
+  return m;
+}
+// Side windows (face inward)
+for (let z = -88; z <= 92; z += 30) {
+  addGlassWindow(7, 22, NAVE_HALF_W - 0.5, 22, z, -Math.PI / 2);
+  addGlassWindow(7, 22, -(NAVE_HALF_W - 0.5), 22, z + 15, Math.PI / 2);
+}
+// Apse rose window (circular, faces -Z toward camera)
+const roseGeo = new THREE.CircleGeometry(17, 64);
+const rose = new THREE.Mesh(roseGeo, glassMat);
+rose.position.set(0, 40, NAVE_LEN / 2 + 3.9);
+scene.add(rose);
+
+// ============================================================
+// Clocks (instanced faces + 3 hand layers)
+// ============================================================
+function makeClockFaceTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const x = c.getContext('2d');
+  const g = x.createRadialGradient(256, 256, 40, 256, 256, 250);
+  g.addColorStop(0, '#1a2238'); g.addColorStop(0.7, '#0c1120'); g.addColorStop(1, '#05070f');
+  x.fillStyle = g; x.beginPath(); x.arc(256, 256, 250, 0, Math.PI * 2); x.fill();
+  x.strokeStyle = '#c8a24a'; x.lineWidth = 10; x.beginPath(); x.arc(256, 256, 245, 0, Math.PI * 2); x.stroke();
+  x.lineWidth = 3; x.strokeStyle = '#7a5e22'; x.beginPath(); x.arc(256, 256, 232, 0, Math.PI * 2); x.stroke();
+  for (let i = 0; i < 60; i++) {
+    const a = i / 60 * Math.PI * 2;
+    const major = (i % 5 === 0);
+    const r1 = major ? 198 : 214, r2 = 226;
+    x.strokeStyle = major ? '#e6c869' : '#6a5836'; x.lineWidth = major ? 6 : 2;
+    x.beginPath(); x.moveTo(256 + Math.cos(a) * r1, 256 + Math.sin(a) * r1); x.lineTo(256 + Math.cos(a) * r2, 256 + Math.sin(a) * r2); x.stroke();
+  }
+  const roman = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+  x.fillStyle = '#e6c869'; x.font = 'bold 44px Georgia, serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  for (let i = 1; i <= 12; i++) {
+    const a = i / 12 * Math.PI * 2 - Math.PI / 2;
+    x.fillText(roman[i], 256 + Math.cos(a) * 168, 256 + Math.sin(a) * 168);
+  }
+  x.fillStyle = '#c8a24a'; x.beginPath(); x.arc(256, 256, 15, 0, Math.PI * 2); x.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+const clockTex = makeClockFaceTexture();
+
+const clockPos = []; const clockRad = []; const spin = []; const spinPhase = [];
+function addClock(x, y, z, r) {
+  clockPos.push(x, y, z); clockRad.push(r); spin.push(rand(0.25, 1.1)); spinPhase.push(rand(0, 100));
+}
+// Giant focal clocks on the apse
+addClock(0, 46, NAVE_LEN / 2 + 2, 16);
+addClock(-19, 30, NAVE_LEN / 2 + 3, 11);
+addClock(19, 30, NAVE_LEN / 2 + 3, 11);
+addClock(0, 19, NAVE_LEN / 2 + 3, 11);
+// Apse grid
+for (let y = 14; y <= 56; y += 8)
+  for (let xx = -24; xx <= 24; xx += 7) {
+    if (Math.abs(xx) < 3.5 && y > 40) continue;
+    addClock(xx, y, NAVE_LEN / 2 + 4, rand(2.4, 4));
+  }
+// Side floating rows
+for (let z = -72; z <= 92; z += 11) {
+  addClock(-16, rand(20, 26), z, rand(2.6, 4.2));
+  addClock(16, rand(20, 26), z, rand(2.6, 4.2));
+  addClock(-16, 40, z, rand(2.2, 3.4));
+  addClock(16, 40, z, rand(2.2, 3.4));
+}
+// Upper center row
+for (let z = -62; z <= 95; z += 9) addClock(0, 52, z, rand(2, 3.4));
+const CLOCK_COUNT = clockPos.length / 3;
+
+const faceGeo = new THREE.CylinderGeometry(1, 1, 0.2, 36);
+faceGeo.rotateX(Math.PI / 2);
+const faceMat = new THREE.MeshStandardMaterial({
+  map: clockTex, emissiveMap: clockTex, emissive: 0xffffff, emissiveIntensity: 1.25, roughness: 0.55, metalness: 0.15,
+});
+faceMat.fog = false;
+const faceMesh = new THREE.InstancedMesh(faceGeo, faceMat, CLOCK_COUNT);
+for (let i = 0; i < CLOCK_COUNT; i++) {
+  dummy.position.set(clockPos[i * 3], clockPos[i * 3 + 1], clockPos[i * 3 + 2]);
+  dummy.rotation.set(0, 0, 0);
+  const r = clockRad[i];
+  dummy.scale.set(r, r, r);
+  dummy.updateMatrix();
+  faceMesh.setMatrixAt(i, dummy.matrix);
+}
+faceMesh.instanceMatrix.needsUpdate = true;
+faceMesh.frustumCulled = false; // instances span the whole nave; avoid erroneous culling
+scene.add(faceMesh);
+
+function handGeo(hw, hh, zoff) {
+  const g = new THREE.BoxGeometry(hw, hh, 0.04);
+  g.translate(0, hh / 2, -zoff);
+  return g;
+}
+const hourGeo = handGeo(0.12, 0.55, CONFIG.clocks.handZOffset);
+const minGeo = handGeo(0.075, 0.86, CONFIG.clocks.handZOffset + 0.01);
+const secGeo = handGeo(0.022, 0.92, CONFIG.clocks.handZOffset + 0.02);
+const handMat = new THREE.MeshStandardMaterial({ color: 0xe6c869, metalness: 0.9, roughness: 0.3, emissive: 0x2a1e00, emissiveIntensity: 0.35 });
+handMat.fog = false;
+const secMat = new THREE.MeshStandardMaterial({ color: 0xff5533, emissive: 0xff2200, emissiveIntensity: 1.6, metalness: 0.4, roughness: 0.4 });
+secMat.fog = false;
+const hourMesh = new THREE.InstancedMesh(hourGeo, handMat, CLOCK_COUNT);
+const minMesh = new THREE.InstancedMesh(minGeo, handMat, CLOCK_COUNT);
+const secMesh = new THREE.InstancedMesh(secGeo, secMat, CLOCK_COUNT);
+[hourMesh, minMesh, secMesh].forEach(m => { m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.frustumCulled = false; scene.add(m); });
+
+function updateClocks(dt, dir) {
+  for (let i = 0; i < CLOCK_COUNT; i++) {
+    spinPhase[i] += dt * dir * spin[i];
+    const sp = spinPhase[i];
+    const cx = clockPos[i * 3], cy = clockPos[i * 3 + 1], cz = clockPos[i * 3 + 2];
+    const r = clockRad[i];
+    dummy.position.set(cx, cy, cz);
+    dummy.scale.set(r, r, r);
+    dummy.rotation.set(0, 0, -sp * 0.006); dummy.updateMatrix(); hourMesh.setMatrixAt(i, dummy.matrix);
+    dummy.rotation.set(0, 0, -sp * 0.08); dummy.updateMatrix(); minMesh.setMatrixAt(i, dummy.matrix);
+    dummy.rotation.set(0, 0, -sp); dummy.updateMatrix(); secMesh.setMatrixAt(i, dummy.matrix);
+  }
+  hourMesh.instanceMatrix.needsUpdate = true;
+  minMesh.instanceMatrix.needsUpdate = true;
+  secMesh.instanceMatrix.needsUpdate = true;
+}
+
+// ============================================================
+// Pendulum wave (instanced rods + bobs) + altar pendulum
+// ============================================================
+const PEND_COUNT = CONFIG.pendulums.count;
+const AMP = CONFIG.pendulums.amplitude;
+const pivots = []; const lengths = []; const omega = []; const swingPhase = [];
+const beamZ0 = -70, beamZ1 = 70;
+for (let i = 0; i < PEND_COUNT; i++) {
+  const z = lerp(beamZ0, beamZ1, i / (PEND_COUNT - 1));
+  pivots.push(0, VAULT_PEAK - 4, z);
+  const L = 6 + i * 0.07;
+  lengths.push(L);
+  const Ti = 60 / (40 + i); // crisp rephasing over 60s
+  omega.push((Math.PI * 2) / Ti);
+  swingPhase.push(0);
+}
+const rodGeo = new THREE.BoxGeometry(0.1, 1, 0.1);
+rodGeo.translate(0, -0.5, 0);
+const rodMat = new THREE.MeshStandardMaterial({ color: 0x4a4030, metalness: 0.7, roughness: 0.4 });
+const bobGeo = new THREE.SphereGeometry(0.5, 16, 16);
+const bobMat = new THREE.MeshStandardMaterial({ color: 0xc89a3e, metalness: 0.92, roughness: 0.28, emissive: 0x3a2400, emissiveIntensity: 0.3 });
+const rodMesh = new THREE.InstancedMesh(rodGeo, rodMat, PEND_COUNT);
+const bobMesh = new THREE.InstancedMesh(bobGeo, bobMat, PEND_COUNT);
+[rodMesh, bobMesh].forEach(m => { m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.castShadow = true; m.frustumCulled = false; scene.add(m); });
+
+const altarPivot = new THREE.Object3D();
+altarPivot.position.set(0, VAULT_PEAK - 2, NAVE_LEN / 2 - 12);
+scene.add(altarPivot);
+const altarRod = new THREE.Mesh(new THREE.BoxGeometry(0.25, 16, 0.25), rodMat);
+altarRod.geometry.translate(0, -8, 0);
+altarRod.castShadow = true;
+altarPivot.add(altarRod);
+const altarBob = new THREE.Mesh(new THREE.SphereGeometry(1.8, 24, 24), bobMat);
+altarBob.position.set(0, -16, 0);
+altarBob.castShadow = true;
+altarPivot.add(altarBob);
+const altarOmega = (Math.PI * 2) / 3.6;
+let altarPhase = 0;
+
+function updatePendulums(dt, dir) {
+  for (let i = 0; i < PEND_COUNT; i++) {
+    swingPhase[i] += dt * dir * omega[i];
+    const th = AMP * Math.cos(swingPhase[i]);
+    const px = pivots[i * 3], py = pivots[i * 3 + 1], pz = pivots[i * 3 + 2];
+    const L = lengths[i];
+    const m = dummy.matrix;
+    m.identity().makeTranslation(px, py, pz);
+    m.multiply(_rotZ.makeRotationZ(th));
+    m.multiply(_scale.makeScale(1, L, 1));
+    rodMesh.setMatrixAt(i, m);
+    m.identity().makeTranslation(px, py, pz);
+    m.multiply(_rotZ.makeRotationZ(th));
+    m.multiply(_trans.makeTranslation(0, -L, 0));
+    m.multiply(_scale.makeScale(1, 1, 1));
+    bobMesh.setMatrixAt(i, m);
+  }
+  rodMesh.instanceMatrix.needsUpdate = true;
+  bobMesh.instanceMatrix.needsUpdate = true;
+  altarPhase += dt * dir * altarOmega;
+  altarPivot.rotation.z = 0.5 * Math.cos(altarPhase);
+}
+
+// ============================================================
+// Floating gears
+// ============================================================
+function gearShape(teeth, rOuter, rInner, rHole) {
+  const s = new THREE.Shape();
+  const steps = teeth * 8;
+  const pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const a = t * Math.PI * 2;
+    const ph = (t * teeth) % 1;
+    const r = ph < 0.5 ? rInner + (rOuter - rInner) * easeInOut(ph * 2) : rOuter - (rOuter - rInner) * easeInOut((ph - 0.5) * 2);
+    pts.push(new THREE.Vector2(Math.cos(a) * r, Math.sin(a) * r));
+  }
+  s.setFromPoints(pts);
+  const hole = new THREE.Path();
+  hole.absarc(0, 0, rHole, 0, Math.PI * 2, true);
+  s.holes.push(hole);
+  return s;
+}
+const gearVariants = [];
+const teethOpts = [12, 16, 20, 24, 28];
+for (let v = 0; v < CONFIG.gears.variants; v++) {
+  const sh = gearShape(teethOpts[v], 1, 0.82, 0.32);
+  const g = new THREE.ExtrudeGeometry(sh, { depth: 0.18, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.04, bevelSegments: 2 });
+  g.translate(0, 0, -0.09);
+  g.computeVertexNormals();
+  gearVariants.push(g);
+}
+const gears = [];
+for (let i = 0; i < CONFIG.gears.count; i++) {
+  const g = new THREE.Mesh(gearVariants[i % CONFIG.gears.variants], brassMat);
+  const s = rand(1.6, 4.6);
+  g.scale.setScalar(s);
+  g.position.set(rand(-26, 26), rand(26, 54), rand(-82, 88));
+  g.rotation.z = rand(0, Math.PI * 2);
+  if (s > 3) g.castShadow = true;
+  scene.add(g);
+  gears.push({ mesh: g, spin: 0, speed: rand(-0.9, 0.9), baseY: g.position.y, bobPhase: rand(0, 100) });
+}
+function updateGears(dt, dir) {
+  for (const g of gears) {
+    g.spin += dt * dir * g.speed;
+    g.mesh.rotation.z = g.spin;
+    g.mesh.position.y = g.baseY + Math.sin(state.simPhase * 0.5 + g.bobPhase) * 0.8;
+  }
+}
+
+// ============================================================
+// Particle rivers
+// ============================================================
+const streamDefs = [
+  [[0,1,-100],[10,1,-60],[-10,1,-20],[8,1,20],[-8,1,60],[0,1,100]],
+  [[-22,1,-90],[-24,1,-40],[-20,1,10],[-24,1,50],[-22,1,95]],
+  [[22,1,-90],[24,1,-40],[20,1,10],[24,1,50],[22,1,95]],
+  [[0,2,-80],[6,20,-40],[0,40,0],[-6,20,40],[0,2,80]],
+  [[-18,30,-70],[-22,45,-20],[-18,55,30],[-22,45,80]],
+  [[18,30,-70],[22,45,-20],[18,55,30],[22,45,80]],
+];
+const streamColors = [0xffcc66, 0x66ddff, 0xaa66ff, 0xffaa55, 0x88ffcc, 0xff88aa];
+const luts = streamDefs.map(pts => {
+  const v3 = pts.map(p => new THREE.Vector3(p[0], p[1], p[2]));
+  const curve = new THREE.CatmullRomCurve3(v3);
+  return curve.getPoints(CONFIG.particles.lutSize - 1);
+});
+const PCOUNT = CONFIG.particles.count;
+const pPositions = new Float32Array(PCOUNT * 3);
+const pColors = new Float32Array(PCOUNT * 3);
+const pSizes = new Float32Array(PCOUNT);
+const pProg = new Float32Array(PCOUNT);
+const pState = []; // {stream, progress, speed}
+const lutN = luts[0].length;
+for (let i = 0; i < PCOUNT; i++) {
+  const s = i % CONFIG.particles.streams;
+  const prog = Math.random();
+  const speed = CONFIG.particles.baseSpeed * rand(0.5, 1.6);
+  pState.push({ stream: s, progress: prog, speed });
+  const lut = luts[s];
+  const f = prog * (lutN - 1); const i0 = Math.floor(f); const i1 = Math.min(i0 + 1, lutN - 1); const t = f - i0;
+  _v3.copy(lut[i0]).lerp(lut[i1], t);
+  pPositions[i * 3] = _v3.x; pPositions[i * 3 + 1] = _v3.y; pPositions[i * 3 + 2] = _v3.z;
+  const col = new THREE.Color(streamColors[s]);
+  pColors[i * 3] = col.r; pColors[i * 3 + 1] = col.g; pColors[i * 3 + 2] = col.b;
+  pSizes[i] = rand(1.6, 4.2);
+  pProg[i] = prog;
+}
+const pGeo = new THREE.BufferGeometry();
+pGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+pGeo.setAttribute('aColor', new THREE.BufferAttribute(pColors, 3));
+pGeo.setAttribute('aSize', new THREE.BufferAttribute(pSizes, 1));
+pGeo.setAttribute('aProg', new THREE.BufferAttribute(pProg, 1));
+const particleMat = new THREE.ShaderMaterial({
+  uniforms: { uScale: { value: 320 } },
+  vertexShader: `
+    attribute vec3 aColor; attribute float aSize; attribute float aProg;
+    uniform float uScale;
+    varying vec3 vColor; varying float vAlpha;
+    void main(){
+      vColor = aColor;
+      float p = aProg - floor(aProg);
+      vAlpha = smoothstep(0.0, 0.06, p) * smoothstep(1.0, 0.94, p);
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = aSize * (uScale / max(0.1, -mv.z));
+      gl_Position = projectionMatrix * mv;
+    }
+  `,
+  fragmentShader: `
+    varying vec3 vColor; varying float vAlpha;
+    void main(){
+      float d = length(gl_PointCoord - 0.5);
+      if (d > 0.5) discard;
+      float a = smoothstep(0.5, 0.0, d) * vAlpha;
+      gl_FragColor = vec4(vColor * a * 1.7, a);
+    }
+  `,
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+});
+const particles = new THREE.Points(pGeo, particleMat);
+particles.frustumCulled = false;
+scene.add(particles);
+function updateParticles(dt, dir) {
+  for (let i = 0; i < PCOUNT; i++) {
+    const ps = pState[i];
+    ps.progress += dt * dir * ps.speed;
+    const lut = luts[ps.stream];
+    const f = (ps.progress - Math.floor(ps.progress)) * (lutN - 1);
+    const i0 = Math.floor(f); const i1 = Math.min(i0 + 1, lutN - 1); const t = f - i0;
+    _v3.copy(lut[i0]).lerp(lut[i1], t);
+    pPositions[i * 3] = _v3.x; pPositions[i * 3 + 1] = _v3.y; pPositions[i * 3 + 2] = _v3.z;
+    pProg[i] = ps.progress;
+  }
+  pGeo.attributes.position.needsUpdate = true;
+  pGeo.attributes.aProg.needsUpdate = true;
+}
+
+// ============================================================
+// Volumetric light shafts
+// ============================================================
+const shaftMat = new THREE.ShaderMaterial({
+  uniforms: { uColor: { value: new THREE.Color(0xffd9a0) }, uOpacity: { value: 0.5 }, uTime: { value: 0 } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform vec3 uColor; uniform float uOpacity; uniform float uTime;
+    varying vec2 vUv;
+    ${NOISE_GLSL}
+    void main(){
+      float fall = pow(1.0 - vUv.x, 1.6);
+      float beam = smoothstep(1.0, 0.0, abs(vUv.y - 0.5) * 2.0);
+      float n = noise2(vec2(vUv.y * 4.0, uTime * 0.4 + vUv.x * 3.0));
+      float a = fall * beam * (0.55 + 0.45 * n) * uOpacity;
+      vec3 col = uColor * (1.0 + (1.0 - vUv.x) * 1.6);
+      gl_FragColor = vec4(col * a * 2.0, a);
+    }
+  `,
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+});
+function makeShaft(o, dir, len, nearW, farW, col) {
+  const d = dir.clone().normalize();
+  const up = new THREE.Vector3(0, 1, 0);
+  const right = new THREE.Vector3().crossVectors(d, up).normalize();
+  const na = o.clone().addScaledVector(right, nearW / 2);
+  const nb = o.clone().addScaledVector(right, -nearW / 2);
+  const far = o.clone().addScaledVector(d, len);
+  const fa = far.clone().addScaledVector(right, farW / 2);
+  const fb = far.clone().addScaledVector(right, -farW / 2);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+    na.x, na.y, na.z, nb.x, nb.y, nb.z, fb.x, fb.y, fb.z,
+    na.x, na.y, na.z, fb.x, fb.y, fb.z, fa.x, fa.y, fa.z,
+  ]), 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([
+    0, 0, 0, 1, 1, 1,
+    0, 0, 1, 1, 1, 0,
+  ]), 2));
+  const mat = shaftMat.clone();
+  mat.uniforms.uTime = shaftMat.uniforms.uTime; // share the time uniform so all shafts shimmer together
+  mat.uniforms.uColor.value = new THREE.Color(col);
+  const m = new THREE.Mesh(geo, mat);
+  m.frustumCulled = false;
+  scene.add(m);
+  return m;
+}
+// Side shafts (from windows angling down-inward)
+for (let z = -88; z <= 92; z += 60) {
+  makeShaft(new THREE.Vector3(NAVE_HALF_W - 1, 44, z), new THREE.Vector3(-0.7, -0.5, 0), 34, 7, 2, 0xffd9a0);
+  makeShaft(new THREE.Vector3(-(NAVE_HALF_W - 1), 44, z + 30), new THREE.Vector3(0.7, -0.5, 0), 34, 7, 2, 0xffd9a0);
+}
+// Rose-window shafts (forward + down toward the nave)
+makeShaft(new THREE.Vector3(-6, 40, NAVE_LEN / 2), new THREE.Vector3(-0.1, -0.35, -1), 70, 16, 3, 0xffe6c0);
+makeShaft(new THREE.Vector3(6, 40, NAVE_LEN / 2), new THREE.Vector3(0.1, -0.35, -1), 70, 16, 3, 0xffe6c0);
+
+// ============================================================
+// Audio — procedural bells (Web Audio API)
+// ============================================================
+const bells = {
+  ctx: null, dry: null, reverbIn: null, scale: [0, 3, 5, 7, 10],
+  async init() {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.ctx = ctx;
+    const master = ctx.createGain(); master.gain.value = 0.55; master.connect(ctx.destination);
+    const dry = ctx.createGain(); dry.gain.value = 0.7; dry.connect(master);
+    const conv = ctx.createConvolver(); conv.buffer = this._impulse(CONFIG.audio.reverbDecay);
+    const wet = ctx.createGain(); wet.gain.value = 0.55;
+    conv.connect(wet); wet.connect(master);
+    this.dry = dry; this.reverbIn = conv;
+    this._drone();
+  },
+  _impulse(decay) {
+    const ctx = this.ctx, rate = ctx.sampleRate, len = Math.floor(rate * 4.0);
+    const buf = ctx.createBuffer(2, len, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+    return buf;
+  },
+  _drone() {
+    const ctx = this.ctx;
+    const g = ctx.createGain(); g.gain.value = 0.05;
+    const filt = ctx.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = 320;
+    g.connect(filt); filt.connect(this.dry); filt.connect(this.reverbIn);
+    [55, 55.4, 82.5].forEach(f => { const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(g); o.start(); });
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 0.07;
+    const lg = ctx.createGain(); lg.gain.value = 180;
+    lfo.connect(lg); lg.connect(filt.frequency); lfo.start();
+  },
+  bell(freq, dur) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t0 = ctx.currentTime;
+    const out = ctx.createGain(); out.gain.value = 0;
+    const filt = ctx.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = freq * 5;
+    out.connect(filt); filt.connect(this.dry); filt.connect(this.reverbIn);
+    const partials = [1, 2, 2.4, 3, 4.5, 5.4, 6.7], amps = [1, 0.6, 0.42, 0.3, 0.2, 0.14, 0.09];
+    partials.forEach((p, i) => {
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = freq * p;
+      const gg = ctx.createGain();
+      gg.gain.setValueAtTime(0.0001, t0);
+      gg.gain.exponentialRampToValueAtTime(amps[i], t0 + 0.012);
+      gg.gain.exponentialRampToValueAtTime(0.0001, t0 + dur * (1.4 - i * 0.1));
+      o.connect(gg); gg.connect(out);
+      o.start(t0); o.stop(t0 + dur * 2 + 0.1);
+      o.onended = () => { try { o.disconnect(); gg.disconnect(); } catch (e) {} };
+    });
+    out.gain.setValueAtTime(0.0001, t0);
+    out.gain.exponentialRampToValueAtTime(0.9, t0 + 0.02);
+    out.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  },
+  chime() {
+    const semi = this.scale[Math.floor(Math.random() * this.scale.length)];
+    const oct = Math.floor(Math.random() * 3);
+    const midi = 45 + semi + oct * 12;
+    const freq = 440 * Math.pow(2, (midi - 69) / 12);
+    this.bell(freq, CONFIG.audio.bellDecay + Math.random() * 3);
+  },
+  rewindChime() {
+    [69, 67, 64, 60, 57, 52].forEach((m, i) => {
+      setTimeout(() => this.bell(440 * Math.pow(2, (m - 69) / 12), 4.5), i * 160);
+    });
+  },
+};
+
+// ============================================================
+// Resize
+// ============================================================
+function onResize() {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+  bloom.setSize(innerWidth, innerHeight);
+  fracturePass.uniforms.uResolution.value.set(innerWidth, innerHeight);
+}
+addEventListener('resize', onResize);
+
+// ============================================================
+// Animation loop
+// ============================================================
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const dir = state.direction;
+  const wallt = clock.elapsedTime;
+
+  // integrate reversible phase
+  state.simPhase += dt * dir;
+
+  updateRewind(dt);
+
+  // reversible motion
+  updateClocks(dt, dir);
+  updatePendulums(dt, dir);
+  updateGears(dt, dir);
+  updateParticles(dt, dir);
+
+  // décor (wall-clock; intentionally not reversed)
+  for (const c of candleLights) {
+    c.light.intensity = c.base * (0.78 + 0.18 * Math.sin(wallt * 7 + c.phase) + 0.08 * Math.sin(wallt * 13.3 + c.phase * 1.7));
+  }
+  for (const c of candleMeshes) {
+    c.mesh.scale.setScalar(0.85 + 0.25 * Math.sin(wallt * 9 + c.mesh.position.x));
+  }
+  shaftMat.uniforms.uTime.value = wallt;
+
+  // shader uniforms
+  glassUniforms.uSimTime.value = state.simPhase;
+  glassUniforms.uRewind.value = state.rewindAmount;
+  fracturePass.uniforms.uTime.value = wallt;
+  fracturePass.uniforms.uFracture.value = state.rewindAmount;
+
+  // bell scheduler
+  state.chimeTimer -= dt;
+  if (state.chimeTimer <= 0 && state.phase === 'NORMAL' && bells.ctx) {
+    bells.chime();
+    state.chimeTimer = rand(CONFIG.audio.chimeMin, CONFIG.audio.chimeMax);
+  }
+
+  controls.update();
+  composer.render(dt);
+}
+animate();
+
+// ============================================================
+// Enter overlay -> start audio
+// ============================================================
+const overlay = document.getElementById('overlay');
+const enterBtn = document.getElementById('enterBtn');
+enterBtn.addEventListener('click', async () => {
+  try {
+    await bells.init();
+    if (bells.ctx.state === 'suspended') await bells.ctx.resume();
+  } catch (e) { /* audio optional */ }
+  overlay.classList.add('gone');
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lorenz Attractor — Neon Ribbon</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #c { display: block; width: 100vw; height: 100vh; }
+  #hud {
+    position: fixed; left: 14px; bottom: 12px;
+    font: 11px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    color: #2de6ff; letter-spacing: .08em; text-transform: uppercase;
+    text-shadow: 0 0 8px rgba(45,230,255,.6); pointer-events: none;
+    opacity: .55;
+  }
+  #hud b { color: #ff2bd6; text-shadow: 0 0 8px rgba(255,43,214,.6); }
+</style>
+
+<!-- Import map: Three.js core + the Line2 thick-line addons from a CDN.   -->
+<!-- Bare "three" resolves to the ESM core; the addons folder is remapped  -->
+<!-- so each addon's internal `import 'three'` finds the same module.      -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">Lorenz σ=10 ρ=28 β=8/3 · <b>chaotic flow</b></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { Line2 }          from 'three/addons/lines/Line2.js';
+import { LineMaterial }   from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry }   from 'three/addons/lines/LineGeometry.js';
+
+// ───────────────────────────── scene / renderer ─────────────────────────────
+const canvas   = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0x000000, 1);
+
+const scene  = new THREE.Scene();
+scene.fog    = new THREE.FogExp2(0x000000, 0.0065);   // depth haze swallows far tail
+
+const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 600);
+
+// ───────────────────────────── Lorenz system ────────────────────────────────
+const SIGMA = 10, RHO = 28, BETA = 8 / 3;
+const CENTER = new THREE.Vector3(0, 0, 27);   // attractor sits ~here; recentre to origin
+
+function lorenz(p, out) {
+  out.x = SIGMA * (p.y - p.x);
+  out.y = p.x * (RHO - p.z) - p.y;
+  out.z = p.x * p.y - BETA * p.z;
+  return out;
+}
+// 4th-order Runge–Kutta — stable trajectory even at coarse dt.
+const _k1 = new THREE.Vector3(), _k2 = new THREE.Vector3(),
+      _k3 = new THREE.Vector3(), _k4 = new THREE.Vector3(), _tmp = new THREE.Vector3();
+function rk4(p, dt) {
+  lorenz(p, _k1);
+  lorenz(_tmp.copy(p).addScaledVector(_k1, dt / 2), _k2);
+  lorenz(_tmp.copy(p).addScaledVector(_k2, dt / 2), _k3);
+  lorenz(_tmp.copy(p).addScaledVector(_k3, dt),     _k4);
+  p.addScaledVector(_k1, dt / 6).addScaledVector(_k2, dt / 3)
+   .addScaledVector(_k3, dt / 3).addScaledVector(_k4, dt / 6);
+  return p;
+}
+
+// ───────────────────────────── ribbons ──────────────────────────────────────
+const TRAIL   = 2200;          // vertices held per ribbon (comet length)
+const STEPS   = 6;             // integration sub-steps per frame  → motion speed
+const DT      = 0.006;
+
+// Distinct neon hue per trajectory; tiny seed spread → exponential divergence.
+const RIBBONS = [
+  { hue: 0.52, seed: new THREE.Vector3( 0.10, 0.00, 0.00) }, // cyan  (primary)
+  { hue: 0.85, seed: new THREE.Vector3(-0.10, 0.05, 0.00) }, // magenta
+  { hue: 0.16, seed: new THREE.Vector3( 0.00, 0.12, 0.02) }, // amber
+  { hue: 0.66, seed: new THREE.Vector3( 0.04,-0.08, 0.05) }, // violet-blue
+];
+
+const resolution = new THREE.Vector2(innerWidth, innerHeight);
+const trails = [];
+
+for (const cfg of RIBBONS) {
+  // Ring buffer of positions; head index walks forward, tail trails behind.
+  const pos = new Float32Array(TRAIL * 3);
+  const col = new Float32Array(TRAIL * 3);
+
+  // Seed the whole buffer at one warmed-up point so nothing snaps from origin.
+  const state = new THREE.Vector3(0.1, 0, 20).add(cfg.seed);
+  for (let i = 0; i < 600; i++) rk4(state, DT);      // burn-in onto the attractor
+  for (let i = 0; i < TRAIL; i++) {
+    pos[i*3]   = state.x - CENTER.x;
+    pos[i*3+1] = state.y - CENTER.y;
+    pos[i*3+2] = state.z - CENTER.z;
+  }
+
+  const geo = new LineGeometry();
+  geo.setPositions(pos);
+  geo.setColors(col);
+
+  const mat = new LineMaterial({
+    linewidth: cfg.hue === 0.52 ? 3.4 : 2.4,   // primary ribbon a touch thicker
+    vertexColors: true,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    dashed: false,
+  });
+  mat.resolution.copy(resolution);
+
+  const line = new Line2(geo, mat);
+  line.computeLineDistances();
+  line.frustumCulled = false;
+  scene.add(line);
+
+  trails.push({ cfg, geo, mat, pos, col, state, head: 0, baseColor: new THREE.Color() });
+}
+const primary = trails[0];
+
+// Soft radial-gradient sprite that rides the leading head → a real neon bloom
+// point (a solid sphere just reads as a flat disc under additive blending).
+function glowTexture() {
+  const s = 128, cv = document.createElement('canvas');
+  cv.width = cv.height = s;
+  const g = cv.getContext('2d').createRadialGradient(s/2, s/2, 0, s/2, s/2, s/2);
+  g.addColorStop(0.0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.2, 'rgba(120,240,255,0.8)');
+  g.addColorStop(1.0, 'rgba(0,0,0,0)');
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, s, s);
+  return new THREE.CanvasTexture(cv);
+}
+const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: glowTexture(), color: 0x66e8ff, transparent: true,
+  blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9,
+}));
+halo.scale.setScalar(6);
+scene.add(halo);
+
+// ───────────────────────────── per-frame update ─────────────────────────────
+const _c = new THREE.Color();
+
+function advance(t) {
+  // Push STEPS new vertices onto each ribbon's head; recolour the whole strip
+  // so brightness fades head→tail every frame (the comet-trail effect).
+  for (const tr of trails) {
+    for (let s = 0; s < STEPS; s++) {
+      rk4(tr.state, DT);
+      tr.head = (tr.head + 1) % TRAIL;
+      const h = tr.head * 3;
+      tr.pos[h]   = tr.state.x - CENTER.x;
+      tr.pos[h+1] = tr.state.y - CENTER.y;
+      tr.pos[h+2] = tr.state.z - CENTER.z;
+    }
+
+    // Walk from head backward: age 0 = brightest leading edge, → 1 at tail.
+    for (let i = 0; i < TRAIL; i++) {
+      const idx = ((tr.head - i) % TRAIL + TRAIL) % TRAIL;
+      const age = i / TRAIL;
+      const fade = Math.pow(1 - age, 2.2);              // sharp bright nose, long dim tail
+      // Hue drifts slightly along the body + slow global shimmer for life.
+      _c.setHSL(tr.cfg.hue + 0.06 * age + 0.02 * Math.sin(t + i * 0.01),
+                1.0,
+                0.18 + 0.42 * fade);                    // additive: brightness = visible alpha
+      const c = idx * 3;
+      tr.col[c]   = _c.r;
+      tr.col[c+1] = _c.g;
+      tr.col[c+2] = _c.b;
+    }
+
+    tr.geo.setPositions(tr.pos);
+    tr.geo.setColors(tr.col);
+  }
+}
+
+// Leading head of the primary trajectory, in scene space (camera target).
+const headPos = new THREE.Vector3();
+function primaryHead() {
+  const h = primary.head * 3;
+  return headPos.set(primary.pos[h], primary.pos[h+1], primary.pos[h+2]);
+}
+
+// ───────────────────────────── camera flight ────────────────────────────────
+// Slow drift on a Lissajous shell that periodically threads the gap between the
+// twin loops, always looking at the live head so the eye rides the trajectory.
+const camPos = new THREE.Vector3();
+function flyCamera(t) {
+  const a = t * 0.11;
+  const r = 26 + 12 * Math.sin(t * 0.05);              // breathe in toward the core and back out
+  camPos.set(
+    Math.cos(a) * r,
+    Math.sin(a * 1.3) * r * 0.6,
+    Math.sin(a * 0.7) * r * 0.5
+  );
+  camera.position.lerp(camPos, 0.02);                  // smooth, no jerk
+  camera.lookAt(primaryHead());                        // track the leading edge
+  halo.position.copy(headPos);                         // glow rides the head
+}
+
+// ───────────────────────────── loop ─────────────────────────────────────────
+const clock = new THREE.Clock();
+let elapsed = 0;
+function tick() {
+  requestAnimationFrame(tick);
+  elapsed += clock.getDelta();
+  advance(elapsed);
+  flyCamera(elapsed);
+  renderer.render(scene, camera);
+}
+
+// ───────────────────────────── resize ───────────────────────────────────────
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  resolution.set(w, h);
+  for (const tr of trails) tr.mat.resolution.set(w, h);
+}
+addEventListener('resize', resize);
+resize();
+tick();
+</script>
+</body>
+</html>

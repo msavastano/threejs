@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bioluminescent Alien Ecosystem</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body,
+      #root {
+        margin: 0;
+        height: 100%;
+        width: 100%;
+        background: #02030a;
+        overflow: hidden;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      #overlay {
+        position: fixed;
+        left: 16px;
+        bottom: 14px;
+        color: rgba(180, 255, 240, 0.55);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        pointer-events: none;
+        user-select: none;
+        z-index: 10;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="overlay">Procedural Bioluminescent Flora &mdash; drag to orbit</div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>The Morphing Metaball Blob</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #05060a; }
+  /* Dark, subtle radial gradient background. Canvas is transparent so this shows through. */
+  #bg {
+    position: fixed; inset: 0; z-index: 0;
+    background: radial-gradient(circle at 50% 42%,
+                  #1a2030 0%,
+                  #0c0f17 38%,
+                  #05060a 72%,
+                  #000000 100%);
+  }
+  #app { position: fixed; inset: 0; z-index: 1; }
+  #title {
+    position: fixed; z-index: 2; left: 18px; bottom: 14px;
+    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #9aa7c0; letter-spacing: 0.04em; pointer-events: none;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.8);
+  }
+  #title b { color: #dfe7fb; font-weight: 600; }
+  .lil-gui { --background-color: #11141c; --widget-color: #232838; z-index: 3; }
+</style>
+</head>
+<body>
+  <div id="bg"></div>
+  <div id="app"></div>
+  <div id="title"><b>The Morphing Metaball Blob</b> — drag to orbit · scroll to zoom</div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/",
+      "lil-gui": "https://unpkg.com/lil-gui@0.19.2/dist/lil-gui.esm.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+  import * as THREE from 'three';
+  import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+  import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
+  import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+  import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+  import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+  import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+  import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+  import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+  import { GUI } from 'lil-gui';
+
+  // ----------------------------------------------------------------------------
+  // Renderer (transparent so the CSS radial gradient is the background)
+  // ----------------------------------------------------------------------------
+  const container = document.getElementById('app');
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0x000000, 0);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  container.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = null; // keep transparent -> gradient shows through
+
+  const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+  camera.position.set(0, 0, 4.2);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.06;
+  controls.minDistance = 2.0;
+  controls.maxDistance = 12.0;
+
+  // ----------------------------------------------------------------------------
+  // Environment map — RoomEnvironment via PMREM for realistic metal reflections
+  // ----------------------------------------------------------------------------
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environment = envTexture;
+
+  // A couple of lights add directional highlights on top of the env reflections.
+  const key = new THREE.DirectionalLight(0xffffff, 2.0);
+  key.position.set(3, 5, 4);
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0x88aaff, 1.4);
+  rim.position.set(-4, -2, -3);
+  scene.add(rim);
+
+  // ----------------------------------------------------------------------------
+  // Material — liquid metal (mercury / gold presets)
+  // ----------------------------------------------------------------------------
+  const PRESETS = {
+    'Liquid Mercury': { color: 0xf2f4f8, metalness: 1.0, roughness: 0.04, clearcoat: 0.6, clearcoatRoughness: 0.08, exposure: 1.0 },
+    'Liquid Gold':    { color: 0xffc04d, metalness: 1.0, roughness: 0.10, clearcoat: 0.5, clearcoatRoughness: 0.12, exposure: 1.05 },
+    'Liquid Chrome':  { color: 0xdfe6f2, metalness: 1.0, roughness: 0.02, clearcoat: 0.9, clearcoatRoughness: 0.04, exposure: 1.0 }
+  };
+
+  const material = new THREE.MeshPhysicalMaterial({
+    color: PRESETS['Liquid Mercury'].color,
+    metalness: 1.0,
+    roughness: 0.04,
+    clearcoat: 0.6,
+    clearcoatRoughness: 0.08,
+    envMapIntensity: 1.2,
+    reflectivity: 1.0
+  });
+
+  function applyPreset(name) {
+    const p = PRESETS[name];
+    material.color.setHex(p.color);
+    material.metalness = p.metalness;
+    material.roughness = p.roughness;
+    material.clearcoat = p.clearcoat;
+    material.clearcoatRoughness = p.clearcoatRoughness;
+    renderer.toneMappingExposure = p.exposure;
+    material.needsUpdate = true;
+  }
+
+  // ----------------------------------------------------------------------------
+  // MarchingCubes metaball volume
+  // ----------------------------------------------------------------------------
+  const params = {
+    preset: 'Liquid Mercury',
+    resolution: 50,
+    isolation: 60,
+    numBalls: 5,
+    ballStrength: 0.55,
+    subtract: 12,
+    speed: 0.55,
+    spread: 0.22,
+    breathing: 0.07,
+    // post
+    bloomStrength: 0.35,
+    bloomRadius: 0.4,
+    bloomThreshold: 0.85,
+    dofFocus: 4.2,
+    dofAperture: 0.018,
+    dofMaxBlur: 0.008,
+    dofEnabled: true,
+    autoFocus: true
+  };
+
+  let blob = new MarchingCubes(params.resolution, material, true, true, 100000);
+  blob.isolation = params.isolation;
+  blob.scale.setScalar(1.6);
+  scene.add(blob);
+
+  function rebuildBlob(res) {
+    scene.remove(blob);
+    blob.geometry.dispose();
+    blob = new MarchingCubes(res, material, true, true, 100000);
+    blob.isolation = params.isolation;
+    blob.scale.setScalar(1.6);
+    scene.add(blob);
+  }
+
+  // Per-ball random-ish phase offsets so motion never looks synchronized.
+  const phases = [];
+  for (let i = 0; i < 8; i++) {
+    phases.push({
+      px: i * 1.31 + 0.5, py: i * 2.17 + 1.1, pz: i * 0.97 + 2.3,
+      sx: 0.9 + (i % 3) * 0.25, sy: 1.1 + (i % 4) * 0.2, sz: 0.8 + (i % 5) * 0.18
+    });
+  }
+
+  function updateBlob(t) {
+    blob.reset();
+    const n = params.numBalls;
+    const spread = params.spread;
+    const breathe = 1.0 + Math.sin(t * 0.8) * params.breathing; // global breathing scale
+    blob.scale.setScalar(1.6 * breathe);
+
+    for (let i = 0; i < n; i++) {
+      const ph = phases[i];
+      // organic merge/separate using sin/cos with distinct freqs + offsets
+      const x = 0.5 + Math.sin(t * ph.sx * params.speed + ph.px) * spread;
+      const y = 0.5 + Math.cos(t * ph.sy * params.speed + ph.py) * spread
+                    + Math.sin(t * 0.6 * params.speed + ph.pz) * spread * 0.4;
+      const z = 0.5 + Math.cos(t * ph.sz * params.speed + ph.pz) * spread;
+      blob.addBall(x, y, z, params.ballStrength, params.subtract);
+    }
+    // MarchingCubes rebuilds its surface from the field during render.
+    blob.update();
+  }
+
+  // ----------------------------------------------------------------------------
+  // Post-processing — EffectComposer with depth attachment for real DoF
+  // ----------------------------------------------------------------------------
+  const size = renderer.getSize(new THREE.Vector2());
+  const dpr = renderer.getPixelRatio();
+
+  // Dedicated depth target for DoF. Kept SEPARATE from the composer's color
+  // buffers — if the depth texture is attached to the ping-pong buffers, bloom
+  // clears it before the DoF pass can sample it (yields all-zero depth).
+  const depthTexture = new THREE.DepthTexture(size.x * dpr, size.y * dpr);
+  depthTexture.type = THREE.UnsignedIntType;
+  const depthTarget = new THREE.WebGLRenderTarget(size.x * dpr, size.y * dpr, {
+    depthTexture: depthTexture,
+    depthBuffer: true
+  });
+
+  // HDR color buffer for the beauty pass so bloom has real highlights to bloom.
+  const composerRT = new THREE.WebGLRenderTarget(size.x * dpr, size.y * dpr, {
+    type: THREE.HalfFloatType
+  });
+  const composer = new EffectComposer(renderer, composerRT);
+  composer.setPixelRatio(dpr);
+  composer.setSize(size.x, size.y);
+
+  const renderPass = new RenderPass(scene, camera);
+  composer.addPass(renderPass);
+
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(size.x, size.y),
+    params.bloomStrength, params.bloomRadius, params.bloomThreshold
+  );
+  composer.addPass(bloomPass);
+
+  // Custom depth-of-field blur driven by eye-space distance from the camera.
+  const DoFShader = {
+    uniforms: {
+      tDiffuse:   { value: null },
+      tDepth:     { value: depthTexture },
+      cameraNear: { value: camera.near },
+      cameraFar:  { value: camera.far },
+      focus:      { value: params.dofFocus },
+      aperture:   { value: params.dofAperture },
+      maxblur:    { value: params.dofMaxBlur },
+      aspect:     { value: size.x / size.y },
+      enabled:    { value: 1.0 }
+    },
+    vertexShader: /* glsl */`
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */`
+      #include <packing>
+      varying vec2 vUv;
+      uniform sampler2D tDiffuse;
+      uniform sampler2D tDepth;
+      uniform float cameraNear;
+      uniform float cameraFar;
+      uniform float focus;     // eye-space distance to focal plane
+      uniform float aperture;  // how fast things blur away from focus
+      uniform float maxblur;   // max blur radius in UV units
+      uniform float aspect;
+      uniform float enabled;
+
+      float readEyeDist(vec2 uv) {
+        float d = texture2D(tDepth, uv).x;
+        float viewZ = perspectiveDepthToViewZ(d, cameraNear, cameraFar);
+        return -viewZ; // positive distance from camera
+      }
+
+      void main() {
+        vec4 center = texture2D(tDiffuse, vUv);
+        if (enabled < 0.5) { gl_FragColor = center; return; }
+
+        float dist = readEyeDist(vUv);
+        // Background (no geometry) reads far plane; treat as out-of-focus too.
+        float blur = clamp(abs(dist - focus) * aperture, 0.0, maxblur);
+
+        vec4 sum = vec4(0.0);
+        // 16-tap two-ring disk
+        for (int i = 0; i < 16; i++) {
+          float a = float(i) / 16.0 * 6.2831853;
+          float r = (i < 8) ? 0.5 : 1.0;
+          vec2 off = vec2(cos(a), sin(a)) * blur * r;
+          off.x /= aspect; // keep the disk circular
+          sum += texture2D(tDiffuse, vUv + off);
+        }
+        sum /= 16.0;
+
+        float k = smoothstep(0.0, maxblur * 0.4, blur);
+        gl_FragColor = mix(center, sum, k);
+      }
+    `
+  };
+
+  const dofPass = new ShaderPass(DoFShader);
+  // Fullscreen quad must not depth-test against the buffer's depth attachment.
+  dofPass.material.depthTest = false;
+  dofPass.material.depthWrite = false;
+  composer.addPass(dofPass);
+
+  const outputPass = new OutputPass();
+  composer.addPass(outputPass);
+
+  // ----------------------------------------------------------------------------
+  // GUI
+  // ----------------------------------------------------------------------------
+  const gui = new GUI({ title: 'Metaball Blob' });
+
+  const fMat = gui.addFolder('Material');
+  fMat.add(params, 'preset', Object.keys(PRESETS)).name('Preset').onChange(applyPreset);
+  fMat.add(material, 'metalness', 0, 1, 0.01);
+  fMat.add(material, 'roughness', 0, 0.5, 0.005);
+  fMat.add(material, 'clearcoat', 0, 1, 0.01);
+  fMat.add(material, 'clearcoatRoughness', 0, 0.5, 0.01);
+  fMat.add(material, 'envMapIntensity', 0, 3, 0.05);
+  fMat.add(renderer, 'toneMappingExposure', 0.2, 2.0, 0.01).name('exposure');
+
+  const fBlob = gui.addFolder('Blob');
+  fBlob.add(params, 'resolution', 16, 80, 1).name('resolution').onFinishChange(v => rebuildBlob(Math.floor(v)));
+  fBlob.add(params, 'isolation', 20, 300, 1).name('isolation').onChange(v => { blob.isolation = v; });
+  fBlob.add(params, 'numBalls', 3, 8, 1).name('ball count');
+  fBlob.add(params, 'ballStrength', 0.2, 1.2, 0.01).name('ball strength');
+  fBlob.add(params, 'subtract', 5, 25, 0.5);
+  fBlob.add(params, 'speed', 0.1, 2.0, 0.01);
+  fBlob.add(params, 'spread', 0.08, 0.32, 0.005);
+  fBlob.add(params, 'breathing', 0.0, 0.2, 0.005);
+
+  const fBloom = gui.addFolder('Bloom');
+  fBloom.add(params, 'bloomStrength', 0, 2, 0.01).onChange(v => bloomPass.strength = v);
+  fBloom.add(params, 'bloomRadius', 0, 1, 0.01).onChange(v => bloomPass.radius = v);
+  fBloom.add(params, 'bloomThreshold', 0, 1, 0.01).onChange(v => bloomPass.threshold = v);
+
+  const fDof = gui.addFolder('Depth of Field');
+  fDof.add(params, 'dofEnabled').name('enabled').onChange(v => dofPass.uniforms.enabled.value = v ? 1.0 : 0.0);
+  fDof.add(params, 'autoFocus').name('auto-focus blob');
+  fDof.add(params, 'dofFocus', 1, 10, 0.01).name('focus dist').onChange(v => dofPass.uniforms.focus.value = v).listen();
+  fDof.add(params, 'dofAperture', 0, 0.06, 0.001).name('aperture').onChange(v => dofPass.uniforms.aperture.value = v);
+  fDof.add(params, 'dofMaxBlur', 0, 0.02, 0.0005).name('max blur').onChange(v => dofPass.uniforms.maxblur.value = v);
+
+  applyPreset(params.preset);
+
+  // ----------------------------------------------------------------------------
+  // Resize
+  // ----------------------------------------------------------------------------
+  window.addEventListener('resize', () => {
+    const w = window.innerWidth, h = window.innerHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+
+    renderer.setSize(w, h);
+    composer.setSize(w, h);
+
+    const pr = renderer.getPixelRatio();
+    composerRT.setSize(w * pr, h * pr);
+    depthTarget.setSize(w * pr, h * pr);
+    bloomPass.setSize(w, h);
+    dofPass.uniforms.aspect.value = w / h;
+  });
+
+  // ----------------------------------------------------------------------------
+  // Animation loop
+  // ----------------------------------------------------------------------------
+  const clock = new THREE.Clock();
+
+  function animate() {
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+
+    updateBlob(t);
+    controls.update();
+
+    // Keep DoF uniforms current; auto-focus locks focal plane to the blob center.
+    dofPass.uniforms.cameraNear.value = camera.near;
+    dofPass.uniforms.cameraFar.value = camera.far;
+    if (params.autoFocus) {
+      const d = camera.position.distanceTo(blob.position);
+      params.dofFocus = d;
+      dofPass.uniforms.focus.value = d;
+    }
+
+    // Depth pre-pass: render the scene into the dedicated depth target so the
+    // DoF shader has valid eye-space depth to sample.
+    renderer.setRenderTarget(depthTarget);
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
+
+    composer.render();
+  }
+  animate();
+</script>
+</body>
+</html>

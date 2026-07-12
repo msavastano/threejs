@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Infinite Cyberspace — Raymarched Neon Grid</title>
+<style>
+  /* Deep-black full-bleed canvas, no scrollbars, neon-on-void aesthetic */
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    cursor: crosshair;
+  }
+  #app { position: fixed; inset: 0; }
+
+  /* HUD overlay — pure CSS, sits above the WebGL canvas */
+  .hud {
+    position: fixed;
+    pointer-events: none;
+    font-family: "Courier New", monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.25em;
+    color: #00f0ff;
+    text-shadow: 0 0 8px #00f0ff, 0 0 2px #ff00ff;
+    z-index: 10;
+    user-select: none;
+  }
+  .hud.title    { top: 22px; left: 26px; font-size: 18px; font-weight: bold; }
+  .hud.subtitle { top: 48px; left: 26px; font-size: 10px; color: #ff3df0;
+                  text-shadow: 0 0 8px #ff00ff; opacity: 0.8; }
+  .hud.help     { bottom: 20px; left: 26px; font-size: 10px; opacity: 0.55;
+                  line-height: 1.7em; letter-spacing: 0.18em; }
+
+  /* Loading flash while the shader compiles */
+  #loading {
+    position: fixed; inset: 0; display: flex; align-items: center;
+    justify-content: center; background: #000; color: #00f0ff; z-index: 20;
+    font-family: "Courier New", monospace; letter-spacing: 0.4em;
+    text-shadow: 0 0 10px #00f0ff; transition: opacity 0.6s ease;
+  }
+</style>
+
+<!-- ===================================================================== -->
+<!-- IMPORT MAP: pull Three.js core + OrbitControls straight from a CDN.    -->
+<!-- The bare specifier "three" resolves to the ESM build; the addons       -->
+<!-- folder must be remapped so OrbitControls' internal `import 'three'`     -->
+<!-- works too.                                                             -->
+<!-- ===================================================================== -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="loading">COMPILING&nbsp;SHADER…</div>
+
+<div class="hud title">INFINITE CYBERSPACE</div>
+<div class="hud subtitle">raymarched neon lattice // fBm cityscape</div>
+<div class="hud help">DRAG&nbsp;:&nbsp;look around &nbsp;·&nbsp; MOVE MOUSE&nbsp;:&nbsp;parallax &nbsp;·&nbsp; auto-fly engaged</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* =====================================================================
+   1. VERTEX SHADER (RawShaderMaterial → GLSL ES 1.00)
+   ---------------------------------------------------------------------
+   We render ONE fullscreen quad: a PlaneGeometry(2,2) whose vertex
+   positions already span clip space (-1..+1). So the vertex shader does
+   no projection at all — it just forwards the clip-space position to the
+   fragment shader as `vUv` (range -1..1) and writes gl_Position verbatim.
+   RawShaderMaterial gives us zero auto-injected uniforms/attributes, so
+   everything below is declared by hand.
+   ===================================================================== */
+const vertexShader = /* glsl */`
+  precision highp float;
+
+  // The only attribute the quad supplies.
+  attribute vec3 position;
+
+  // Pass clip-space xy down to the fragment stage as our screen coord.
+  varying vec2 vUv;
+
+  void main() {
+    vUv = position.xy;                 // already in [-1, 1]
+    gl_Position = vec4(position, 1.0); // pass straight through, no camera
+  }
+`;
+
+/* =====================================================================
+   2. FRAGMENT SHADER — the whole raymarcher lives here.
+   ===================================================================== */
+const fragmentShader = /* glsl */`
+  precision highp float;
+
+  varying vec2 vUv;
+
+  // ---- uniforms fed from JS each frame -------------------------------
+  uniform float uTime;       // seconds since start
+  uniform vec2  uResolution; // drawing-buffer size in pixels
+  uniform float uAspect;     // width / height
+  uniform vec2  uMouse;      // normalized mouse pos, range ~[-1,1]
+  uniform float uYaw;        // look yaw   (from OrbitControls azimuth)
+  uniform float uPitch;      // look pitch (from OrbitControls polar)
+
+  // ---- tunable constants (perf / look knobs) -------------------------
+  #define MAX_STEPS 78        // raymarch iterations — lower = faster
+  #define MAX_DIST  62.0      // far clip for the march
+  #define SURF_EPS  0.0012    // hit threshold
+  #define CELL      5.0       // size of one repeating grid cell
+  #define FLY_SPEED 3.0       // forward units / second
+  #define FOV       0.85      // tan(half-fov); larger = wider lens
+  #define FOG       0.052     // distance-fog density (60fps depends on this)
+  #define CHROMATIC 1         // 1 = enable chromatic aberration (3 marches)
+
+  // =====================================================================
+  // 2a. HASH HELPERS — cheap per-cell pseudo-random values.
+  //     hash13: vec3 id -> float ;  hash33: vec3 id -> vec3
+  //     (Dave Hoskins style integer-lattice hashes, trig-free.)
+  // =====================================================================
+  float hash13(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+  }
+  vec3 hash33(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.xxy + p.yxx) * p.zyx);
+  }
+
+  // =====================================================================
+  // 2b. 3D SIMPLEX NOISE (Ashima / Stefan Gustavson, public domain).
+  //     We feed this into fBm to drive cube sizes/heights so the lattice
+  //     reads like an organic digital cityscape rather than a flat grid.
+  // =====================================================================
+  vec3 mod289(vec3 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
+  vec4 mod289(vec4 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
+  vec4 permute(vec4 x){ return mod289(((x*34.0)+1.0)*x); }
+  vec4 taylorInvSqrt(vec4 r){ return 1.79284291400159 - 0.85373472095314 * r; }
+
+  float snoise(vec3 v) {
+    const vec2  C = vec2(1.0/6.0, 1.0/3.0);
+    const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+
+    // First and second corners of the simplex.
+    vec3 i  = floor(v + dot(v, C.yyy));
+    vec3 x0 = v - i + dot(i, C.xxx);
+    vec3 g  = step(x0.yzx, x0.xyz);
+    vec3 l  = 1.0 - g;
+    vec3 i1 = min(g.xyz, l.zxy);
+    vec3 i2 = max(g.xyz, l.zxy);
+    vec3 x1 = x0 - i1 + C.xxx;
+    vec3 x2 = x0 - i2 + C.yyy;
+    vec3 x3 = x0 - D.yyy;
+
+    // Permutations -> gradient indices.
+    i = mod289(i);
+    vec4 p = permute( permute( permute(
+               i.z + vec4(0.0, i1.z, i2.z, 1.0))
+             + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+             + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+
+    // Gradients on a 7x7 grid mapped to an octahedron.
+    float n_ = 0.142857142857;            // 1/7
+    vec3  ns = n_ * D.wyz - D.xzx;
+    vec4 j  = p - 49.0 * floor(p * ns.z * ns.z);
+    vec4 x_ = floor(j * ns.z);
+    vec4 y_ = floor(j - 7.0 * x_);
+    vec4 x  = x_ * ns.x + ns.yyyy;
+    vec4 y  = y_ * ns.x + ns.yyyy;
+    vec4 h  = 1.0 - abs(x) - abs(y);
+
+    vec4 b0 = vec4(x.xy, y.xy);
+    vec4 b1 = vec4(x.zw, y.zw);
+    vec4 s0 = floor(b0) * 2.0 + 1.0;
+    vec4 s1 = floor(b1) * 2.0 + 1.0;
+    vec4 sh = -step(h, vec4(0.0));
+    vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+    vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+
+    vec3 p0 = vec3(a0.xy, h.x);
+    vec3 p1 = vec3(a0.zw, h.y);
+    vec3 p2 = vec3(a1.xy, h.z);
+    vec3 p3 = vec3(a1.zw, h.w);
+
+    // Normalise gradients.
+    vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+    p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+
+    // Mix contributions from the four corners.
+    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+    m = m * m;
+    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+  }
+
+  // fractal Brownian motion: 3 octaves of simplex noise. Cheap-ish.
+  float fbm(vec3 p) {
+    float f = 0.0;
+    float amp = 0.5;
+    for (int o = 0; o < 3; o++) {
+      f   += amp * snoise(p);
+      p   *= 2.02;     // lacunarity
+      amp *= 0.5;      // gain
+    }
+    return f;          // roughly [-1, 1]
+  }
+
+  // =====================================================================
+  // 2c. SIGNED-DISTANCE FUNCTION for a hollow wireframe cube (box frame).
+  //     Inigo Quilez's sdBoxFrame: b = half-extents, e = edge thickness.
+  //     Returns distance to the 12 edge beams only — the faces are empty,
+  //     which gives us the glowing neon "wireframe" look for free.
+  // =====================================================================
+  float sdBoxFrame(vec3 p, vec3 b, float e) {
+    p = abs(p) - b;
+    vec3 q = abs(p + e) - e;
+    return min(min(
+        length(max(vec3(p.x, q.y, q.z), 0.0)) + min(max(p.x, max(q.y, q.z)), 0.0),
+        length(max(vec3(q.x, p.y, q.z), 0.0)) + min(max(q.x, max(p.y, q.z)), 0.0)),
+        length(max(vec3(q.x, q.y, p.z), 0.0)) + min(max(q.x, max(q.y, p.z)), 0.0));
+  }
+
+  // =====================================================================
+  // 2d. SCENE MAP — the infinite lattice via domain repetition.
+  //     We fold all of space into one [-CELL/2, CELL/2] cell with mod(),
+  //     so a single box definition tiles to infinity in x, y, z. Each
+  //     cell pulls its own jitter / size / colour from its integer id,
+  //     and fBm warps the heights so it reads as a digital cityscape.
+  //     `outCol` returns the cell's neon tint (cyan or magenta).
+  // =====================================================================
+  float map(vec3 p, out vec3 outCol) {
+    // Integer id of the current cell + position local to its centre.
+    vec3 id    = floor(p / CELL);
+    vec3 local = mod(p, CELL) - CELL * 0.5;
+
+    // Per-cell randoms.
+    vec3  rnd = hash33(id);
+    float pick = hash13(id + 7.1);
+
+    // fBm-driven verticality: positive noise -> taller "tower" cells.
+    float n = fbm(id * 0.23);
+
+    // Base half-size of the cube, plus a fBm height stretch on Y.
+    float baseHalf = 0.55 + 0.6 * rnd.x;
+    vec3  b = vec3(baseHalf,
+                   baseHalf * (1.0 + max(n, 0.0) * 1.6),
+                   baseHalf);
+
+    // Keep every box strictly inside its own cell so the single-cell
+    // mod() sampling stays artifact-free (no bleeding into neighbours).
+    vec3 limit = vec3(CELL * 0.5 - 0.25) - b;
+    limit = max(limit, vec3(0.0));
+    vec3 jitter = (rnd - 0.5) * 2.0 * limit;   // random offset within cell
+
+    // Edge thickness pulses gently over time for a "live" feel.
+    float e = 0.05 + 0.015 * sin(uTime * 1.5 + pick * 6.2831);
+
+    float d = sdBoxFrame(local - jitter, b, e);
+
+    // Two-tone neon palette: cyan vs magenta chosen by a hash bit.
+    vec3 cyan    = vec3(0.05, 1.0, 1.0);
+    vec3 magenta = vec3(1.0, 0.10, 0.95);
+    outCol = mix(cyan, magenta, step(0.5, rnd.z));
+
+    return d;
+  }
+
+  // =====================================================================
+  // 2e. RENDER one ray for a given screen coordinate.
+  //     Standard sphere-tracing loop, but instead of only caring about
+  //     the final hit we ACCUMULATE glow every step (∝ 1/dist²). Because
+  //     the SDF is a thin wireframe, rays grazing the edges rack up huge
+  //     glow → that's our neon bloom, done analytically, no post blur.
+  //     Distance fog (exp(-t·FOG)) folds in per-step so far cubes fade to
+  //     black, which is also what keeps the step budget — and the fps — sane.
+  // =====================================================================
+  vec3 renderRay(vec2 uv) {
+    // ---- build the camera basis from look angles + mouse parallax ----
+    float yaw   = uYaw   + uMouse.x * 0.30;   // parallax nudges the aim
+    float pitch = uPitch + uMouse.y * 0.30;
+
+    vec3 fwd   = vec3(cos(pitch) * sin(yaw),
+                      sin(pitch),
+                      cos(pitch) * cos(yaw));
+    vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+    vec3 up    = cross(right, fwd);
+
+    // Ray origin auto-flies forward along Z; tiny sine sway adds life.
+    vec3 ro = vec3(sin(uTime * 0.11) * 1.4,
+                   sin(uTime * 0.15) * 0.7,
+                   uTime * FLY_SPEED);
+
+    // Perspective ray direction through this pixel.
+    vec3 rd = normalize(fwd + uv.x * right * FOV + uv.y * up * FOV);
+
+    // ---- the march ----------------------------------------------------
+    float t   = 0.0;
+    vec3  glow = vec3(0.0);
+    vec3  cellCol;
+
+    for (int i = 0; i < MAX_STEPS; i++) {
+      vec3  p = ro + rd * t;
+      float d = map(p, cellCol);
+
+      // Per-step neon accumulation, weighted by fog so distance fades it.
+      float fogW = exp(-t * FOG);
+      glow += cellCol * (0.42 / (1.0 + d * d * 26.0)) * fogW;
+
+      if (d < SURF_EPS) {
+        // Direct hit: add a hot core flash on the wire itself.
+        glow += cellCol * 1.6 * fogW;
+        break;
+      }
+
+      t += d;                 // sphere-trace step
+      if (t > MAX_DIST) break;
+    }
+
+    // Overall glow gain. Tweak for brightness.
+    return glow * 0.085;
+  }
+
+  // =====================================================================
+  // 2f. MAIN — screen-space post (chromatic aberration + scanlines +
+  //     vignette + tonemap) applied right here in the same fragment shader.
+  // =====================================================================
+  void main() {
+    // Aspect-corrected screen coord, centre = (0,0).
+    vec2 uv = vUv;
+    uv.x *= uAspect;
+
+    vec3 col;
+
+    #if CHROMATIC
+      // Chromatic aberration: march the R / G / B channels along slightly
+      // different ray directions, offset radially from screen centre, so
+      // colour fringing grows toward the edges — like a cheap CRT lens.
+      vec2 dir = uv;                                   // radial direction
+      float ca = 0.0035 * (0.4 + dot(uv, uv) * 0.5);   // stronger at edges
+      col.r = renderRay(uv + dir * ca).r;
+      col.g = renderRay(uv).g;
+      col.b = renderRay(uv - dir * ca).b;
+    #else
+      col = renderRay(uv);
+    #endif
+
+    // ---- scanlines: dark horizontal interference, scrolling slowly -----
+    float scan = sin((vUv.y * 0.5 + 0.5) * uResolution.y * 1.5 - uTime * 6.0);
+    col *= 0.88 + 0.12 * scan;                 // ~12% modulation
+    // Faint moving brightness band, very CRT.
+    col *= 0.96 + 0.04 * sin(uTime * 2.0 + vUv.y * 8.0);
+
+    // ---- vignette: pull the void darker toward the corners -------------
+    float vig = 1.0 - 0.35 * dot(uv * vec2(0.55, 0.8), uv * vec2(0.55, 0.8));
+    col *= clamp(vig, 0.0, 1.0);
+
+    // ---- tonemap + gamma: Reinhard rolls the bright neon into bloomy ---
+    //      highlights instead of clipping to flat white.
+    col = col / (1.0 + col);
+    col = pow(col, vec3(0.4545));             // linear -> sRGB-ish
+
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+/* =====================================================================
+   3. THREE.JS BOOTSTRAP
+   ===================================================================== */
+const container = document.getElementById('app');
+
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+// Cap pixel ratio: chromatic aberration triple-marches every pixel, so we
+// trade a little sharpness for a locked 60fps on most GPUs.
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+renderer.setSize(window.innerWidth, window.innerHeight);
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+
+// A real PerspectiveCamera so OrbitControls has something to drive. The
+// raw vertex shader ignores camera matrices, so this camera never affects
+// the quad's geometry — we only read its azimuth/polar angles for look.
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 0, 0.001);
+
+// OrbitControls: drag to look around the flythrough. Pan/zoom disabled
+// (meaningless for a shader camera); damping makes the look glide.
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, 1);          // look down +Z by default
+controls.enablePan = false;
+controls.enableZoom = false;
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.rotateSpeed = 0.5;
+controls.minPolarAngle = 0.6;          // clamp so we never flip the horizon
+controls.maxPolarAngle = Math.PI - 0.6;
+
+// ---- the single fullscreen quad ----
+const geometry = new THREE.PlaneGeometry(2, 2);
+const uniforms = {
+  uTime:       { value: 0 },
+  uResolution: { value: new THREE.Vector2() },
+  uAspect:     { value: 1 },
+  uMouse:      { value: new THREE.Vector2(0, 0) },
+  uYaw:        { value: 0 },
+  uPitch:      { value: 0 },
+};
+
+const material = new THREE.RawShaderMaterial({
+  vertexShader,
+  fragmentShader,
+  uniforms,
+  depthTest: false,
+  depthWrite: false,
+});
+
+const quad = new THREE.Mesh(geometry, material);
+scene.add(quad);
+
+/* =====================================================================
+   4. INPUT — mouse parallax (hover) is separate from OrbitControls (drag).
+   ===================================================================== */
+const targetMouse = new THREE.Vector2(0, 0);   // raw target from pointer
+window.addEventListener('pointermove', (e) => {
+  // Map to [-1, 1], y up.
+  targetMouse.x = (e.clientX / window.innerWidth) * 2.0 - 1.0;
+  targetMouse.y = -((e.clientY / window.innerHeight) * 2.0 - 1.0);
+});
+
+/* =====================================================================
+   5. RESIZE
+   ===================================================================== */
+function onResize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+
+  const buf = renderer.getDrawingBufferSize(new THREE.Vector2());
+  uniforms.uResolution.value.copy(buf);
+  uniforms.uAspect.value = w / h;
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+/* =====================================================================
+   6. RENDER LOOP
+   ===================================================================== */
+const clock = new THREE.Clock();
+let loadingHidden = false;
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  controls.update();
+
+  // Smooth the parallax mouse toward its target (low-pass for silky drift).
+  uniforms.uMouse.value.lerp(targetMouse, 0.05);
+
+  // Feed look angles from OrbitControls into the shader.
+  // azimuth -> yaw ; (polar - π/2) -> pitch (0 = looking at horizon).
+  uniforms.uYaw.value   = controls.getAzimuthalAngle();
+  uniforms.uPitch.value = (Math.PI * 0.5) - controls.getPolarAngle();
+
+  uniforms.uTime.value = clock.getElapsedTime();
+
+  renderer.render(scene, camera);
+
+  // Drop the loading flash after the first successful frame.
+  if (!loadingHidden) {
+    loadingHidden = true;
+    const el = document.getElementById('loading');
+    el.style.opacity = '0';
+    setTimeout(() => el.remove(), 700);
+  }
+}
+animate();
+</script>
+</body>
+</html>

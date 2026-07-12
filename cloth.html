@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Liquid Metal Cloth — Verlet Simulation</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #05070d; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  #ui {
+    position: fixed; top: 16px; left: 16px; z-index: 10;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: #cdd6f4; user-select: none;
+    background: rgba(12, 16, 28, 0.55);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(140, 170, 255, 0.18);
+    border-radius: 14px;
+    padding: 16px 18px;
+    max-width: 280px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+  }
+  #ui h1 {
+    font-size: 14px; font-weight: 600; letter-spacing: 0.3px;
+    margin-bottom: 6px; color: #e9eefc;
+  }
+  #ui p { font-size: 11.5px; line-height: 1.55; color: #9aa6c4; margin-bottom: 12px; }
+  #ui p b { color: #c8d3f0; font-weight: 600; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    flex: 1 1 auto;
+    font: inherit; font-size: 12px; font-weight: 600;
+    color: #e9eefc; cursor: pointer;
+    background: linear-gradient(180deg, rgba(90,120,220,0.35), rgba(60,80,170,0.35));
+    border: 1px solid rgba(150,180,255,0.30);
+    border-radius: 10px; padding: 9px 12px;
+    transition: transform .08s ease, background .15s ease, border-color .15s ease;
+  }
+  button:hover { background: linear-gradient(180deg, rgba(110,140,240,0.5), rgba(70,95,190,0.5)); border-color: rgba(180,205,255,0.55); }
+  button:active { transform: translateY(1px) scale(0.99); }
+  button.ghost { background: rgba(255,255,255,0.04); border-color: rgba(160,170,200,0.22); }
+  #hint {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    z-index: 10; font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 11px; color: #6b7690; letter-spacing: 0.4px;
+    pointer-events: none; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="ui">
+  <h1>Liquid Metal Cloth</h1>
+  <p>
+    <b>Drag</b> on the cloth to grab &amp; pull a point.<br />
+    <b>Orbit</b> with mouse on empty space.<br />
+    Four corners are pinned in space.
+  </p>
+  <div class="row">
+    <button id="release">Release Pins</button>
+    <button id="reset" class="ghost">Reset</button>
+  </div>
+</div>
+<div id="hint">Verlet integration · structural + shear + bend constraints · 10 solver iterations/frame</div>
+
+<!-- Modern Three.js via importmap -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+/* ------------------------------------------------------------------ *
+ *  Renderer / Scene / Camera
+ * ------------------------------------------------------------------ */
+const container = document.getElementById('app');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070d);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 0.4, 7.5);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 3;
+controls.maxDistance = 20;
+controls.target.set(0, -0.2, 0);
+
+/* ------------------------------------------------------------------ *
+ *  Environment map (subtle reflections for the metal)
+ * ------------------------------------------------------------------ */
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environment = envTex;
+
+// A couple of accent lights so highlights track the folds dynamically.
+const keyLight = new THREE.DirectionalLight(0xbcd4ff, 2.4);
+keyLight.position.set(4, 6, 6);
+scene.add(keyLight);
+
+const rimLight = new THREE.DirectionalLight(0xff9ad0, 1.4);
+rimLight.position.set(-6, -2, -4);
+scene.add(rimLight);
+
+scene.add(new THREE.AmbientLight(0x404a66, 0.4));
+
+/* ------------------------------------------------------------------ *
+ *  Cloth definition
+ * ------------------------------------------------------------------ */
+const COLS = 30;                 // particles across
+const ROWS = 30;                 // particles down
+const WIDTH = 4.2;               // world units
+const HEIGHT = 4.2;
+const ITERATIONS = 10;           // constraint solver passes per frame
+const DAMPING = 0.985;           // Verlet velocity retention
+const GRAVITY = new THREE.Vector3(0, -16.0, 0);
+const DT = 1 / 60;
+const DT2 = DT * DT;
+
+// PlaneGeometry vertices are laid out row-major from top-left.
+// Build with (COLS-1) x (ROWS-1) segments so vertex grid == particle grid.
+const geometry = new THREE.PlaneGeometry(WIDTH, HEIGHT, COLS - 1, ROWS - 1);
+const posAttr = geometry.attributes.position;
+
+const COUNT = COLS * ROWS;
+const idx = (x, y) => y * COLS + x;   // grid -> flat index (matches plane order)
+
+// Per-particle state.
+const positions = new Array(COUNT);   // THREE.Vector3 current
+const previous  = new Array(COUNT);   // THREE.Vector3 last frame
+const original  = new Array(COUNT);   // for reset
+const invMass   = new Float32Array(COUNT); // 0 == pinned, 1 == free
+
+function buildParticles() {
+  for (let i = 0; i < COUNT; i++) {
+    const p = new THREE.Vector3().fromBufferAttribute(posAttr, i);
+    positions[i] = p.clone();
+    previous[i]  = p.clone();
+    original[i]  = p.clone();
+    invMass[i]   = 1;
+  }
+  pinCorners();
+}
+
+// "Top four corners" — pin the four corners of the cloth grid.
+const cornerIndices = [
+  idx(0, 0), idx(COLS - 1, 0),
+  idx(0, ROWS - 1), idx(COLS - 1, ROWS - 1),
+];
+function pinCorners() {
+  for (const c of cornerIndices) invMass[c] = 0;
+}
+
+/* ---- Constraints: structural, shear, bend ---- */
+const constraints = []; // { a, b, rest }
+function addConstraint(ax, ay, bx, by) {
+  if (bx < 0 || bx >= COLS || by < 0 || by >= ROWS) return;
+  const a = idx(ax, ay), b = idx(bx, by);
+  const rest = positions[a].distanceTo(positions[b]);
+  constraints.push({ a, b, rest });
+}
+function buildConstraints() {
+  constraints.length = 0;
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      // Structural — immediate neighbours
+      addConstraint(x, y, x + 1, y);
+      addConstraint(x, y, x, y + 1);
+      // Shear — diagonals
+      addConstraint(x, y, x + 1, y + 1);
+      addConstraint(x + 1, y, x, y + 1);
+      // Bend — two cells out (resists sharp creasing)
+      addConstraint(x, y, x + 2, y);
+      addConstraint(x, y, x, y + 2);
+    }
+  }
+}
+
+buildParticles();
+buildConstraints();
+
+/* ------------------------------------------------------------------ *
+ *  Cloth material — liquid metal / silk
+ * ------------------------------------------------------------------ */
+const material = new THREE.MeshPhysicalMaterial({
+  color: 0x9fb4ff,
+  metalness: 1.0,
+  roughness: 0.18,
+  clearcoat: 0.6,
+  clearcoatRoughness: 0.25,
+  envMapIntensity: 1.6,
+  side: THREE.DoubleSide,
+});
+
+geometry.computeVertexNormals();
+const cloth = new THREE.Mesh(geometry, material);
+scene.add(cloth);
+
+/* ------------------------------------------------------------------ *
+ *  Physics step
+ * ------------------------------------------------------------------ */
+const _tmp = new THREE.Vector3();
+const _delta = new THREE.Vector3();
+
+function verlet() {
+  for (let i = 0; i < COUNT; i++) {
+    if (invMass[i] === 0) continue;
+    const pos = positions[i];
+    const prev = previous[i];
+    _tmp.copy(pos);
+    // pos += (pos - prev)*damping + g*dt^2
+    pos.x += (pos.x - prev.x) * DAMPING + GRAVITY.x * DT2;
+    pos.y += (pos.y - prev.y) * DAMPING + GRAVITY.y * DT2;
+    pos.z += (pos.z - prev.z) * DAMPING + GRAVITY.z * DT2;
+    prev.copy(_tmp);
+  }
+}
+
+function satisfyConstraints() {
+  for (let it = 0; it < ITERATIONS; it++) {
+    for (let k = 0; k < constraints.length; k++) {
+      const c = constraints[k];
+      const pa = positions[c.a], pb = positions[c.b];
+      const wa = invMass[c.a], wb = invMass[c.b];
+      const w = wa + wb;
+      if (w === 0) continue;
+      _delta.subVectors(pb, pa);
+      const dist = _delta.length();
+      if (dist === 0) continue;
+      const diff = (dist - c.rest) / dist;
+      // distribute correction by inverse mass
+      const sa = (wa / w) * diff;
+      const sb = (wb / w) * diff;
+      pa.x += _delta.x * sa; pa.y += _delta.y * sa; pa.z += _delta.z * sa;
+      pb.x -= _delta.x * sb; pb.y -= _delta.y * sb; pb.z -= _delta.z * sb;
+    }
+    // Re-apply grab target each iteration so it stays rigid.
+    if (grab.index !== -1) {
+      positions[grab.index].copy(grab.target);
+    }
+  }
+}
+
+function updateGeometry() {
+  for (let i = 0; i < COUNT; i++) {
+    const p = positions[i];
+    posAttr.setXYZ(i, p.x, p.y, p.z);
+  }
+  posAttr.needsUpdate = true;
+  geometry.computeVertexNormals();   // dynamic normals -> lighting reacts to folds
+  geometry.computeBoundingSphere();
+}
+
+/* ------------------------------------------------------------------ *
+ *  Interaction — raycaster grab & drag
+ * ------------------------------------------------------------------ */
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const grab = {
+  index: -1,
+  target: new THREE.Vector3(),
+  plane: new THREE.Plane(),
+  planePoint: new THREE.Vector3(),
+};
+
+function setPointer(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+  pointer.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+}
+
+function onPointerDown(e) {
+  setPointer(e);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObject(cloth, false);
+  if (hits.length === 0) return; // let OrbitControls handle empty-space drags
+
+  const hit = hits[0];
+  // Nearest particle among the hit triangle's three vertices.
+  const face = hit.face;
+  let best = -1, bestDist = Infinity;
+  for (const vi of [face.a, face.b, face.c]) {
+    const d = positions[vi].distanceToSquared(hit.point);
+    if (d < bestDist) { bestDist = d; best = vi; }
+  }
+
+  grab.index = best;
+  grab.target.copy(positions[best]);
+  // Drag plane through grabbed point, facing the camera.
+  const normal = _tmp.copy(camera.position).sub(grab.target).normalize();
+  grab.plane.setFromNormalAndCoplanarPoint(normal, grab.target);
+
+  controls.enabled = false;
+  renderer.domElement.setPointerCapture?.(e.pointerId);
+}
+
+function onPointerMove(e) {
+  if (grab.index === -1) return;
+  setPointer(e);
+  raycaster.setFromCamera(pointer, camera);
+  if (raycaster.ray.intersectPlane(grab.plane, grab.planePoint)) {
+    grab.target.copy(grab.planePoint);
+  }
+}
+
+function endGrab(e) {
+  if (grab.index === -1) return;
+  // Kill velocity at release so it doesn't fling.
+  previous[grab.index].copy(positions[grab.index]);
+  grab.index = -1;
+  controls.enabled = true;
+  if (e) renderer.domElement.releasePointerCapture?.(e.pointerId);
+}
+
+renderer.domElement.addEventListener('pointerdown', onPointerDown);
+renderer.domElement.addEventListener('pointermove', onPointerMove);
+renderer.domElement.addEventListener('pointerup', endGrab);
+renderer.domElement.addEventListener('pointercancel', endGrab);
+renderer.domElement.addEventListener('pointerleave', endGrab);
+
+/* ------------------------------------------------------------------ *
+ *  UI buttons
+ * ------------------------------------------------------------------ */
+let pinned = true;
+const releaseBtn = document.getElementById('release');
+
+releaseBtn.addEventListener('click', () => {
+  pinned = !pinned;
+  if (pinned) { pinCorners(); releaseBtn.textContent = 'Release Pins'; }
+  else { for (const c of cornerIndices) invMass[c] = 1; releaseBtn.textContent = 'Re-Pin Corners'; }
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  for (let i = 0; i < COUNT; i++) {
+    positions[i].copy(original[i]);
+    previous[i].copy(original[i]);
+    invMass[i] = 1;
+  }
+  endGrab(null);
+  pinned = true;
+  pinCorners();
+  releaseBtn.textContent = 'Release Pins';
+});
+
+/* ------------------------------------------------------------------ *
+ *  Loop  (fixed-step accumulator for stable physics)
+ * ------------------------------------------------------------------ */
+let acc = 0, last = performance.now();
+
+function animate(now) {
+  requestAnimationFrame(animate);
+  let frame = (now - last) / 1000;
+  last = now;
+  if (frame > 0.1) frame = 0.1;   // clamp after tab-switch
+  acc += frame;
+
+  let steps = 0;
+  while (acc >= DT && steps < 5) {
+    verlet();
+    satisfyConstraints();
+    acc -= DT;
+    steps++;
+  }
+
+  updateGeometry();
+  controls.update();
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+
+/* ------------------------------------------------------------------ *
+ *  Resize  (robust: track the container, fall back to the window)
+ * ------------------------------------------------------------------ */
+function resize() {
+  const w = container.clientWidth || window.innerWidth;
+  const h = container.clientHeight || window.innerHeight;
+  if (!w || !h) return;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+window.addEventListener('resize', resize);
+new ResizeObserver(resize).observe(container);
+resize();
+</script>
+</body>
+</html>

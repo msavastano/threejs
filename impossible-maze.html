@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>THE INBETWEEN — Impossible Portal Maze</title>
+  <style>
+    :root { color-scheme: dark; --ink: #d8f8ff; --muted: #7a99a4; --glass: rgba(5, 13, 21, .76); --line: rgba(157, 239, 255, .27); --hot: #ff5470; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #020609; color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    canvas { display: block; }
+    #app { position: fixed; inset: 0; }
+    #veil { position: fixed; inset: 0; pointer-events: none; z-index: 2; background: radial-gradient(ellipse at center, transparent 30%, rgba(0, 4, 8, .1) 57%, rgba(0, 1, 4, .72) 100%); }
+    .hud { position: fixed; z-index: 5; user-select: none; }
+    #identity { top: 27px; left: 30px; pointer-events: none; }
+    .eyebrow { color: #78d8e9; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; letter-spacing: .26em; text-transform: uppercase; opacity: .82; }
+    h1 { margin: 7px 0 0; font-size: 21px; font-weight: 600; letter-spacing: .19em; line-height: 1; text-transform: uppercase; text-shadow: 0 0 28px rgba(101, 226, 255, .45); }
+    #room-readout { margin-top: 12px; display: flex; align-items: center; gap: 8px; color: #a9d7df; font: 11px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: .09em; text-transform: uppercase; }
+    #phase-dot { width: 7px; height: 7px; border-radius: 50%; background: #84f7ff; box-shadow: 0 0 12px #84f7ff; }
+    #map-panel { top: 25px; right: 27px; width: 284px; padding: 14px 14px 12px; border: 1px solid var(--line); border-radius: 4px; background: linear-gradient(145deg, rgba(10, 25, 34, .88), rgba(3, 9, 15, .73)); box-shadow: 0 14px 50px rgba(0, 0, 0, .26), inset 0 1px rgba(255,255,255,.04); backdrop-filter: blur(10px); }
+    .panel-head { display: flex; justify-content: space-between; align-items: baseline; font: 600 9px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: .17em; text-transform: uppercase; color: #ccf8ff; }
+    .panel-head span { color: #ff8ba0; font-size: 8px; opacity: .85; }
+    #topology { width: 100%; height: 214px; margin: 9px 0 5px; border-top: 1px solid rgba(144, 230, 255, .08); border-bottom: 1px solid rgba(144, 230, 255, .08); }
+    .map-note { color: #77a0aa; font: 9px/1.35 "SFMono-Regular", Consolas, monospace; letter-spacing: .045em; }
+    #controls { bottom: 25px; left: 30px; color: #91b4bd; font: 10px/1.75 "SFMono-Regular", Consolas, monospace; letter-spacing: .11em; text-transform: uppercase; pointer-events: none; }
+    #controls b { color: #e1fbff; font-weight: 500; }
+    #regen { position: fixed; z-index: 8; right: 27px; bottom: 25px; border: 1px solid rgba(180, 241, 255, .45); border-radius: 2px; padding: 10px 13px; color: #d8faff; background: rgba(8, 26, 35, .76); font: 600 9px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: .15em; text-transform: uppercase; cursor: pointer; transition: .2s ease; }
+    #regen:hover { background: rgba(34, 100, 118, .82); box-shadow: 0 0 22px rgba(91, 233, 255, .26); }
+    #crosshair { position: fixed; top: 50%; left: 50%; z-index: 4; width: 14px; height: 14px; margin: -7px; pointer-events: none; opacity: .5; }
+    #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #d9fbff; box-shadow: 0 0 5px #6be8ff; }
+    #crosshair::before { width: 14px; height: 1px; top: 6px; }
+    #crosshair::after { width: 1px; height: 14px; left: 6px; }
+    #start { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: radial-gradient(circle at center, rgba(6, 25, 35, .12), rgba(0, 3, 7, .76)); transition: opacity .65s ease; }
+    #start.hidden { opacity: 0; pointer-events: none; }
+    #start-card { width: min(440px, calc(100vw - 46px)); padding: 31px 34px 29px; border: 1px solid rgba(155, 237, 255, .46); background: rgba(3, 12, 19, .79); box-shadow: 0 0 70px rgba(34, 206, 255, .12), inset 0 0 30px rgba(86, 218, 255, .035); text-align: center; backdrop-filter: blur(10px); }
+    #start-card .sigil { width: 28px; height: 28px; margin: 0 auto 17px; border: 1px solid #9aeeff; transform: rotate(45deg); box-shadow: 0 0 18px rgba(99, 237, 255, .55); }
+    #start-card h2 { margin: 0; font-size: 17px; letter-spacing: .19em; font-weight: 500; text-transform: uppercase; }
+    #start-card p { margin: 13px auto 21px; max-width: 325px; color: #91b3bc; font-size: 12px; line-height: 1.65; }
+    #enter { border: 1px solid #b1f6ff; padding: 11px 18px; background: rgba(59, 167, 188, .13); color: #e0fcff; font: 600 10px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: .16em; text-transform: uppercase; cursor: pointer; }
+    #enter:hover { background: rgba(78, 205, 230, .28); }
+    #flash { position: fixed; inset: 0; z-index: 3; pointer-events: none; background: #baf8ff; opacity: 0; transition: opacity .08s; mix-blend-mode: screen; }
+    @media (max-width: 650px) { #map-panel { transform: scale(.78); transform-origin: top right; } #identity { left: 18px; top: 20px; } #controls { left: 18px; bottom: 17px; max-width: 265px; } #regen { right: 16px; bottom: 16px; } }
+  </style>
+  <script type="importmap">
+  { "imports": {
+    "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+  } }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="veil"></div><div id="flash"></div><div id="crosshair"></div>
+  <section id="identity" class="hud">
+    <div class="eyebrow">Non-Euclidean Survey // 07</div>
+    <h1>The Inbetween</h1>
+    <div id="room-readout"><i id="phase-dot"></i><span id="room-name">Synchronizing phase...</span></div>
+  </section>
+  <section id="map-panel" class="hud">
+    <div class="panel-head"><span>True topology</span><span id="overlap-count">3 overlaps</span></div>
+    <canvas id="topology" width="512" height="428"></canvas>
+    <div class="map-note">LINES = DOOR LINKS &nbsp;•&nbsp; STACKED RINGS = SAME PHYSICAL COORDINATE</div>
+  </section>
+  <div id="controls" class="hud"><b>Click</b> to enter &nbsp; <b>WASD</b> to walk &nbsp; <b>Shift</b> to run<br>Cross a luminous threshold to change the rules of space.</div>
+  <button id="regen" type="button">Regenerate sector</button>
+  <div id="start"><div id="start-card"><div class="sigil"></div><h2>Orientation is optional</h2><p>This maze is built from rooms sharing the same volume. Doors are views into a different rule set — not just another corridor.</p><button id="enter" type="button">Enter the survey</button></div></div>
+
+  <script type="module">
+  import * as THREE from 'three';
+  import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+  const app = document.querySelector('#app');
+  const topologyCanvas = document.querySelector('#topology');
+  const mapCtx = topologyCanvas.getContext('2d');
+  const roomReadout = document.querySelector('#room-name');
+  const startScreen = document.querySelector('#start');
+  const flash = document.querySelector('#flash');
+  const roomSize = 14, halfRoom = roomSize / 2, wallHeight = 7.5, doorWidth = 3.55, doorHeight = 5.1;
+  const directions = ['N', 'E', 'S', 'W'];
+  const dirInfo = {
+    N: { x: 0, z: -1, yaw: 0, side: 'x' },
+    E: { x: 1, z: 0, yaw: -Math.PI / 2, side: 'z' },
+    S: { x: 0, z: 1, yaw: Math.PI, side: 'x' },
+    W: { x: -1, z: 0, yaw: Math.PI / 2, side: 'z' }
+  };
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x020609);
+  scene.fog = new THREE.FogExp2(0x020609, 0.035);
+  const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 80);
+  camera.position.set(0, 1.68, 2.4);
+  const virtualCamera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 80);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
+  app.appendChild(renderer.domElement);
+  const controls = new PointerLockControls(camera, renderer.domElement);
+  const clock = new THREE.Clock();
+  const input = Object.create(null);
+  const matrixFlip = new THREE.Matrix4().makeRotationY(Math.PI);
+  const invert = new THREE.Matrix4();
+  const portalTransform = new THREE.Matrix4();
+
+  scene.add(new THREE.HemisphereLight(0x78dff7, 0x030608, 1.25));
+  const distantLight = new THREE.DirectionalLight(0x84dfff, .38); distantLight.position.set(-3, 6, 4); scene.add(distantLight);
+  const voidPlane = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshBasicMaterial({ color: 0x000103 }));
+  voidPlane.rotation.x = -Math.PI / 2; voidPlane.position.y = -1.6; scene.add(voidPlane);
+
+  let sector = null;
+  let currentRoom = 0;
+  let nextTransition = 0;
+  let sectorSeed = 317;
+  let elapsed = 0;
+
+  function mulberry32(seed) {
+    return function () { let t = seed += 0x6D2B79F5; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  }
+  function pick(rand, list) { return list[Math.floor(rand() * list.length)]; }
+  function shuffled(rand, list) { return [...list].sort(() => rand() - .5); }
+  function roomLabel(index, rand) {
+    const a = ['Pale', 'Echo', 'Cobalt', 'Unlit', 'Moiré', 'Hollow', 'Silent', 'Liminal', 'Violet', 'Folded'];
+    const b = ['Atrium', 'Gallery', 'Vault', 'Antechamber', 'Volume', 'Station', 'Chapel', 'Archive', 'Parallax', 'Hall'];
+    return `${pick(rand, a)} ${pick(rand, b)} ${String(index + 1).padStart(2, '0')}`;
+  }
+
+  function makeTopology(seed) {
+    const rand = mulberry32(seed), count = 16;
+    const roomNodes = Array.from({ length: count }, (_, i) => ({ id: i, name: roomLabel(i, rand), portals: [], used: new Set(), color: new THREE.Color().setHSL(.49 + rand() * .22, .58 + rand() * .18, .47 + rand() * .14) }));
+    const edges = [];
+    function available(node) { return shuffled(rand, directions.filter(d => !roomNodes[node].used.has(d))); }
+    function link(a, b, aDir, bDir, isFold = false) {
+      if (!aDir || !bDir) return false;
+      roomNodes[a].used.add(aDir); roomNodes[b].used.add(bDir);
+      const edge = { a, b, aDir, bDir, isFold };
+      edges.push(edge);
+      roomNodes[a].portals.push({ direction: aDir, to: b, edge });
+      roomNodes[b].portals.push({ direction: bDir, to: a, edge });
+      return true;
+    }
+    // A cyclic spine guarantees the maze never has a dead end, then folding links distort it.
+    for (let i = 0; i < count; i++) link(i, (i + 1) % count, available(i)[0], available((i + 1) % count)[0]);
+    for (const pair of [[1, 9], [3, 11], [5, 13], [7, 15], [0, 8], [2, 12]]) {
+      if (available(pair[0]).length && available(pair[1]).length) link(pair[0], pair[1], available(pair[0])[0], available(pair[1])[0], true);
+    }
+    // These map coordinates are the survey's physical measurement, not a graph layout.
+    // Repeated positions are intentional: separate rooms occupy the exact same volume.
+    const map = [[.13,.51],[.26,.35],[.42,.20],[.61,.20],[.77,.35],[.89,.51],[.77,.67],[.61,.80],[.42,.80],[.26,.67],[.42,.20],[.77,.35],[.61,.80],[.26,.35],[.77,.67],[.13,.51]];
+    roomNodes.forEach((room, i) => room.map = new THREE.Vector2(map[i][0], map[i][1]));
+    return { seed, rand, rooms: roomNodes, edges };
+  }
+
+  function material(color, roughness = .8, metalness = .08) {
+    return new THREE.MeshStandardMaterial({ color, roughness, metalness });
+  }
+  function box(parent, size, position, mat) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size), mat); mesh.position.set(...position); parent.add(mesh); return mesh;
+  }
+  function wallSegment(root, dir, center, span, height, y, mat) {
+    const thick = .32;
+    if (dirInfo[dir].side === 'x') return box(root, [span, height, thick], [center, y, dirInfo[dir].z * halfRoom], mat);
+    return box(root, [thick, height, span], [dirInfo[dir].x * halfRoom, y, center], mat);
+  }
+  function portalShader(target, tint) {
+    return new THREE.ShaderMaterial({
+      uniforms: { viewMap: { value: target.texture }, time: { value: 0 }, tint: { value: tint } },
+      vertexShader: `varying vec2 vUv; void main(){vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+      fragmentShader: `uniform sampler2D viewMap; uniform float time; uniform vec3 tint; varying vec2 vUv;
+        void main(){ vec2 uv=vUv; uv.x += sin(uv.y*28.+time*.7)*.0015; vec3 c=texture2D(viewMap,uv).rgb; float edge=smoothstep(.48,.08,abs(uv.x-.5))*smoothstep(.48,.08,abs(uv.y-.5)); float scan=.94+.06*sin(uv.y*320.+time*9.); c*=scan; c=mix(tint*.11,c,edge); gl_FragColor=vec4(c,1.); }`,
+      side: THREE.DoubleSide
+    });
+  }
+  function buildPortal(root, portal, room) {
+    const info = dirInfo[portal.direction];
+    const frame = new THREE.Group();
+    frame.position.set(info.x * (halfRoom - .11), doorHeight / 2, info.z * (halfRoom - .11));
+    frame.rotation.y = info.yaw;
+    root.add(frame);
+    const renderTarget = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, depthBuffer: true });
+    renderTarget.texture.colorSpace = THREE.SRGBColorSpace;
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(doorWidth - .18, doorHeight - .18), portalShader(renderTarget, room.color));
+    plane.position.z = .018; frame.add(plane);
+    const frameMat = new THREE.MeshStandardMaterial({ color: room.color.clone().multiplyScalar(.32), emissive: room.color, emissiveIntensity: 1.6, metalness: .75, roughness: .25 });
+    box(frame, [.16, doorHeight + .25, .18], [-(doorWidth / 2), 0, .08], frameMat);
+    box(frame, [.16, doorHeight + .25, .18], [ doorWidth / 2, 0, .08], frameMat);
+    box(frame, [doorWidth + .16, .16, .18], [0, doorHeight / 2, .08], frameMat);
+    const light = new THREE.PointLight(room.color, 1.3, 8, 2); light.position.set(0, .2, .55); frame.add(light);
+    portal.frame = frame; portal.mesh = plane; portal.target = renderTarget;
+  }
+  function buildRoom(room, sectorData) {
+    const root = new THREE.Group(); root.name = room.name; root.visible = false; scene.add(root); room.root = root;
+    const rand = mulberry32(sectorData.seed * 61 + room.id * 173);
+    const base = room.color.clone().multiplyScalar(.20), trim = room.color.clone().multiplyScalar(.42);
+    const wallMat = material(base, .78, .22), floorMat = material(base.clone().multiplyScalar(.55), .9, .1), trimMat = new THREE.MeshStandardMaterial({ color: trim, emissive: room.color.clone().multiplyScalar(.26), emissiveIntensity: .8, roughness: .38, metalness: .68 });
+    box(root, [roomSize, .18, roomSize], [0, -.09, 0], floorMat);
+    box(root, [roomSize, .14, roomSize], [0, wallHeight + .07, 0], material(base.clone().multiplyScalar(.63), .9, .05));
+    for (const dir of directions) {
+      const hasPortal = room.portals.some(p => p.direction === dir);
+      if (!hasPortal) wallSegment(root, dir, 0, roomSize, wallHeight, wallHeight / 2, wallMat);
+      else {
+        const sideSpan = (roomSize - doorWidth) / 2;
+        const offset = doorWidth / 2 + sideSpan / 2;
+        wallSegment(root, dir, -offset, sideSpan, wallHeight, wallHeight / 2, wallMat);
+        wallSegment(root, dir, offset, sideSpan, wallHeight, wallHeight / 2, wallMat);
+        wallSegment(root, dir, 0, doorWidth, wallHeight - doorHeight, doorHeight + (wallHeight - doorHeight) / 2, wallMat);
+      }
+      const stripe = wallSegment(root, dir, 0, roomSize - .38, .055, 1.15, trimMat);
+      stripe.material = trimMat;
+    }
+    // Procedural non-blocking architecture: every room has a different cadence of supports and light slits.
+    const decoCount = 3 + Math.floor(rand() * 4);
+    for (let i = 0; i < decoCount; i++) {
+      const angle = (i / decoCount) * Math.PI * 2 + rand() * .5, radius = 3.3 + rand() * 1.8;
+      const x = Math.cos(angle) * radius, z = Math.sin(angle) * radius, height = 1.7 + rand() * 2.8;
+      const p = box(root, [.18 + rand() * .18, height, .18 + rand() * .18], [x, height / 2, z], trimMat);
+      p.rotation.y = rand() * Math.PI;
+      const cap = box(root, [.62, .05, .62], [x, height + .05, z], trimMat); cap.rotation.y = rand() * Math.PI / 4;
+    }
+    for (let i = 0; i < 5; i++) {
+      const x = -5.5 + i * 2.75;
+      box(root, [.56, .02, .56], [x, wallHeight - .22, 0], trimMat);
+      const spot = new THREE.PointLight(room.color, .25, 7, 2); spot.position.set(x, wallHeight - .4, 0); root.add(spot);
+    }
+    room.portals.forEach(p => buildPortal(root, p, room));
+  }
+
+  function destroySector() {
+    if (!sector) return;
+    sector.rooms.forEach(room => {
+      room.portals.forEach(p => { p.target?.dispose(); p.mesh?.material?.dispose(); });
+      scene.remove(room.root);
+      room.root.traverse(child => { if (child.isMesh) { child.geometry.dispose(); if (child.material !== undefined) child.material.dispose(); } });
+    });
+  }
+  function buildSector(seed) {
+    destroySector();
+    sector = makeTopology(seed);
+    sector.rooms.forEach(room => buildRoom(room, sector));
+    currentRoom = 0;
+    camera.position.set(0, 1.68, 2.5); camera.rotation.set(0, Math.PI, 0);
+    setActiveRoom(0, false);
+    drawTopology();
+  }
+  function setActiveRoom(id, pulse = true) {
+    sector.rooms.forEach((room, index) => room.root.visible = index === id);
+    currentRoom = id;
+    const room = sector.rooms[id];
+    roomReadout.textContent = `Phase ${String(id + 1).padStart(2, '0')} · ${room.name}`;
+    document.documentElement.style.setProperty('--accent', `#${room.color.getHexString()}`);
+    if (pulse) { flash.style.opacity = '.16'; setTimeout(() => flash.style.opacity = '0', 80); }
+    drawTopology();
+  }
+  function localEntry(direction) {
+    const info = dirInfo[direction];
+    return new THREE.Vector3(-info.x * (halfRoom - 1.05), 1.68, -info.z * (halfRoom - 1.05));
+  }
+  function teleport(portal) {
+    const targetRoom = sector.rooms[portal.to];
+    const reciprocal = targetRoom.portals.find(p => p.edge === portal.edge);
+    camera.position.copy(localEntry(reciprocal.direction));
+    camera.rotation.set(0, dirInfo[reciprocal.direction].yaw + Math.PI, 0);
+    setActiveRoom(portal.to);
+    nextTransition = performance.now() + 450;
+  }
+  function resolveBounds() {
+    if (!sector || performance.now() < nextTransition) return;
+    const room = sector.rooms[currentRoom], p = camera.position;
+    for (const dir of directions) {
+      const info = dirInfo[dir];
+      const forward = info.x ? p.x * info.x : p.z * info.z;
+      if (forward <= halfRoom - .46) continue;
+      const lateral = info.x ? p.z : p.x;
+      const portal = room.portals.find(item => item.direction === dir);
+      if (portal && Math.abs(lateral) < doorWidth / 2 - .22) { teleport(portal); return; }
+      if (info.x) p.x = info.x * (halfRoom - .47); else p.z = info.z * (halfRoom - .47);
+    }
+  }
+  function updatePortalViews() {
+    const active = sector.rooms[currentRoom];
+    camera.updateMatrixWorld(true);
+    for (const portal of active.portals) {
+      const targetRoom = sector.rooms[portal.to];
+      const reciprocal = targetRoom.portals.find(p => p.edge === portal.edge);
+      if (!reciprocal || !portal.frame || !reciprocal.frame) continue;
+      active.root.visible = false; targetRoom.root.visible = true;
+      portal.frame.updateWorldMatrix(true, false); reciprocal.frame.updateWorldMatrix(true, false);
+      invert.copy(portal.frame.matrixWorld).invert();
+      portalTransform.copy(reciprocal.frame.matrixWorld).multiply(matrixFlip).multiply(invert).multiply(camera.matrixWorld);
+      portalTransform.decompose(virtualCamera.position, virtualCamera.quaternion, virtualCamera.scale);
+      virtualCamera.projectionMatrix.copy(camera.projectionMatrix);
+      virtualCamera.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
+      virtualCamera.updateMatrixWorld(true);
+      renderer.setRenderTarget(portal.target);
+      renderer.clear();
+      renderer.render(scene, virtualCamera);
+      renderer.setRenderTarget(null);
+      targetRoom.root.visible = false; active.root.visible = true;
+    }
+  }
+  function drawTopology() {
+    if (!sector) return;
+    const ctx = mapCtx, w = topologyCanvas.width, h = topologyCanvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#050f16'; ctx.fillRect(0, 0, w, h);
+    const point = node => ({ x: node.map.x * w, y: node.map.y * h });
+    // Graph edges are drawn independently of their physical overlap.
+    ctx.lineWidth = 2;
+    sector.edges.forEach(edge => {
+      const a = point(sector.rooms[edge.a]), b = point(sector.rooms[edge.b]);
+      ctx.strokeStyle = edge.isFold ? 'rgba(255,99,130,.7)' : 'rgba(104,210,228,.35)';
+      ctx.setLineDash(edge.isFold ? [7, 5] : []);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    const stacks = new Map();
+    sector.rooms.forEach(room => { const key = `${room.map.x},${room.map.y}`; stacks.set(key, (stacks.get(key) || 0) + 1); });
+    sector.rooms.forEach(room => {
+      const p = point(room), stacked = stacks.get(`${room.map.x},${room.map.y}`);
+      for (let ring = stacked - 1; ring > 0; ring--) { ctx.strokeStyle = 'rgba(255,133,156,.45)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, 11 + ring * 5, 0, Math.PI * 2); ctx.stroke(); }
+      ctx.fillStyle = room.id === currentRoom ? '#e9fdff' : `#${room.color.getHexString()}`;
+      ctx.beginPath(); ctx.arc(p.x, p.y, room.id === currentRoom ? 8 : 5, 0, Math.PI * 2); ctx.fill();
+      if (room.id === currentRoom) { ctx.strokeStyle = '#85f6ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, 15, 0, Math.PI * 2); ctx.stroke(); }
+      ctx.fillStyle = room.id === currentRoom ? '#e9fdff' : 'rgba(193,238,245,.65)'; ctx.font = '600 12px monospace'; ctx.textAlign = 'center'; ctx.fillText(String(room.id + 1).padStart(2, '0'), p.x, p.y + 28);
+    });
+  }
+  function animate() {
+    requestAnimationFrame(animate);
+    const dt = Math.min(clock.getDelta(), .05); elapsed += dt;
+    if (controls.isLocked) {
+      const speed = (input.ShiftLeft || input.ShiftRight ? 7.2 : 3.65) * dt;
+      if (input.KeyW) controls.moveForward(speed); if (input.KeyS) controls.moveForward(-speed);
+      if (input.KeyA) controls.moveRight(-speed); if (input.KeyD) controls.moveRight(speed);
+      camera.position.y = 1.68;
+      resolveBounds();
+    }
+    if (sector) {
+      sector.rooms[currentRoom].portals.forEach(p => p.mesh.material.uniforms.time.value = elapsed);
+      updatePortalViews();
+    }
+    renderer.setRenderTarget(null);
+    renderer.render(scene, camera);
+  }
+  window.addEventListener('keydown', e => input[e.code] = true);
+  window.addEventListener('keyup', e => input[e.code] = false);
+  window.addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); virtualCamera.aspect = camera.aspect; virtualCamera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+  controls.addEventListener('lock', () => startScreen.classList.add('hidden'));
+  controls.addEventListener('unlock', () => startScreen.classList.remove('hidden'));
+  document.querySelector('#enter').addEventListener('click', () => controls.lock());
+  renderer.domElement.addEventListener('click', () => { if (!controls.isLocked) controls.lock(); });
+  document.querySelector('#regen').addEventListener('click', e => { e.stopPropagation(); sectorSeed = (sectorSeed * 1664525 + 1013904223) >>> 0; buildSector(sectorSeed); });
+  buildSector(sectorSeed);
+  animate();
+  </script>
+</body>
+</html>

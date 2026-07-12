@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Giant Procedural Fire Dragon</title>
+<style>
+  html,body{margin:0;height:100%;background:#05060a;overflow:hidden;font-family:monospace}
+  #app{position:fixed;inset:0}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.181.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.181.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+const container = document.getElementById('app');
+const canvas = document.createElement('canvas');
+container.appendChild(canvas);
+let width = window.innerWidth, height = window.innerHeight;
+
+// ====================================================================
+// GIANT PROCEDURAL FIRE DRAGON — particles + custom GLSL shaders
+// ====================================================================
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x05060a, 0.0018);
+
+const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 5000);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(width, height);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x05060a, 1);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(width, height), 1.6, 0.7, 0.0);
+composer.addPass(bloom);
+
+window.addEventListener('resize', () => {
+  width = window.innerWidth; height = window.innerHeight;
+  camera.aspect = width / height; camera.updateProjectionMatrix();
+  renderer.setSize(width, height); composer.setSize(width, height);
+});
+
+// ---- starfield backdrop ----
+(function stars(){
+  const N = 1500, p = new Float32Array(N*3);
+  for (let i=0;i<N;i++){
+    const r = 1500 + Math.random()*2000;
+    const t = Math.random()*Math.PI*2, ph = Math.acos(2*Math.random()-1);
+    p[i*3]=r*Math.sin(ph)*Math.cos(t); p[i*3+1]=r*Math.cos(ph); p[i*3+2]=r*Math.sin(ph)*Math.sin(t);
+  }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(p,3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({color:0x556688,size:2,sizeAttenuation:false})));
+})();
+
+// ====================================================================
+// CONTROLS (tweakable params)
+// ====================================================================
+const P = { size: 1.0, flapSpeed: 2.2, fireRate: 0.6, speed: 1.0 };
+
+// ====================================================================
+// PROCEDURAL DRAGON SKELETON
+// ====================================================================
+const SPINE_SEGS = 60;
+const spine = [];
+for (let i=0;i<SPINE_SEGS;i++) spine.push({pos:new THREE.Vector3(), tan:new THREE.Vector3(0,0,1)});
+
+function bodyRadius(t){
+  const chest = Math.exp(-Math.pow((t-0.32)/0.16,2))*7.0;
+  const base  = (1.0 - t)*3.0 + 1.0;
+  return (base + chest);
+}
+
+function flightPos(t, time){
+  const s = 220;
+  const x = Math.sin(t*0.9 + time*0.25*P.speed) * s;
+  const y = Math.sin(t*1.7 + time*0.4*P.speed) * 40 + Math.sin(time*0.3)*30;
+  const z = Math.cos(t*0.6 + time*0.18*P.speed) * s;
+  return new THREE.Vector3(x,y,z);
+}
+
+function updateSpine(time){
+  for (let i=0;i<SPINE_SEGS;i++){
+    const u = i/(SPINE_SEGS-1);
+    const phase = time*0.6*P.speed - u*2.4;
+    const p = flightPos(phase, time);
+    const wave = Math.sin(time*4.0 - u*9.0) * (6.0*u);
+    p.x += wave;
+    p.y += Math.cos(time*3.0 - u*7.0) * 3.0*u;
+    spine[i].pos.copy(p.multiplyScalar(P.size));
+  }
+  for (let i=0;i<SPINE_SEGS;i++){
+    const a = spine[Math.max(0,i-1)].pos, b = spine[Math.min(SPINE_SEGS-1,i+1)].pos;
+    spine[i].tan.subVectors(b,a).normalize();
+  }
+}
+
+const _up = new THREE.Vector3(0,1,0);
+function basis(i, outN, outB){
+  outB.crossVectors(spine[i].tan, _up).normalize();
+  outN.crossVectors(outB, spine[i].tan).normalize();
+}
+
+// ====================================================================
+// FIRE PARTICLE BODY
+// ====================================================================
+const BODY_COUNT = 22000;
+const bodyGeo = new THREE.BufferGeometry();
+const bPos  = new Float32Array(BODY_COUNT*3);
+const bSeed = new Float32Array(BODY_COUNT);
+const bTemp = new Float32Array(BODY_COUNT);
+const bSize = new Float32Array(BODY_COUNT);
+const bSeg  = new Float32Array(BODY_COUNT);
+const bAng  = new Float32Array(BODY_COUNT);
+const bRad  = new Float32Array(BODY_COUNT);
+for (let i=0;i<BODY_COUNT;i++){
+  bSeg[i] = Math.random();
+  bAng[i] = Math.random()*Math.PI*2;
+  bRad[i] = Math.pow(Math.random(),0.6);
+  bSeed[i]= Math.random();
+  bSize[i]= 14 + Math.random()*30;
+}
+bodyGeo.setAttribute('position', new THREE.BufferAttribute(bPos,3));
+bodyGeo.setAttribute('seed', new THREE.BufferAttribute(bSeed,1));
+bodyGeo.setAttribute('temp', new THREE.BufferAttribute(bTemp,1));
+bodyGeo.setAttribute('psize', new THREE.BufferAttribute(bSize,1));
+
+const fireVert = `
+  attribute float seed; attribute float temp; attribute float psize;
+  varying float vTemp; varying float vSeed;
+  uniform float uTime; uniform float uScale;
+  void main(){
+    vTemp = temp; vSeed = seed;
+    vec3 p = position;
+    float f = sin(uTime*8.0 + seed*100.0)*0.5 + cos(uTime*5.0 + seed*60.0)*0.5;
+    p += normalize(vec3(seed-0.5, f, sin(seed*30.0)))*f*2.0;
+    vec4 mv = modelViewMatrix * vec4(p,1.0);
+    gl_PointSize = psize * uScale * (300.0 / -mv.z) * (0.6 + temp*0.8);
+    gl_Position = projectionMatrix * mv;
+  }`;
+
+const fireFrag = `
+  precision highp float;
+  varying float vTemp; varying float vSeed;
+  uniform float uTime;
+  vec3 ramp(float t){
+    vec3 c1=vec3(1.0,1.0,0.85);
+    vec3 c2=vec3(1.0,0.78,0.20);
+    vec3 c3=vec3(1.0,0.32,0.05);
+    vec3 c4=vec3(0.55,0.05,0.02);
+    vec3 c5=vec3(0.08,0.05,0.06);
+    t=clamp(t,0.0,1.0);
+    if(t>0.75) return mix(c2,c1,(t-0.75)/0.25);
+    if(t>0.5)  return mix(c3,c2,(t-0.5)/0.25);
+    if(t>0.25) return mix(c4,c3,(t-0.25)/0.25);
+    return mix(c5,c4,t/0.25);
+  }
+  void main(){
+    vec2 uv = gl_PointCoord - 0.5;
+    float d = length(uv);
+    if(d>0.5) discard;
+    float a = smoothstep(0.5,0.0,d);
+    float core = smoothstep(0.35,0.0,d);
+    vec3 col = ramp(vTemp + core*0.3);
+    a *= (0.35 + vTemp*0.85);
+    gl_FragColor = vec4(col, a);
+  }`;
+
+const fireMat = new THREE.ShaderMaterial({
+  uniforms:{ uTime:{value:0}, uScale:{value:1} },
+  vertexShader:fireVert, fragmentShader:fireFrag,
+  transparent:true, depthWrite:false, blending:THREE.AdditiveBlending
+});
+const dragonBody = new THREE.Points(bodyGeo, fireMat);
+dragonBody.frustumCulled = false;
+scene.add(dragonBody);
+
+// ====================================================================
+// WINGS
+// ====================================================================
+const WING_BONES = 6, WING_SPAN = 14;
+const WING_COUNT = WING_BONES*WING_SPAN*2;
+const wGeo = new THREE.BufferGeometry();
+const wPos = new Float32Array(WING_COUNT*3);
+const wTemp= new Float32Array(WING_COUNT);
+const wSeed= new Float32Array(WING_COUNT);
+const wSizeA=new Float32Array(WING_COUNT);
+for(let i=0;i<WING_COUNT;i++){ wSeed[i]=Math.random(); wSizeA[i]=10+Math.random()*18; }
+wGeo.setAttribute('position', new THREE.BufferAttribute(wPos,3));
+wGeo.setAttribute('temp', new THREE.BufferAttribute(wTemp,1));
+wGeo.setAttribute('seed', new THREE.BufferAttribute(wSeed,1));
+wGeo.setAttribute('psize', new THREE.BufferAttribute(wSizeA,1));
+const wingMat = fireMat.clone();
+wingMat.uniforms = { uTime:{value:0}, uScale:{value:1} };
+const wings = new THREE.Points(wGeo, wingMat);
+wings.frustumCulled=false; scene.add(wings);
+
+const CHEST_SEG = 14;
+function updateWings(time){
+  const N=new THREE.Vector3(), B=new THREE.Vector3();
+  basis(CHEST_SEG, N, B);
+  const root = spine[CHEST_SEG].pos;
+  const tan  = spine[CHEST_SEG].tan;
+  const flap = Math.sin(time*P.flapSpeed)*0.9;
+  const sweep= Math.cos(time*P.flapSpeed)*0.3;
+  let idx=0;
+  for(let side=-1; side<=1; side+=2){
+    for(let b=0;b<WING_BONES;b++){
+      const bf = b/(WING_BONES-1);
+      const dihedral = flap*(0.4+bf);
+      const dir = new THREE.Vector3()
+        .addScaledVector(B, side*Math.cos(dihedral)*(0.6+bf))
+        .addScaledVector(_up, Math.sin(dihedral)*(0.5+bf))
+        .addScaledVector(tan, -sweep*bf - bf*0.3);
+      const boneLen = (60 + bf*30)*P.size;
+      for(let s=0;s<WING_SPAN;s++){
+        const sf=s/(WING_SPAN-1);
+        const px = root.x + dir.x*boneLen*sf;
+        const py = root.y + dir.y*boneLen*sf;
+        const pz = root.z + dir.z*boneLen*sf;
+        const sag = Math.sin(sf*Math.PI)*8.0*P.size*(0.3+Math.abs(flap));
+        wPos[idx*3]=px; wPos[idx*3+1]=py - sag; wPos[idx*3+2]=pz;
+        wTemp[idx]=0.25 + sf*0.25 + Math.abs(flap)*0.3;
+        idx++;
+      }
+    }
+  }
+  wGeo.attributes.position.needsUpdate=true;
+  wGeo.attributes.temp.needsUpdate=true;
+}
+
+// ====================================================================
+// FIRE BREATH — fluid-like particle jet
+// ====================================================================
+const BREATH=4000;
+const brGeo=new THREE.BufferGeometry();
+const brPos=new Float32Array(BREATH*3);
+const brVel=new Float32Array(BREATH*3);
+const brLife=new Float32Array(BREATH);
+const brTemp=new Float32Array(BREATH);
+const brSeed=new Float32Array(BREATH);
+const brSizeA=new Float32Array(BREATH);
+for(let i=0;i<BREATH;i++){ brLife[i]=0; brSeed[i]=Math.random(); brSizeA[i]=20+Math.random()*40; }
+brGeo.setAttribute('position', new THREE.BufferAttribute(brPos,3));
+brGeo.setAttribute('temp', new THREE.BufferAttribute(brTemp,1));
+brGeo.setAttribute('seed', new THREE.BufferAttribute(brSeed,1));
+brGeo.setAttribute('psize', new THREE.BufferAttribute(brSizeA,1));
+const breathMat=fireMat.clone(); breathMat.uniforms={uTime:{value:0},uScale:{value:1}};
+const breath=new THREE.Points(brGeo,breathMat); breath.frustumCulled=false; scene.add(breath);
+let brHead=0;
+function spawnBreath(dt,time){
+  const head=spine[0].pos, dir=spine[0].tan.clone().multiplyScalar(-1);
+  const emit = Math.floor(P.fireRate*120*dt*60);
+  for(let k=0;k<emit;k++){
+    const i=brHead; brHead=(brHead+1)%BREATH;
+    brPos[i*3]=head.x; brPos[i*3+1]=head.y; brPos[i*3+2]=head.z;
+    const spread=0.35;
+    const v=dir.clone()
+      .add(new THREE.Vector3((Math.random()-0.5)*spread,(Math.random()-0.5)*spread,(Math.random()-0.5)*spread))
+      .normalize().multiplyScalar((180+Math.random()*120)*P.size);
+    brVel[i*3]=v.x; brVel[i*3+1]=v.y; brVel[i*3+2]=v.z;
+    brLife[i]=1.0; brTemp[i]=1.0;
+  }
+}
+function updateBreath(dt,time){
+  for(let i=0;i<BREATH;i++){
+    if(brLife[i]<=0){ brTemp[i]=0; continue; }
+    brLife[i]-=dt*0.7;
+    const t=time*1.5, s=brSeed[i]*20.0;
+    brVel[i*3]   += Math.sin(brPos[i*3+1]*0.05+t+s)*30*dt;
+    brVel[i*3+1] += (40 + Math.cos(brPos[i*3]*0.05+t+s)*30)*dt;
+    brVel[i*3+2] += Math.sin(brPos[i*3]*0.05+t+s)*30*dt;
+    brVel[i*3]*=0.985; brVel[i*3+1]*=0.985; brVel[i*3+2]*=0.985;
+    brPos[i*3]+=brVel[i*3]*dt; brPos[i*3+1]+=brVel[i*3+1]*dt; brPos[i*3+2]+=brVel[i*3+2]*dt;
+    brTemp[i]=Math.max(0,brLife[i]);
+  }
+  brGeo.attributes.position.needsUpdate=true;
+  brGeo.attributes.temp.needsUpdate=true;
+}
+
+// ====================================================================
+// EMBER + SMOKE TRAILS
+// ====================================================================
+const TRAIL=3000;
+const tGeo=new THREE.BufferGeometry();
+const tPos=new Float32Array(TRAIL*3);
+const tVel=new Float32Array(TRAIL*3);
+const tLife=new Float32Array(TRAIL);
+const tTemp=new Float32Array(TRAIL);
+const tSeed=new Float32Array(TRAIL);
+const tSizeA=new Float32Array(TRAIL);
+for(let i=0;i<TRAIL;i++){tLife[i]=0;tSeed[i]=Math.random();tSizeA[i]=6+Math.random()*16;}
+tGeo.setAttribute('position', new THREE.BufferAttribute(tPos,3));
+tGeo.setAttribute('temp', new THREE.BufferAttribute(tTemp,1));
+tGeo.setAttribute('seed', new THREE.BufferAttribute(tSeed,1));
+tGeo.setAttribute('psize', new THREE.BufferAttribute(tSizeA,1));
+const trailMat=fireMat.clone(); trailMat.uniforms={uTime:{value:0},uScale:{value:1}};
+trailMat.blending=THREE.NormalBlending;
+const trail=new THREE.Points(tGeo,trailMat); trail.frustumCulled=false; scene.add(trail);
+let tHead=0;
+function updateTrail(dt,time){
+  for(let j=0;j<6;j++){
+    const seg=spine[10+j*8] || spine[SPINE_SEGS-1];
+    const i=tHead; tHead=(tHead+1)%TRAIL;
+    tPos[i*3]=seg.pos.x; tPos[i*3+1]=seg.pos.y; tPos[i*3+2]=seg.pos.z;
+    tVel[i*3]=(Math.random()-0.5)*10; tVel[i*3+1]=10+Math.random()*20; tVel[i*3+2]=(Math.random()-0.5)*10;
+    tLife[i]=1.0; tTemp[i]=Math.random()<0.4?0.9:0.15;
+  }
+  for(let i=0;i<TRAIL;i++){
+    if(tLife[i]<=0){tTemp[i]=0;continue;}
+    tLife[i]-=dt*0.25;
+    tVel[i*3+1]+=15*dt; tVel[i*3]*=0.99; tVel[i*3+2]*=0.99;
+    tPos[i*3]+=tVel[i*3]*dt; tPos[i*3+1]+=tVel[i*3+1]*dt; tPos[i*3+2]+=tVel[i*3+2]*dt;
+    tTemp[i]*=(1.0-dt*0.3);
+  }
+  tGeo.attributes.position.needsUpdate=true;
+  tGeo.attributes.temp.needsUpdate=true;
+}
+
+// ====================================================================
+// FILL DRAGON BODY PARTICLES from skeleton each frame
+// ====================================================================
+function updateBody(time){
+  const N=new THREE.Vector3(), B=new THREE.Vector3();
+  for(let i=0;i<BODY_COUNT;i++){
+    const segF=bSeg[i]*(SPINE_SEGS-1);
+    const si=Math.floor(segF); const sf=segF-si;
+    const a=spine[si], b=spine[Math.min(SPINE_SEGS-1,si+1)];
+    basis(si,N,B);
+    const u=bSeg[i];
+    const r=bodyRadius(u)*P.size*bRad[i];
+    const ang=bAng[i]+ time*0.5;
+    const px=a.pos.x*(1-sf)+b.pos.x*sf + (N.x*Math.cos(ang)+B.x*Math.sin(ang))*r;
+    const py=a.pos.y*(1-sf)+b.pos.y*sf + (N.y*Math.cos(ang)+B.y*Math.sin(ang))*r;
+    const pz=a.pos.z*(1-sf)+b.pos.z*sf + (N.z*Math.cos(ang)+B.z*Math.sin(ang))*r;
+    bPos[i*3]=px; bPos[i*3+1]=py; bPos[i*3+2]=pz;
+    const flick=0.15*Math.sin(time*6.0+bSeed[i]*50.0);
+    bTemp[i]=(1.0-u)*0.5 + (1.0-bRad[i])*0.5 + flick;
+  }
+  bodyGeo.attributes.position.needsUpdate=true;
+  bodyGeo.attributes.temp.needsUpdate=true;
+}
+
+// ====================================================================
+// CINEMATIC CAMERA
+// ====================================================================
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true; controls.dampingFactor=0.05;
+camera.position.set(0,80,400);
+let userActive=false, lastUser=0, clk=0;
+controls.addEventListener('start',()=>{userActive=true;});
+controls.addEventListener('end',()=>{lastUser=clk;});
+function cinematicCam(time){
+  if(userActive && clk-lastUser<3){ controls.update(); return; }
+  userActive=false;
+  const head=spine[6].pos;
+  const ang=time*0.15;
+  const rad=320 + Math.sin(time*0.2)*120;
+  const cx=head.x + Math.cos(ang)*rad;
+  const cz=head.z + Math.sin(ang)*rad;
+  const cy=head.y + 90 + Math.sin(time*0.35)*60;
+  camera.position.lerp(new THREE.Vector3(cx,cy,cz), 0.04);
+  controls.target.lerp(head, 0.06);
+  controls.update();
+}
+
+// ====================================================================
+// ON-SCREEN UI CONTROLS
+// ====================================================================
+(function ui(){
+  const wrap=document.createElement('div');
+  wrap.style.cssText='position:absolute;top:8px;left:8px;font:12px monospace;color:#ffb070;background:rgba(10,8,12,.55);padding:10px 12px;border:1px solid #5a2a10;border-radius:6px;z-index:10;user-select:none;width:170px';
+  wrap.innerHTML='<b style="color:#ff7a30">DRAGON CONTROLS</b>';
+  const mk=(lbl,min,max,val,step,cb)=>{
+    const r=document.createElement('div'); r.style.marginTop='8px';
+    const l=document.createElement('div'); l.textContent=lbl; r.appendChild(l);
+    const s=document.createElement('input'); s.type='range'; s.min=min;s.max=max;s.value=val;s.step=step;
+    s.style.width='100%'; s.oninput=()=>cb(parseFloat(s.value)); r.appendChild(s);
+    wrap.appendChild(r);
+  };
+  mk('Size',0.3,2.5,P.size,0.01,v=>P.size=v);
+  mk('Flap speed',0.2,6,P.flapSpeed,0.05,v=>P.flapSpeed=v);
+  mk('Fire breath',0,1,P.fireRate,0.01,v=>P.fireRate=v);
+  mk('Flight speed',0.1,3,P.speed,0.01,v=>P.speed=v);
+  container.appendChild(wrap);
+})();
+
+// ====================================================================
+// MAIN LOOP
+// ====================================================================
+const clock=new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  let dt=clock.getDelta(); dt=Math.min(dt,0.05); clk+=dt;
+  const time=clk;
+  [fireMat,wingMat,breathMat,trailMat].forEach(m=>m.uniforms.uTime.value=time);
+  updateSpine(time);
+  updateBody(time);
+  updateWings(time);
+  spawnBreath(dt,time);
+  updateBreath(dt,time);
+  updateTrail(dt,time);
+  cinematicCam(time);
+  composer.render();
+}
+animate();
+</script>
+</body>
+</html>
