@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>THE INBETWEEN — Impossible Portal Maze</title>
+  <title>THE INBETWEEN — Infinite Impossible Portal Maze</title>
   <style>
     :root { color-scheme: dark; --ink: #d8f8ff; --muted: #7a99a4; --glass: rgba(5, 13, 21, .76); --line: rgba(157, 239, 255, .27); --hot: #ff5470; }
     * { box-sizing: border-box; }
@@ -57,13 +57,13 @@
     <div id="room-readout"><i id="phase-dot"></i><span id="room-name">Synchronizing phase...</span></div>
   </section>
   <section id="map-panel" class="hud">
-    <div class="panel-head"><span>True topology</span><span id="overlap-count">3 overlaps</span></div>
+    <div class="panel-head"><span>True topology</span><span id="overlap-count">0 overlaps</span></div>
     <canvas id="topology" width="512" height="428"></canvas>
-    <div class="map-note">LINES = DOOR LINKS &nbsp;•&nbsp; STACKED RINGS = SAME PHYSICAL COORDINATE</div>
+    <div class="map-note">LINES = DOOR LINKS &nbsp;•&nbsp; DASHED = IMPOSSIBLE LINK &nbsp;•&nbsp; STACKED RINGS = SAME PHYSICAL COORDINATE</div>
   </section>
   <div id="controls" class="hud"><b>Click</b> to enter &nbsp; <b>WASD</b> to walk &nbsp; <b>Shift</b> to run<br>Cross a luminous threshold to change the rules of space.</div>
   <button id="regen" type="button">Regenerate sector</button>
-  <div id="start"><div id="start-card"><div class="sigil"></div><h2>Orientation is optional</h2><p>This maze is built from rooms sharing the same volume. Doors are views into a different rule set — not just another corridor.</p><button id="enter" type="button">Enter the survey</button></div></div>
+  <div id="start"><div id="start-card"><div class="sigil"></div><h2>Orientation is optional</h2><p>Rooms generate forever as you walk, and several of them occupy the exact same coordinates. Every door is a live window into wherever it actually leads — trust the survey map, not your compass.</p><button id="enter" type="button">Enter the survey</button></div></div>
 
   <script type="module">
   import * as THREE from 'three';
@@ -73,23 +73,29 @@
   const topologyCanvas = document.querySelector('#topology');
   const mapCtx = topologyCanvas.getContext('2d');
   const roomReadout = document.querySelector('#room-name');
+  const overlapReadout = document.querySelector('#overlap-count');
   const startScreen = document.querySelector('#start');
   const flash = document.querySelector('#flash');
+
   const roomSize = 14, halfRoom = roomSize / 2, wallHeight = 7.5, doorWidth = 3.55, doorHeight = 5.1;
   const directions = ['N', 'E', 'S', 'W'];
+  const OPPOSITE = { N: 'S', E: 'W', S: 'N', W: 'E' };
   const dirInfo = {
     N: { x: 0, z: -1, yaw: 0, side: 'x' },
     E: { x: 1, z: 0, yaw: -Math.PI / 2, side: 'z' },
     S: { x: 0, z: 1, yaw: Math.PI, side: 'x' },
     W: { x: -1, z: 0, yaw: Math.PI / 2, side: 'z' }
   };
+  // Doorway geometry: portal surface sits just inside the wall, and traversal
+  // fires while the surface is still beyond the camera near plane so the
+  // crossing never clips through it.
+  const FRAME_INSET = .11, PLANE_OFFSET = .018, TRIGGER = halfRoom - .19, WALL_LIMIT = halfRoom - .47, LANE = doorWidth / 2 - .25;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x020609);
   scene.fog = new THREE.FogExp2(0x020609, 0.035);
-  const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 80);
-  camera.position.set(0, 1.68, 2.4);
-  const virtualCamera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 80);
+  const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.03, 80);
+  const virtualCamera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.03, 80);
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(innerWidth, innerHeight);
@@ -101,19 +107,29 @@
   const clock = new THREE.Clock();
   const input = Object.create(null);
   const matrixFlip = new THREE.Matrix4().makeRotationY(Math.PI);
-  const invert = new THREE.Matrix4();
+  const workMatrix = new THREE.Matrix4();
   const portalTransform = new THREE.Matrix4();
+  const prevPos = new THREE.Vector3();
+  const bufferSize = new THREE.Vector2();
+  const portalResolution = new THREE.Vector2(1, 1);
 
   scene.add(new THREE.HemisphereLight(0x78dff7, 0x030608, 1.25));
   const distantLight = new THREE.DirectionalLight(0x84dfff, .38); distantLight.position.set(-3, 6, 4); scene.add(distantLight);
   const voidPlane = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshBasicMaterial({ color: 0x000103 }));
   voidPlane.rotation.x = -Math.PI / 2; voidPlane.position.y = -1.6; scene.add(voidPlane);
 
-  let sector = null;
+  // Every room is built at the world origin and only one is visible at a time:
+  // in engine terms ALL rooms literally occupy the same physical space, and the
+  // survey map tracks the coordinates you would swear you walked to.
+  let rooms = [];
+  let edges = [];
+  const cellIndex = new Map();
   let currentRoom = 0;
   let nextTransition = 0;
   let sectorSeed = 317;
   let elapsed = 0;
+  let grand = mulberry32(sectorSeed);
+  let portalPool = [];
 
   function mulberry32(seed) {
     return function () { let t = seed += 0x6D2B79F5; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
@@ -125,31 +141,15 @@
     const b = ['Atrium', 'Gallery', 'Vault', 'Antechamber', 'Volume', 'Station', 'Chapel', 'Archive', 'Parallax', 'Hall'];
     return `${pick(rand, a)} ${pick(rand, b)} ${String(index + 1).padStart(2, '0')}`;
   }
+  function cellKey(cell) { return cell.x + ',' + cell.z; }
 
-  function makeTopology(seed) {
-    const rand = mulberry32(seed), count = 16;
-    const roomNodes = Array.from({ length: count }, (_, i) => ({ id: i, name: roomLabel(i, rand), portals: [], used: new Set(), color: new THREE.Color().setHSL(.49 + rand() * .22, .58 + rand() * .18, .47 + rand() * .14) }));
-    const edges = [];
-    function available(node) { return shuffled(rand, directions.filter(d => !roomNodes[node].used.has(d))); }
-    function link(a, b, aDir, bDir, isFold = false) {
-      if (!aDir || !bDir) return false;
-      roomNodes[a].used.add(aDir); roomNodes[b].used.add(bDir);
-      const edge = { a, b, aDir, bDir, isFold };
-      edges.push(edge);
-      roomNodes[a].portals.push({ direction: aDir, to: b, edge });
-      roomNodes[b].portals.push({ direction: bDir, to: a, edge });
-      return true;
-    }
-    // A cyclic spine guarantees the maze never has a dead end, then folding links distort it.
-    for (let i = 0; i < count; i++) link(i, (i + 1) % count, available(i)[0], available((i + 1) % count)[0]);
-    for (const pair of [[1, 9], [3, 11], [5, 13], [7, 15], [0, 8], [2, 12]]) {
-      if (available(pair[0]).length && available(pair[1]).length) link(pair[0], pair[1], available(pair[0])[0], available(pair[1])[0], true);
-    }
-    // These map coordinates are the survey's physical measurement, not a graph layout.
-    // Repeated positions are intentional: separate rooms occupy the exact same volume.
-    const map = [[.13,.51],[.26,.35],[.42,.20],[.61,.20],[.77,.35],[.89,.51],[.77,.67],[.61,.80],[.42,.80],[.26,.67],[.42,.20],[.77,.35],[.61,.80],[.26,.35],[.77,.67],[.13,.51]];
-    roomNodes.forEach((room, i) => room.map = new THREE.Vector2(map[i][0], map[i][1]));
-    return { seed, rand, rooms: roomNodes, edges };
+  function makePortalPool() {
+    renderer.getDrawingBufferSize(bufferSize);
+    portalResolution.copy(bufferSize);
+    portalPool.forEach(target => target.dispose());
+    // One full-resolution target per possible door of the active room; the
+    // pool is reused every frame so an ever-growing maze costs constant VRAM.
+    portalPool = Array.from({ length: 4 }, () => new THREE.WebGLRenderTarget(bufferSize.x, bufferSize.y, { samples: 4 }));
   }
 
   function material(color, roughness = .8, metalness = .08) {
@@ -163,194 +163,375 @@
     if (dirInfo[dir].side === 'x') return box(root, [span, height, thick], [center, y, dirInfo[dir].z * halfRoom], mat);
     return box(root, [thick, height, span], [dirInfo[dir].x * halfRoom, y, center], mat);
   }
-  function portalShader(target, tint) {
+  // The live view is sampled in SCREEN space: the render target was drawn by a
+  // virtual camera sharing the player's projection, so reading gl_FragCoord
+  // makes the doorway a seamless, perspective-correct window. Unresolved and
+  // second-depth portals fall back to the shimmer (live = 0).
+  function portalShader(tint) {
     return new THREE.ShaderMaterial({
-      uniforms: { viewMap: { value: target.texture }, time: { value: 0 }, tint: { value: tint } },
+      uniforms: { viewMap: { value: null }, resolution: { value: portalResolution }, live: { value: 0 }, time: { value: 0 }, tint: { value: tint } },
       vertexShader: `varying vec2 vUv; void main(){vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-      fragmentShader: `uniform sampler2D viewMap; uniform float time; uniform vec3 tint; varying vec2 vUv;
-        void main(){ vec2 uv=vUv; uv.x += sin(uv.y*28.+time*.7)*.0015; vec3 c=texture2D(viewMap,uv).rgb; float edge=smoothstep(.48,.08,abs(uv.x-.5))*smoothstep(.48,.08,abs(uv.y-.5)); float scan=.94+.06*sin(uv.y*320.+time*9.); c*=scan; c=mix(tint*.11,c,edge); gl_FragColor=vec4(c,1.); }`,
-      side: THREE.DoubleSide
+      fragmentShader: `uniform sampler2D viewMap; uniform vec2 resolution; uniform float live; uniform float time; uniform vec3 tint; varying vec2 vUv;
+        void main(){
+          vec3 view = texture2D(viewMap, gl_FragCoord.xy / resolution).rgb;
+          float waves = .5 + .5*sin(vUv.y*9. - time*1.7 + sin(vUv.x*7. + time)*.8);
+          vec3 glow = tint*(.14 + .3*waves) + vec3(.012,.03,.04);
+          float border = min(min(vUv.x,1.-vUv.x), min(vUv.y,1.-vUv.y))*2.4;
+          float rim = smoothstep(.16, .0, border);
+          vec3 c = mix(glow, view, live);
+          c += tint * rim * (.5 - .3*live);
+          gl_FragColor = vec4(c, 1.);
+          #include <colorspace_fragment>
+        }`,
+      side: THREE.FrontSide // back-face culling hides the surface while the player is mid-crossing
     });
   }
-  function buildPortal(root, portal, room) {
-    const info = dirInfo[portal.direction];
+  function buildDoor(room, dir) {
+    const info = dirInfo[dir];
     const frame = new THREE.Group();
-    frame.position.set(info.x * (halfRoom - .11), doorHeight / 2, info.z * (halfRoom - .11));
+    frame.position.set(info.x * (halfRoom - FRAME_INSET), doorHeight / 2, info.z * (halfRoom - FRAME_INSET));
     frame.rotation.y = info.yaw;
-    root.add(frame);
-    const renderTarget = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, depthBuffer: true });
-    renderTarget.texture.colorSpace = THREE.SRGBColorSpace;
-    const plane = new THREE.Mesh(new THREE.PlaneGeometry(doorWidth - .18, doorHeight - .18), portalShader(renderTarget, room.color));
-    plane.position.z = .018; frame.add(plane);
-    const frameMat = new THREE.MeshStandardMaterial({ color: room.color.clone().multiplyScalar(.32), emissive: room.color, emissiveIntensity: 1.6, metalness: .75, roughness: .25 });
+    room.root.add(frame);
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(doorWidth - .18, doorHeight - .18), portalShader(room.color));
+    plane.position.z = PLANE_OFFSET; frame.add(plane);
+    const frameMat = new THREE.MeshStandardMaterial({ color: room.color.clone().multiplyScalar(.32), emissive: room.color.clone(), emissiveIntensity: 1.6, metalness: .75, roughness: .25 });
     box(frame, [.16, doorHeight + .25, .18], [-(doorWidth / 2), 0, .08], frameMat);
     box(frame, [.16, doorHeight + .25, .18], [ doorWidth / 2, 0, .08], frameMat);
     box(frame, [doorWidth + .16, .16, .18], [0, doorHeight / 2, .08], frameMat);
     const light = new THREE.PointLight(room.color, 1.3, 8, 2); light.position.set(0, .2, .55); frame.add(light);
-    portal.frame = frame; portal.mesh = plane; portal.target = renderTarget;
+    return { roomId: room.id, dir, state: 'latent', to: null, toDir: null, isFold: false, frame, plane, frameMat, light };
   }
-  function buildRoom(room, sectorData) {
-    const root = new THREE.Group(); root.name = room.name; root.visible = false; scene.add(root); room.root = root;
-    const rand = mulberry32(sectorData.seed * 61 + room.id * 173);
+  function createRoom(cell, doorDirs) {
+    const id = rooms.length;
+    const room = {
+      id, cell: { ...cell }, name: roomLabel(id, grand),
+      color: new THREE.Color().setHSL(.46 + grand() * .34, .55 + grand() * .2, .48 + grand() * .14),
+      doors: {}, root: new THREE.Group()
+    };
+    room.root.visible = false; scene.add(room.root);
+    const rand = mulberry32(sectorSeed * 61 + id * 173);
     const base = room.color.clone().multiplyScalar(.20), trim = room.color.clone().multiplyScalar(.42);
-    const wallMat = material(base, .78, .22), floorMat = material(base.clone().multiplyScalar(.55), .9, .1), trimMat = new THREE.MeshStandardMaterial({ color: trim, emissive: room.color.clone().multiplyScalar(.26), emissiveIntensity: .8, roughness: .38, metalness: .68 });
-    box(root, [roomSize, .18, roomSize], [0, -.09, 0], floorMat);
-    box(root, [roomSize, .14, roomSize], [0, wallHeight + .07, 0], material(base.clone().multiplyScalar(.63), .9, .05));
+    const wallMat = material(base, .78, .22), floorMat = material(base.clone().multiplyScalar(.55), .9, .1);
+    const trimMat = new THREE.MeshStandardMaterial({ color: trim, emissive: room.color.clone().multiplyScalar(.26), emissiveIntensity: .8, roughness: .38, metalness: .68 });
+    box(room.root, [roomSize, .18, roomSize], [0, -.09, 0], floorMat);
+    box(room.root, [roomSize, .14, roomSize], [0, wallHeight + .07, 0], material(base.clone().multiplyScalar(.63), .9, .05));
     for (const dir of directions) {
-      const hasPortal = room.portals.some(p => p.direction === dir);
-      if (!hasPortal) wallSegment(root, dir, 0, roomSize, wallHeight, wallHeight / 2, wallMat);
+      if (!doorDirs.includes(dir)) wallSegment(room.root, dir, 0, roomSize, wallHeight, wallHeight / 2, wallMat);
       else {
         const sideSpan = (roomSize - doorWidth) / 2;
         const offset = doorWidth / 2 + sideSpan / 2;
-        wallSegment(root, dir, -offset, sideSpan, wallHeight, wallHeight / 2, wallMat);
-        wallSegment(root, dir, offset, sideSpan, wallHeight, wallHeight / 2, wallMat);
-        wallSegment(root, dir, 0, doorWidth, wallHeight - doorHeight, doorHeight + (wallHeight - doorHeight) / 2, wallMat);
+        wallSegment(room.root, dir, -offset, sideSpan, wallHeight, wallHeight / 2, wallMat);
+        wallSegment(room.root, dir, offset, sideSpan, wallHeight, wallHeight / 2, wallMat);
+        wallSegment(room.root, dir, 0, doorWidth, wallHeight - doorHeight, doorHeight + (wallHeight - doorHeight) / 2, wallMat);
       }
-      const stripe = wallSegment(root, dir, 0, roomSize - .38, .055, 1.15, trimMat);
-      stripe.material = trimMat;
+      wallSegment(room.root, dir, 0, roomSize - .38, .055, 1.15, trimMat);
     }
     // Procedural non-blocking architecture: every room has a different cadence of supports and light slits.
     const decoCount = 3 + Math.floor(rand() * 4);
     for (let i = 0; i < decoCount; i++) {
       const angle = (i / decoCount) * Math.PI * 2 + rand() * .5, radius = 3.3 + rand() * 1.8;
       const x = Math.cos(angle) * radius, z = Math.sin(angle) * radius, height = 1.7 + rand() * 2.8;
-      const p = box(root, [.18 + rand() * .18, height, .18 + rand() * .18], [x, height / 2, z], trimMat);
-      p.rotation.y = rand() * Math.PI;
-      const cap = box(root, [.62, .05, .62], [x, height + .05, z], trimMat); cap.rotation.y = rand() * Math.PI / 4;
+      const pillar = box(room.root, [.18 + rand() * .18, height, .18 + rand() * .18], [x, height / 2, z], trimMat);
+      pillar.rotation.y = rand() * Math.PI;
+      const cap = box(room.root, [.62, .05, .62], [x, height + .05, z], trimMat); cap.rotation.y = rand() * Math.PI / 4;
     }
     for (let i = 0; i < 5; i++) {
       const x = -5.5 + i * 2.75;
-      box(root, [.56, .02, .56], [x, wallHeight - .22, 0], trimMat);
-      const spot = new THREE.PointLight(room.color, .25, 7, 2); spot.position.set(x, wallHeight - .4, 0); root.add(spot);
+      box(room.root, [.56, .02, .56], [x, wallHeight - .22, 0], trimMat);
+      const spot = new THREE.PointLight(room.color, .25, 7, 2); spot.position.set(x, wallHeight - .4, 0); room.root.add(spot);
     }
-    room.portals.forEach(p => buildPortal(root, p, room));
+    doorDirs.forEach(dir => room.doors[dir] = buildDoor(room, dir));
+    rooms.push(room);
+    const key = cellKey(cell);
+    if (!cellIndex.has(key)) cellIndex.set(key, []);
+    cellIndex.get(key).push(id);
+    return room;
   }
 
-  function destroySector() {
-    if (!sector) return;
-    sector.rooms.forEach(room => {
-      room.portals.forEach(p => { p.target?.dispose(); p.mesh?.material?.dispose(); });
-      scene.remove(room.root);
-      room.root.traverse(child => { if (child.isMesh) { child.geometry.dispose(); if (child.material !== undefined) child.material.dispose(); } });
-    });
+  function linkDoors(roomA, dirA, roomB, dirB) {
+    const doorA = roomA.doors[dirA], doorB = roomB.doors[dirB];
+    // A link is Euclidean-consistent only if the destination sits in the
+    // adjacent surveyed cell AND you come out of the matching wall.
+    const consistent = roomB.cell.x === roomA.cell.x + dirInfo[dirA].x
+      && roomB.cell.z === roomA.cell.z + dirInfo[dirA].z
+      && dirB === OPPOSITE[dirA];
+    doorA.state = doorB.state = 'linked';
+    doorA.to = roomB.id; doorA.toDir = dirB;
+    doorB.to = roomA.id; doorB.toDir = dirA;
+    doorA.isFold = doorB.isFold = !consistent;
+    if (!consistent) {
+      const hot = new THREE.Color(0xff5470);
+      doorA.frameMat.emissive.lerp(hot, .55); doorB.frameMat.emissive.lerp(hot, .55);
+      doorA.light.color.lerp(hot, .55); doorB.light.color.lerp(hot, .55);
+    }
+    edges.push({ a: roomA.id, aDir: dirA, b: roomB.id, bDir: dirB, isFold: !consistent });
   }
-  function buildSector(seed) {
-    destroySector();
-    sector = makeTopology(seed);
-    sector.rooms.forEach(room => buildRoom(room, sector));
-    currentRoom = 0;
-    camera.position.set(0, 1.68, 2.5); camera.rotation.set(0, Math.PI, 0);
-    setActiveRoom(0, false);
-    drawTopology();
-  }
-  function setActiveRoom(id, pulse = true) {
-    sector.rooms.forEach((room, index) => room.root.visible = index === id);
-    currentRoom = id;
-    const room = sector.rooms[id];
-    roomReadout.textContent = `Phase ${String(id + 1).padStart(2, '0')} · ${room.name}`;
-    document.documentElement.style.setProperty('--accent', `#${room.color.getHexString()}`);
-    if (pulse) { flash.style.opacity = '.16'; setTimeout(() => flash.style.opacity = '0', 80); }
-    drawTopology();
-  }
-  function localEntry(direction) {
-    const info = dirInfo[direction];
-    return new THREE.Vector3(-info.x * (halfRoom - 1.05), 1.68, -info.z * (halfRoom - 1.05));
-  }
-  function teleport(portal) {
-    const targetRoom = sector.rooms[portal.to];
-    const reciprocal = targetRoom.portals.find(p => p.edge === portal.edge);
-    camera.position.copy(localEntry(reciprocal.direction));
-    camera.rotation.set(0, dirInfo[reciprocal.direction].yaw + Math.PI, 0);
-    setActiveRoom(portal.to);
-    nextTransition = performance.now() + 450;
-  }
-  function resolveBounds() {
-    if (!sector || performance.now() < nextTransition) return;
-    const room = sector.rooms[currentRoom], p = camera.position;
+
+  // Lazy infinite generation: a room's undecided doors are resolved the moment
+  // the player enters it, so every visible doorway always has a real
+  // destination while the maze grows without bound.
+  function resolveRoom(room) {
     for (const dir of directions) {
-      const info = dirInfo[dir];
-      const forward = info.x ? p.x * info.x : p.z * info.z;
-      if (forward <= halfRoom - .46) continue;
-      const lateral = info.x ? p.z : p.x;
-      const portal = room.portals.find(item => item.direction === dir);
-      if (portal && Math.abs(lateral) < doorWidth / 2 - .22) { teleport(portal); return; }
-      if (info.x) p.x = info.x * (halfRoom - .47); else p.z = info.z * (halfRoom - .47);
+      const door = room.doors[dir];
+      if (!door || door.state !== 'latent') continue;
+      const candidates = [];
+      for (const other of rooms) for (const d of directions) {
+        const otherDoor = other.doors[d];
+        if (otherDoor && otherDoor.state === 'latent' && otherDoor !== door) candidates.push(otherDoor);
+      }
+      if (candidates.length && grand() < .3) {
+        // Fold space: splice this door onto some other loose door, anywhere.
+        const target = candidates[Math.floor(grand() * candidates.length)];
+        linkDoors(room, dir, rooms[target.roomId], target.dir);
+        continue;
+      }
+      const straight = OPPOSITE[dir];
+      const entry = grand() < .25 ? pick(grand, directions.filter(d => d !== straight)) : straight;
+      const extras = shuffled(grand, directions.filter(d => d !== entry)).slice(0, 1 + Math.floor(grand() * 3));
+      const next = createRoom({ x: room.cell.x + dirInfo[dir].x, z: room.cell.z + dirInfo[dir].z }, [entry, ...extras]);
+      linkDoors(room, dir, next, entry);
     }
   }
+
+  function destroyWorld() {
+    rooms.forEach(room => {
+      scene.remove(room.root);
+      room.root.traverse(child => { if (child.isMesh) { child.geometry.dispose(); child.material.dispose(); } });
+    });
+    rooms = []; edges = []; cellIndex.clear();
+  }
+  function buildWorld(seed) {
+    destroyWorld();
+    grand = mulberry32(seed);
+    // Scripted core: four Euclidean-looking steps around a square that end in
+    // a DIFFERENT room at the start's coordinates — a guaranteed overlap.
+    const s = createRoom({ x: 0, z: 0 }, ['N', 'E', 'S']);
+    const b = createRoom({ x: 0, z: -1 }, ['S', 'E', 'W']);
+    const c = createRoom({ x: 1, z: -1 }, ['W', 'S', 'E']);
+    const d = createRoom({ x: 1, z: 0 }, ['N', 'W', 'S']);
+    const e = createRoom({ x: 0, z: 0 }, ['E', 'W', 'N']);
+    linkDoors(s, 'N', b, 'S'); linkDoors(b, 'E', c, 'W'); linkDoors(c, 'S', d, 'N'); linkDoors(d, 'W', e, 'E');
+    camera.position.set(0, 1.68, 3.4);
+    camera.rotation.set(0, 0, 0);
+    nextTransition = 0;
+    setActiveRoom(0, false);
+  }
+  function setActiveRoom(id, pulse = true) {
+    currentRoom = id;
+    const room = rooms[id];
+    resolveRoom(room);
+    rooms.forEach(other => other.root.visible = other.id === id);
+    roomReadout.textContent = `Phase ${String(id + 1).padStart(2, '0')} · ${room.name} · Cell ${room.cell.x},${room.cell.z}`;
+    const overlapCells = [...cellIndex.values()].filter(list => list.length > 1).length;
+    overlapReadout.textContent = `${overlapCells} overlaps · ${rooms.length} rooms`;
+    if (pulse) { flash.style.opacity = '.2'; setTimeout(() => flash.style.opacity = '0', 90); }
+  }
+
+  // Walking through a door applies the exact portal transform to the player,
+  // so lateral offset, heading and pitch all carry across — the crossing is
+  // seamless because the camera ends up precisely where the portal view said.
+  function traverse(door) {
+    const dstRoom = rooms[door.to];
+    const dst = dstRoom.doors[door.toDir].frame;
+    door.frame.updateWorldMatrix(true, false); dst.updateWorldMatrix(true, false);
+    const rel = camera.position.clone().applyMatrix4(workMatrix.copy(door.frame.matrixWorld).invert());
+    rel.x = -rel.x; rel.z = -rel.z;
+    camera.position.copy(rel.applyMatrix4(dst.matrixWorld));
+    camera.rotation.y += dst.rotation.y + Math.PI - door.frame.rotation.y;
+    const info = dirInfo[door.toDir];
+    const forward = camera.position.x * info.x + camera.position.z * info.z;
+    if (forward > halfRoom) { // a huge frame step must not pop out the far side of the doorway
+      camera.position.x -= info.x * (forward - halfRoom);
+      camera.position.z -= info.z * (forward - halfRoom);
+    }
+    nextTransition = performance.now() + 120;
+    setActiveRoom(door.to);
+  }
+  function resolveBounds(prev) {
+    const room = rooms[currentRoom], p = camera.position;
+    for (const dir of directions) {
+      const info = dirInfo[dir];
+      const forward = p.x * info.x + p.z * info.z;
+      if (forward <= WALL_LIMIT) continue;
+      const lateral = info.x !== 0 ? p.z : p.x;
+      const door = room.doors[dir];
+      if (door && door.state === 'linked' && Math.abs(lateral) < LANE) {
+        const prevForward = prev.x * info.x + prev.z * info.z;
+        if (prevForward < TRIGGER && forward >= TRIGGER && performance.now() > nextTransition) { traverse(door); return; }
+        if (forward > TRIGGER) { // left just past the plane by the cooldown: ease back so the next crossing re-arms
+          const back = TRIGGER - .02;
+          if (info.x !== 0) p.x = info.x * back; else p.z = info.z * back;
+        }
+        const lim = LANE - .01;
+        if (info.x !== 0) p.z = THREE.MathUtils.clamp(p.z, -lim, lim);
+        else p.x = THREE.MathUtils.clamp(p.x, -lim, lim);
+      } else {
+        if (info.x !== 0) p.x = info.x * WALL_LIMIT; else p.z = info.z * WALL_LIMIT;
+      }
+    }
+  }
+
+  function setDoorsLive(room, value) {
+    for (const dir of directions) {
+      const door = room.doors[dir];
+      if (door) door.plane.material.uniforms.live.value = value;
+    }
+  }
+  // Render-to-texture pass per doorway: a virtual camera is placed behind the
+  // destination door by mirroring the player across the portal pair, sharing
+  // the player's projection matrix so perspective is preserved exactly.
   function updatePortalViews() {
-    const active = sector.rooms[currentRoom];
+    const active = rooms[currentRoom];
     camera.updateMatrixWorld(true);
-    for (const portal of active.portals) {
-      const targetRoom = sector.rooms[portal.to];
-      const reciprocal = targetRoom.portals.find(p => p.edge === portal.edge);
-      if (!reciprocal || !portal.frame || !reciprocal.frame) continue;
-      active.root.visible = false; targetRoom.root.visible = true;
-      portal.frame.updateWorldMatrix(true, false); reciprocal.frame.updateWorldMatrix(true, false);
-      invert.copy(portal.frame.matrixWorld).invert();
-      portalTransform.copy(reciprocal.frame.matrixWorld).multiply(matrixFlip).multiply(invert).multiply(camera.matrixWorld);
+    setDoorsLive(active, 0);
+    let slot = 0;
+    for (const dir of directions) {
+      const door = active.doors[dir];
+      if (!door || door.state !== 'linked') continue;
+      const dstRoom = rooms[door.to];
+      const recip = dstRoom.doors[door.toDir];
+      const target = portalPool[slot++];
+      setDoorsLive(dstRoom, 0); // depth-1 recursion: doors seen through a door stay shimmering
+      const selfLink = dstRoom === active;
+      if (!selfLink) { active.root.visible = false; dstRoom.root.visible = true; }
+      door.frame.updateWorldMatrix(true, false); recip.frame.updateWorldMatrix(true, false);
+      portalTransform.copy(recip.frame.matrixWorld).multiply(matrixFlip)
+        .multiply(workMatrix.copy(door.frame.matrixWorld).invert()).multiply(camera.matrixWorld);
       portalTransform.decompose(virtualCamera.position, virtualCamera.quaternion, virtualCamera.scale);
       virtualCamera.projectionMatrix.copy(camera.projectionMatrix);
       virtualCamera.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
       virtualCamera.updateMatrixWorld(true);
-      renderer.setRenderTarget(portal.target);
-      renderer.clear();
+      renderer.setRenderTarget(target);
       renderer.render(scene, virtualCamera);
-      renderer.setRenderTarget(null);
-      targetRoom.root.visible = false; active.root.visible = true;
+      if (!selfLink) { dstRoom.root.visible = false; active.root.visible = true; }
+      door.plane.material.uniforms.viewMap.value = target.texture;
+    }
+    renderer.setRenderTarget(null);
+    for (const dir of directions) {
+      const door = active.doors[dir];
+      if (door && door.state === 'linked') door.plane.material.uniforms.live.value = 1;
     }
   }
-  function drawTopology() {
-    if (!sector) return;
-    const ctx = mapCtx, w = topologyCanvas.width, h = topologyCanvas.height;
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#050f16'; ctx.fillRect(0, 0, w, h);
-    const point = node => ({ x: node.map.x * w, y: node.map.y * h });
-    // Graph edges are drawn independently of their physical overlap.
-    ctx.lineWidth = 2;
-    sector.edges.forEach(edge => {
-      const a = point(sector.rooms[edge.a]), b = point(sector.rooms[edge.b]);
-      ctx.strokeStyle = edge.isFold ? 'rgba(255,99,130,.7)' : 'rgba(104,210,228,.35)';
-      ctx.setLineDash(edge.isFold ? [7, 5] : []);
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-    });
-    ctx.setLineDash([]);
-    const stacks = new Map();
-    sector.rooms.forEach(room => { const key = `${room.map.x},${room.map.y}`; stacks.set(key, (stacks.get(key) || 0) + 1); });
-    sector.rooms.forEach(room => {
-      const p = point(room), stacked = stacks.get(`${room.map.x},${room.map.y}`);
-      for (let ring = stacked - 1; ring > 0; ring--) { ctx.strokeStyle = 'rgba(255,133,156,.45)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, 11 + ring * 5, 0, Math.PI * 2); ctx.stroke(); }
-      ctx.fillStyle = room.id === currentRoom ? '#e9fdff' : `#${room.color.getHexString()}`;
-      ctx.beginPath(); ctx.arc(p.x, p.y, room.id === currentRoom ? 8 : 5, 0, Math.PI * 2); ctx.fill();
-      if (room.id === currentRoom) { ctx.strokeStyle = '#85f6ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, 15, 0, Math.PI * 2); ctx.stroke(); }
-      ctx.fillStyle = room.id === currentRoom ? '#e9fdff' : 'rgba(193,238,245,.65)'; ctx.font = '600 12px monospace'; ctx.textAlign = 'center'; ctx.fillText(String(room.id + 1).padStart(2, '0'), p.x, p.y + 28);
+  function tickPortalTime() {
+    const active = rooms[currentRoom];
+    const touched = new Set([active]);
+    for (const dir of directions) {
+      const door = active.doors[dir];
+      if (door && door.state === 'linked') touched.add(rooms[door.to]);
+    }
+    touched.forEach(room => {
+      for (const dir of directions) {
+        const door = room.doors[dir];
+        if (door) door.plane.material.uniforms.time.value = elapsed;
+      }
     });
   }
+
+  function drawTopology() {
+    const w = topologyCanvas.width, h = topologyCanvas.height, ctx = mapCtx;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#050f16'; ctx.fillRect(0, 0, w, h);
+    if (!rooms.length) return;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    rooms.forEach(room => {
+      minX = Math.min(minX, room.cell.x); maxX = Math.max(maxX, room.cell.x);
+      minZ = Math.min(minZ, room.cell.z); maxZ = Math.max(maxZ, room.cell.z);
+    });
+    let cell = Math.min((w - 52) / (maxX - minX + 1), (h - 52) / (maxZ - minZ + 1), 60);
+    let cX = (minX + maxX) / 2, cZ = (minZ + maxZ) / 2;
+    if (cell < 24) { cell = 24; cX = rooms[currentRoom].cell.x; cZ = rooms[currentRoom].cell.z; }
+    const px = (x, z) => ({ x: w / 2 + (x - cX) * cell, y: h / 2 + (z - cZ) * cell });
+    ctx.strokeStyle = 'rgba(122, 214, 232, .07)'; ctx.lineWidth = 1;
+    for (let gx = Math.floor(cX - w / (2 * cell)); gx <= Math.ceil(cX + w / (2 * cell)); gx++) {
+      const X = px(gx - .5, 0).x; ctx.beginPath(); ctx.moveTo(X, 0); ctx.lineTo(X, h); ctx.stroke();
+    }
+    for (let gz = Math.floor(cZ - h / (2 * cell)); gz <= Math.ceil(cZ + h / (2 * cell)); gz++) {
+      const Y = px(0, gz - .5).y; ctx.beginPath(); ctx.moveTo(0, Y); ctx.lineTo(w, Y); ctx.stroke();
+    }
+    // Rooms sharing a surveyed cell fan out around its center so each stays visible.
+    const posOf = room => {
+      const list = cellIndex.get(cellKey(room.cell));
+      const base = px(room.cell.x, room.cell.z);
+      if (list.length < 2) return base;
+      const i = list.indexOf(room.id), angle = (i / list.length) * Math.PI * 2 - Math.PI / 2;
+      const r = Math.min(cell * .18, 10);
+      return { x: base.x + Math.cos(angle) * r, y: base.y + Math.sin(angle) * r };
+    };
+    ctx.lineWidth = 1.6;
+    edges.forEach(edge => {
+      const pa = posOf(rooms[edge.a]), pb = posOf(rooms[edge.b]);
+      ctx.strokeStyle = edge.isFold ? 'rgba(255, 99, 130, .75)' : 'rgba(104, 210, 228, .38)';
+      ctx.setLineDash(edge.isFold ? [6, 5] : []);
+      ctx.beginPath();
+      if (edge.a === edge.b) ctx.arc(pa.x + 9, pa.y - 9, 8, 0, Math.PI * 2);
+      else { ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); }
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    cellIndex.forEach((list, key) => {
+      if (list.length < 2) return;
+      const [x, z] = key.split(',').map(Number);
+      const base = px(x, z);
+      ctx.strokeStyle = 'rgba(255, 133, 156, .5)'; ctx.lineWidth = 1.6;
+      for (let ring = 1; ring < list.length; ring++) {
+        ctx.beginPath(); ctx.arc(base.x, base.y, Math.min(cell * .3, 15) + ring * 4, 0, Math.PI * 2); ctx.stroke();
+      }
+    });
+    rooms.forEach(room => {
+      const p = posOf(room), isCurrent = room.id === currentRoom;
+      ctx.fillStyle = isCurrent ? '#e9fdff' : `#${room.color.getHexString()}`;
+      ctx.beginPath(); ctx.arc(p.x, p.y, isCurrent ? 6.5 : 4, 0, Math.PI * 2); ctx.fill();
+      if (isCurrent) {
+        ctx.strokeStyle = '#85f6ff'; ctx.lineWidth = 1.8;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 11, 0, Math.PI * 2); ctx.stroke();
+        const yaw = camera.rotation.y;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - Math.sin(yaw) * 17, p.y - Math.cos(yaw) * 17); ctx.stroke();
+      }
+    });
+    if (cell >= 34) {
+      ctx.font = '600 11px monospace'; ctx.textAlign = 'center';
+      rooms.forEach(room => {
+        const p = posOf(room);
+        ctx.fillStyle = room.id === currentRoom ? '#e9fdff' : 'rgba(193, 238, 245, .6)';
+        ctx.fillText(String(room.id + 1).padStart(2, '0'), p.x, p.y + Math.max(18, cell * .34));
+      });
+    }
+  }
+
   function animate() {
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), .05); elapsed += dt;
     if (controls.isLocked) {
+      prevPos.copy(camera.position);
       const speed = (input.ShiftLeft || input.ShiftRight ? 7.2 : 3.65) * dt;
       if (input.KeyW) controls.moveForward(speed); if (input.KeyS) controls.moveForward(-speed);
       if (input.KeyA) controls.moveRight(-speed); if (input.KeyD) controls.moveRight(speed);
       camera.position.y = 1.68;
-      resolveBounds();
+      resolveBounds(prevPos);
     }
-    if (sector) {
-      sector.rooms[currentRoom].portals.forEach(p => p.mesh.material.uniforms.time.value = elapsed);
-      updatePortalViews();
-    }
+    if (rooms.length) { tickPortalTime(); updatePortalViews(); }
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
+    drawTopology();
   }
   window.addEventListener('keydown', e => input[e.code] = true);
   window.addEventListener('keyup', e => input[e.code] = false);
-  window.addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); virtualCamera.aspect = camera.aspect; virtualCamera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+  window.addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+    virtualCamera.aspect = camera.aspect; virtualCamera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+    makePortalPool();
+  });
   controls.addEventListener('lock', () => startScreen.classList.add('hidden'));
   controls.addEventListener('unlock', () => startScreen.classList.remove('hidden'));
   document.querySelector('#enter').addEventListener('click', () => controls.lock());
   renderer.domElement.addEventListener('click', () => { if (!controls.isLocked) controls.lock(); });
-  document.querySelector('#regen').addEventListener('click', e => { e.stopPropagation(); sectorSeed = (sectorSeed * 1664525 + 1013904223) >>> 0; buildSector(sectorSeed); });
-  buildSector(sectorSeed);
+  document.querySelector('#regen').addEventListener('click', e => { e.stopPropagation(); sectorSeed = (sectorSeed * 1664525 + 1013904223) >>> 0; buildWorld(sectorSeed); });
+
+  window.__maze = { controls, camera, roomCount: () => rooms.length, currentRoom: () => currentRoom, overlapCells: () => [...cellIndex.values()].filter(list => list.length > 1).length };
+
+  makePortalPool();
+  buildWorld(sectorSeed);
   animate();
   </script>
 </body>
