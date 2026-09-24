@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The Cosmic Weaver — Spacetime WebGL Simulation</title>
+  <style>
+    :root {
+      --bg-dark: #030208;
+      --accent-cyan: #00f3ff;
+      --accent-magenta: #ff00a0;
+      --accent-gold: #ffb700;
+      --hud-bg: rgba(8, 6, 18, 0.75);
+      --hud-border: rgba(0, 243, 255, 0.25);
+      --font-mono: "SF Mono", "Roboto Mono", Consolas, "Courier New", monospace;
+      --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: var(--bg-dark);
+      font-family: var(--font-sans);
+      color: #e2e8f0;
+    }
+
+    #webgl-container {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Error Diagnostics Banner */
+    #error-banner {
+      display: none;
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      z-index: 99999;
+      background: rgba(220, 38, 38, 0.95);
+      color: #ffffff;
+      padding: 14px 18px;
+      border-radius: 10px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.5;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+    }
+
+    /* UI Overlay Elements */
+    #hud {
+      position: fixed;
+      top: 24px;
+      left: 24px;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .title-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .title-icon {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent-cyan);
+      box-shadow: 0 0 12px var(--accent-cyan), 0 0 24px var(--accent-cyan);
+      animation: pulse-glow 2.5s infinite ease-in-out;
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% { transform: scale(1); opacity: 0.8; }
+      50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 18px var(--accent-magenta), 0 0 36px var(--accent-magenta); }
+    }
+
+    h1 {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.35em;
+      text-transform: uppercase;
+      color: #ffffff;
+      text-shadow: 0 0 16px rgba(0, 243, 255, 0.6), 0 0 32px rgba(255, 0, 160, 0.4);
+    }
+
+    .subtitle {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      color: #8a99ad;
+      text-transform: uppercase;
+      margin-left: 26px;
+    }
+
+    /* Stats Panel */
+    #stats-badge {
+      position: fixed;
+      top: 24px;
+      right: 24px;
+      z-index: 10;
+      pointer-events: auto;
+      background: var(--hud-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--hud-border);
+      border-radius: 12px;
+      padding: 12px 18px;
+      display: flex;
+      gap: 20px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    }
+
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+
+    .stat-label {
+      font-size: 9px;
+      color: #64748b;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      color: var(--accent-cyan);
+      font-weight: 600;
+      font-size: 13px;
+      text-shadow: 0 0 8px rgba(0, 243, 255, 0.5);
+    }
+
+    /* Interactive Controls Panel */
+    #controls-panel {
+      position: fixed;
+      bottom: 24px;
+      left: 24px;
+      z-index: 10;
+      background: var(--hud-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--hud-border);
+      border-radius: 14px;
+      padding: 16px 20px;
+      width: 320px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    #controls-panel.collapsed {
+      transform: translateY(calc(100% - 44px));
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      margin-bottom: 12px;
+    }
+
+    .panel-title {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: #94a3b8;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel-toggle-btn {
+      background: none;
+      border: none;
+      color: #94a3b8;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .control-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .control-label-wrap {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: #cbd5e1;
+    }
+
+    .control-value {
+      color: var(--accent-cyan);
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.15);
+      outline: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent-cyan);
+      cursor: pointer;
+      box-shadow: 0 0 10px var(--accent-cyan);
+      transition: transform 0.1s ease;
+    }
+
+    input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.25);
+    }
+
+    .btn-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .action-btn {
+      background: rgba(0, 243, 255, 0.08);
+      border: 1px solid rgba(0, 243, 255, 0.25);
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .action-btn:hover {
+      background: rgba(0, 243, 255, 0.22);
+      border-color: var(--accent-cyan);
+      color: #ffffff;
+      box-shadow: 0 0 12px rgba(0, 243, 255, 0.4);
+    }
+
+    .action-btn.active {
+      background: linear-gradient(135deg, rgba(0, 243, 255, 0.3), rgba(255, 0, 160, 0.3));
+      border-color: var(--accent-magenta);
+      box-shadow: 0 0 14px rgba(255, 0, 160, 0.5);
+    }
+
+    /* Hint Footer */
+    #instructions-hint {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 10;
+      pointer-events: none;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      color: rgba(148, 163, 184, 0.6);
+      text-transform: uppercase;
+      text-align: right;
+      line-height: 1.6;
+    }
+
+    #instructions-hint span {
+      color: var(--accent-cyan);
+    }
+  </style>
+
+  <!-- Global Error Handler -->
+  <script>
+    window.addEventListener('error', function(e) {
+      var banner = document.getElementById('error-banner');
+      if (banner) {
+        banner.style.display = 'block';
+        banner.textContent = 'WebGL Simulation Error: ' + (e.message || e.error);
+      }
+    });
+  </script>
+
+  <!-- Import Maps for Three.js & Modern Postprocessing Addons -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="error-banner"></div>
+  <div id="webgl-container"></div>
+
+  <!-- HUD Header -->
+  <div id="hud">
+    <div class="title-group">
+      <div class="title-icon"></div>
+      <h1>The Cosmic Weaver</h1>
+    </div>
+    <div class="subtitle">Spacetime Neural Network &middot; 524,288 Particles</div>
+  </div>
+
+  <!-- Real-time Metrics Badge -->
+  <div id="stats-badge">
+    <div class="stat-item">
+      <span class="stat-label">Particles</span>
+      <span class="stat-value" id="stat-particles">524,288</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">FPS</span>
+      <span class="stat-value" id="stat-fps">60</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Cam Mode</span>
+      <span class="stat-value" id="stat-cam">Cinematic</span>
+    </div>
+  </div>
+
+  <!-- HUD Control Panel -->
+  <div id="controls-panel">
+    <div class="panel-header" id="panel-header">
+      <div class="panel-title">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        Weaver Parameters
+      </div>
+      <button class="panel-toggle-btn" id="toggle-panel-btn">▼</button>
+    </div>
+
+    <div class="control-row">
+      <div class="control-label-wrap">
+        <span>Flow Velocity</span>
+        <span class="control-value" id="val-flow">1.0x</span>
+      </div>
+      <input type="range" id="input-flow" min="0.1" max="3.0" step="0.1" value="1.0" />
+    </div>
+
+    <div class="control-row">
+      <div class="control-label-wrap">
+        <span>Gravity Warp Field</span>
+        <span class="control-value" id="val-gravity">1.2x</span>
+      </div>
+      <input type="range" id="input-gravity" min="0.0" max="3.0" step="0.1" value="1.2" />
+    </div>
+
+    <div class="control-row">
+      <div class="control-label-wrap">
+        <span>Bloom Glow</span>
+        <span class="control-value" id="val-bloom">1.8</span>
+      </div>
+      <input type="range" id="input-bloom" min="0.0" max="4.0" step="0.1" value="1.8" />
+    </div>
+
+    <div class="control-row">
+      <div class="control-label-wrap">
+        <span>Motion Trail Blur</span>
+        <span class="control-value" id="val-blur">0.65</span>
+      </div>
+      <input type="range" id="input-blur" min="0.0" max="0.9" step="0.05" value="0.65" />
+    </div>
+
+    <div class="btn-group">
+      <button class="action-btn active" id="btn-camera-mode">Cam: Cinematic</button>
+      <button class="action-btn" id="btn-shockwave">Emit Wave</button>
+    </div>
+  </div>
+
+  <!-- Hint Footer -->
+  <div id="instructions-hint">
+    Move mouse to <span>deform space</span> &middot; Click to <span>trigger shockwave</span><br />
+    Drag mouse in Interactive mode to <span>orbit weave</span>
+  </div>
+
+  <!-- Application Logic -->
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { AfterimagePass } from 'three/addons/postprocessing/AfterimagePass.js';
+
+    /* ============================================================================
+     *  CONSTANT CONFIGURATION & GLOBAL STATE
+     * ========================================================================== */
+    const PARTICLE_COUNT = 524288; // 524,288 particles
+    const SPLINE_COUNT = 24;        // Interweaving Catmull-Rom strands
+    const POINTS_PER_SPLINE = 32;   // Control points per strand
+    const MAX_SHOCKWAVES = 4;       // Simultaneous shockwave ring buffer
+
+    const state = {
+      flowSpeed: 1.0,
+      gravityStrength: 1.2,
+      bloomStrength: 1.8,
+      motionBlurAmount: 0.65,
+      cameraMode: 'cinematic', // 'cinematic' | 'orbit'
+      mouseWorld: new THREE.Vector3(9999, 9999, 9999),
+      targetMouseWorld: new THREE.Vector3(9999, 9999, 9999),
+      shockwaves: Array.from({ length: MAX_SHOCKWAVES }, () => ({
+        pos: new THREE.Vector3(0, 0, 0),
+        time: 999.0,
+        intensity: 0.0
+      })),
+      shockwaveIdx: 0,
+      time: 0,
+      fps: 60
+    };
+
+    /* ============================================================================
+     *  THREE.JS SCENE, CAMERA & RENDERER SETUP
+     * ========================================================================== */
+    const container = document.getElementById('webgl-container');
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x030208, 0.003);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+    camera.position.set(0, 40, 160);
+
+    const renderer = new THREE.WebGLRenderer({
+      powerPreference: 'high-performance',
+      antialias: true,
+      alpha: false,
+      depth: true
+    });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.35;
+    container.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.maxDistance = 600;
+    controls.minDistance = 10;
+    controls.enabled = false;
+
+    /* ============================================================================
+     *  CATMULL-ROM SPLINES NETWORK (BRAIDED 3D TUBE RIBBONS)
+     * ========================================================================== */
+    const splines = [];
+    
+    function generateSplines() {
+      const radius = 120;
+      const helixHeight = 180;
+      
+      for (let s = 0; s < SPLINE_COUNT; s++) {
+        const points = [];
+        const phaseShift = (s / SPLINE_COUNT) * Math.PI * 2;
+        const braidFrequency = 3.0 + (s % 4) * 0.5;
+
+        for (let i = 0; i < POINTS_PER_SPLINE; i++) {
+          const t = i / (POINTS_PER_SPLINE - 1);
+          const angle = t * Math.PI * 4 + phaseShift;
+
+          const splitMerge = Math.sin(t * Math.PI * 3.0) * 28.0;
+          const braidRadius = 18.0 + Math.cos(t * Math.PI * 6.0 + phaseShift) * 12.0;
+          
+          const x = Math.cos(angle) * (radius + splitMerge) + Math.cos(t * braidFrequency * Math.PI * 2) * braidRadius;
+          const y = Math.sin(t * Math.PI * 2) * helixHeight * 0.5 + Math.sin(angle * 2.0) * 25.0;
+          const z = Math.sin(angle) * (radius + splitMerge) + Math.sin(t * braidFrequency * Math.PI * 2) * braidRadius;
+
+          points.push(new THREE.Vector3(x, y, z));
+        }
+
+        points.push(points[0].clone());
+        const curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.5);
+        splines.push(curve);
+      }
+    }
+
+    generateSplines();
+
+    /* ============================================================================
+     *  GLSL SHADER GLOWING 3D SPACETIME TUBE RIBBONS
+     * ========================================================================== */
+    const ribbonVertexShader = `
+      uniform float uTime;
+      uniform float uGravityStrength;
+      uniform vec3 uMouseWorld;
+      uniform vec3 uShockwavePos[4];
+      uniform float uShockwaveTime[4];
+      uniform float uShockwaveIntensity[4];
+
+      varying vec2 vUv;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      varying float vGlowIntensity;
+
+      void main() {
+        vUv = uv;
+
+        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        vec3 pos = worldPos.xyz;
+
+        // Mouse Gravity Warp Field
+        float mouseDist = length(pos - uMouseWorld);
+        float gravityRadius = 75.0;
+        if (mouseDist < gravityRadius) {
+          float falloff = smoothstep(gravityRadius, 0.0, mouseDist);
+          vec3 warpDir = normalize(uMouseWorld - pos);
+          pos += warpDir * falloff * uGravityStrength * 24.0;
+        }
+
+        // Spherical Shockwave Displacement
+        float shockGlow = 0.0;
+        for (int i = 0; i < 4; i++) {
+          if (uShockwaveTime[i] < 10.0) {
+            float sDist = length(pos - uShockwavePos[i]);
+            float waveFront = uShockwaveTime[i] * 90.0;
+            float waveWidth = 30.0;
+            float d = abs(sDist - waveFront);
+
+            if (d < waveWidth && sDist < waveFront) {
+              float amp = (1.0 - d / waveWidth) * exp(-uShockwaveTime[i] * 1.2) * uShockwaveIntensity[i];
+              vec3 pushDir = normalize(pos - uShockwavePos[i]);
+              pos += pushDir * sin(d * 0.4 - uShockwaveTime[i] * 12.0) * amp * 22.0;
+              shockGlow += amp * 2.5;
+            }
+          }
+        }
+
+        vGlowIntensity = 1.0 + shockGlow;
+
+        vec4 mvPosition = viewMatrix * vec4(pos, 1.0);
+        vNormal = normalize(normalMatrix * normal);
+        vViewDir = -mvPosition.xyz;
+
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `;
+
+    const ribbonFragmentShader = `
+      uniform float uTime;
+      varying vec2 vUv;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      varying float vGlowIntensity;
+
+      void main() {
+        // Glowing Neural Conduit Energy Flow
+        float flow = fract(vUv.x * 6.0 - uTime * 0.9);
+        float pulse = smoothstep(0.0, 0.12, flow) * smoothstep(0.35, 0.12, flow);
+        
+        // Edge Fresnel Light Rim (View Space)
+        vec3 N = normalize(vNormal);
+        vec3 V = normalize(vViewDir);
+        float fresnel = pow(1.0 - abs(dot(V, N)), 2.2);
+
+        // Palettes: Deep Space Indigo -> Cyan -> Electric Pink -> Gold Energy
+        vec3 cCyan = vec3(0.0, 0.95, 1.0);
+        vec3 cMagenta = vec3(1.0, 0.0, 0.65);
+        vec3 cGold = vec3(1.0, 0.75, 0.1);
+        vec3 cDeep = vec3(0.05, 0.02, 0.15);
+
+        float colorMix = sin(vUv.x * 8.0 + uTime * 0.5) * 0.5 + 0.5;
+        vec3 baseColor = mix(cCyan, cMagenta, colorMix);
+        baseColor = mix(baseColor, cGold, pulse * 0.7);
+
+        vec3 finalColor = mix(cDeep, baseColor, fresnel + pulse * 0.85) * vGlowIntensity;
+
+        gl_FragColor = vec4(finalColor * 2.0, 0.9);
+      }
+    `;
+
+    function createRibbonTubes() {
+      const group = new THREE.Group();
+      const uniforms = {
+        uTime: { value: 0 },
+        uGravityStrength: { value: state.gravityStrength },
+        uMouseWorld: { value: state.mouseWorld },
+        uShockwavePos: { value: state.shockwaves.map(s => s.pos) },
+        uShockwaveTime: { value: state.shockwaves.map(s => s.time) },
+        uShockwaveIntensity: { value: state.shockwaves.map(s => s.intensity) }
+      };
+
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: ribbonVertexShader,
+        fragmentShader: ribbonFragmentShader,
+        uniforms: uniforms,
+        side: THREE.DoubleSide,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+
+      for (let s = 0; s < SPLINE_COUNT; s++) {
+        const geo = new THREE.TubeGeometry(splines[s], 180, 2.6, 10, true);
+        geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10000);
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.frustumCulled = false;
+        group.add(mesh);
+      }
+
+      return { group, uniforms };
+    }
+
+    const ribbonNetwork = createRibbonTubes();
+    scene.add(ribbonNetwork.group);
+
+    /* ============================================================================
+     *  GLSL SHADER 524,288 PARTICLE STREAM SYSTEM (ANALYTICAL GPU SPLINE EVAL)
+     * ========================================================================== */
+    const particleVertexShader = `
+      uniform float uTime;
+      uniform float uFlowSpeed;
+      uniform float uGravityStrength;
+      uniform vec3 uMouseWorld;
+      uniform vec3 uShockwavePos[4];
+      uniform float uShockwaveTime[4];
+      uniform float uShockwaveIntensity[4];
+
+      attribute float aSplineIndex;
+      attribute float aOffset;
+      attribute float aSpeed;
+      attribute vec3 aRadialOffset; // (angle, radius, phase)
+      attribute vec3 aColor;
+
+      varying vec3 vColor;
+      varying float vGlow;
+      varying float vDepth;
+
+      // 100% GPU Analytical Catmull-Rom Spline Formula (Strict GLSL)
+      vec3 getSplinePosition(float splineIdx, float u) {
+        float radius = 120.0;
+        float helixHeight = 180.0;
+        float phaseShift = (splineIdx / 24.0) * 6.28318530718;
+        float mod4 = splineIdx - floor(splineIdx / 4.0) * 4.0;
+        float braidFrequency = 3.0 + mod4 * 0.5;
+
+        float angle = u * 12.5663706144 + phaseShift;
+        float splitMerge = sin(u * 9.42477796077) * 28.0;
+        float braidRadius = 18.0 + cos(u * 18.8495559215 + phaseShift) * 12.0;
+
+        float x = cos(angle) * (radius + splitMerge) + cos(u * braidFrequency * 6.28318530718) * braidRadius;
+        float y = sin(u * 6.28318530718) * helixHeight * 0.5 + sin(angle * 2.0) * 25.0;
+        float z = sin(angle) * (radius + splitMerge) + sin(u * braidFrequency * 6.28318530718) * braidRadius;
+
+        return vec3(x, y, z);
+      }
+
+      void main() {
+        // Continuous particle travel along splines
+        float progress = fract(aOffset + uTime * 0.06 * aSpeed * uFlowSpeed);
+        
+        // Sample core position & tangent analytically
+        vec3 corePos = getSplinePosition(aSplineIndex, progress);
+        vec3 nextPos = getSplinePosition(aSplineIndex, fract(progress + 0.005));
+        vec3 tangent = normalize(nextPos - corePos + vec3(0.0001));
+
+        // Create perpendicular coordinate frame around ribbon core
+        vec3 up = vec3(0.0, 1.0, 0.0);
+        if (abs(dot(tangent, up)) > 0.9) up = vec3(1.0, 0.0, 0.0);
+        vec3 normal = normalize(cross(tangent, up));
+        vec3 binormal = cross(normal, tangent);
+
+        // Tubular dispersion around spline core
+        float theta = aRadialOffset.x + uTime * (1.0 + aRadialOffset.z * 0.5);
+        float r = aRadialOffset.y * (1.2 + sin(progress * 16.0 + uTime * 2.0) * 0.35);
+        
+        vec3 pos = corePos + (normal * cos(theta) + binormal * sin(theta)) * r;
+
+        // Mouse Gravity Warp Field
+        float mouseDist = length(pos - uMouseWorld);
+        float gravityRadius = 75.0;
+        if (mouseDist < gravityRadius) {
+          float falloff = smoothstep(gravityRadius, 0.0, mouseDist);
+          vec3 warpDir = normalize(uMouseWorld - pos);
+          pos += warpDir * falloff * uGravityStrength * 25.0;
+        }
+
+        // Spherical Shockwave Displacement
+        float shockIntensity = 0.0;
+        for (int i = 0; i < 4; i++) {
+          if (uShockwaveTime[i] < 10.0) {
+            float sDist = length(pos - uShockwavePos[i]);
+            float waveFront = uShockwaveTime[i] * 90.0;
+            float waveWidth = 30.0;
+            float d = abs(sDist - waveFront);
+
+            if (d < waveWidth && sDist < waveFront) {
+              float amp = (1.0 - d / waveWidth) * exp(-uShockwaveTime[i] * 1.1) * uShockwaveIntensity[i];
+              vec3 pushDir = normalize(pos - uShockwavePos[i]);
+              pos += pushDir * sin(d * 0.35 - uShockwaveTime[i] * 10.0) * amp * 26.0;
+              shockIntensity += amp;
+            }
+          }
+        }
+
+        vColor = mix(aColor, vec3(1.0, 0.95, 0.8), min(shockIntensity, 1.0));
+        vGlow = 1.0 + shockIntensity * 3.5;
+
+        vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+        vDepth = -mvPosition.z;
+
+        // Safe Depth Clip
+        if (mvPosition.z >= -0.1) {
+          gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+          return;
+        }
+
+        // Point size scaled by camera distance
+        gl_PointSize = (4.0 + sin(aRadialOffset.z * 12.0 + uTime * 3.0) * 1.8) * (350.0 / vDepth);
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `;
+
+    const particleFragmentShader = `
+      varying vec3 vColor;
+      varying float vGlow;
+      varying float vDepth;
+
+      void main() {
+        // Soft Neural Synapse Point Sprite (Glowing Core)
+        vec2 coord = gl_PointCoord - vec2(0.5);
+        float distSq = dot(coord, coord);
+        if (distSq > 0.25) discard;
+
+        float alpha = exp(-distSq * 14.0);
+        float core = exp(-distSq * 60.0) * 1.6;
+
+        vec3 finalColor = mix(vColor, vec3(1.0), core) * vGlow;
+        gl_FragColor = vec4(finalColor * 1.5, alpha);
+      }
+    `;
+
+    function createParticleStreamSystem() {
+      const geometry = new THREE.BufferGeometry();
+
+      const splineIndices = new Float32Array(PARTICLE_COUNT);
+      const offsets = new Float32Array(PARTICLE_COUNT);
+      const speeds = new Float32Array(PARTICLE_COUNT);
+      const radialOffsets = new Float32Array(PARTICLE_COUNT * 3);
+      const colors = new Float32Array(PARTICLE_COUNT * 3);
+      const dummyPositions = new Float32Array(PARTICLE_COUNT * 3);
+
+      const palette = [
+        new THREE.Color(0x00f3ff), // Cyan
+        new THREE.Color(0xff00a0), // Magenta
+        new THREE.Color(0x7b2cbf), // Violet
+        new THREE.Color(0x3a86ff), // Electric Blue
+        new THREE.Color(0xffb700)  // Gold
+      ];
+
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        splineIndices[i] = Math.floor(Math.random() * SPLINE_COUNT);
+        offsets[i] = Math.random();
+        speeds[i] = 0.6 + Math.random() * 0.8;
+
+        const angle = Math.random() * Math.PI * 2;
+        const radius = 0.5 + Math.random() * 5.0;
+        const phase = Math.random() * Math.PI * 2;
+        
+        radialOffsets[i * 3 + 0] = angle;
+        radialOffsets[i * 3 + 1] = radius;
+        radialOffsets[i * 3 + 2] = phase;
+
+        const col = palette[Math.floor(Math.random() * palette.length)];
+        colors[i * 3 + 0] = col.r;
+        colors[i * 3 + 1] = col.g;
+        colors[i * 3 + 2] = col.b;
+      }
+
+      geometry.setAttribute('position', new THREE.BufferAttribute(dummyPositions, 3));
+      geometry.setAttribute('aSplineIndex', new THREE.BufferAttribute(splineIndices, 1));
+      geometry.setAttribute('aOffset', new THREE.BufferAttribute(offsets, 1));
+      geometry.setAttribute('aSpeed', new THREE.BufferAttribute(speeds, 1));
+      geometry.setAttribute('aRadialOffset', new THREE.BufferAttribute(radialOffsets, 3));
+      geometry.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+
+      geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10000);
+
+      const particleUniforms = {
+        uTime: { value: 0 },
+        uFlowSpeed: { value: state.flowSpeed },
+        uGravityStrength: { value: state.gravityStrength },
+        uMouseWorld: { value: state.mouseWorld },
+        uShockwavePos: { value: state.shockwaves.map(s => s.pos) },
+        uShockwaveTime: { value: state.shockwaves.map(s => s.time) },
+        uShockwaveIntensity: { value: state.shockwaves.map(s => s.intensity) }
+      };
+
+      const material = new THREE.ShaderMaterial({
+        vertexShader: particleVertexShader,
+        fragmentShader: particleFragmentShader,
+        uniforms: particleUniforms,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+
+      const points = new THREE.Points(geometry, material);
+      points.frustumCulled = false;
+
+      return { points, uniforms: particleUniforms };
+    }
+
+    const particleSystem = createParticleStreamSystem();
+    scene.add(particleSystem.points);
+
+    /* ============================================================================
+     *  BACKGROUND COSMIC STARFIELD
+     * ========================================================================== */
+    function createCosmicBackgroundDust() {
+      const count = 16000;
+      const geo = new THREE.BufferGeometry();
+      const pos = new Float32Array(count * 3);
+      const col = new Float32Array(count * 3);
+
+      for (let i = 0; i < count; i++) {
+        const r = 250 + Math.random() * 650;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+
+        pos[i * 3 + 0] = r * Math.sin(phi) * Math.cos(theta);
+        pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+        pos[i * 3 + 2] = r * Math.cos(phi);
+
+        const brightness = 0.2 + Math.random() * 0.7;
+        col[i * 3 + 0] = 0.3 * brightness;
+        col[i * 3 + 1] = 0.6 * brightness;
+        col[i * 3 + 2] = 1.0 * brightness;
+      }
+
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10000);
+
+      const mat = new THREE.PointsMaterial({
+        size: 1.8,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.65,
+        blending: THREE.AdditiveBlending
+      });
+
+      const bgDust = new THREE.Points(geo, mat);
+      bgDust.frustumCulled = false;
+      scene.add(bgDust);
+    }
+
+    createCosmicBackgroundDust();
+
+    /* ============================================================================
+     *  POST-PROCESSING PIPELINE WITH SAFE FALLBACK
+     * ========================================================================== */
+    let composer = null;
+    let bloomPass = null;
+    let afterimagePass = null;
+
+    try {
+      composer = new EffectComposer(renderer);
+      composer.addPass(new RenderPass(scene, camera));
+
+      bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        state.bloomStrength,
+        0.4,
+        0.1
+      );
+      composer.addPass(bloomPass);
+
+      afterimagePass = new AfterimagePass(state.motionBlurAmount);
+      composer.addPass(afterimagePass);
+    } catch (err) {
+      console.warn("Post-processing initialization warning, falling back to direct WebGL render pass:", err);
+      composer = null;
+    }
+
+    /* ============================================================================
+     *  DOM CONTROLS & EVENT LISTENERS
+     * ========================================================================== */
+    const statFps = document.getElementById('stat-fps');
+    const statCam = document.getElementById('stat-cam');
+    const valFlow = document.getElementById('val-flow');
+    const valGravity = document.getElementById('val-gravity');
+    const valBloom = document.getElementById('val-bloom');
+    const valBlur = document.getElementById('val-blur');
+    const btnCamMode = document.getElementById('btn-camera-mode');
+    const btnShockwave = document.getElementById('btn-shockwave');
+
+    const panelHeader = document.getElementById('panel-header');
+    const controlsPanel = document.getElementById('controls-panel');
+    const togglePanelBtn = document.getElementById('toggle-panel-btn');
+    panelHeader.addEventListener('click', () => {
+      controlsPanel.classList.toggle('collapsed');
+      togglePanelBtn.textContent = controlsPanel.classList.contains('collapsed') ? '▲' : '▼';
+    });
+
+    document.getElementById('input-flow').addEventListener('input', (e) => {
+      state.flowSpeed = parseFloat(e.target.value);
+      valFlow.textContent = state.flowSpeed.toFixed(1) + 'x';
+    });
+
+    document.getElementById('input-gravity').addEventListener('input', (e) => {
+      state.gravityStrength = parseFloat(e.target.value);
+      valGravity.textContent = state.gravityStrength.toFixed(1) + 'x';
+    });
+
+    document.getElementById('input-bloom').addEventListener('input', (e) => {
+      state.bloomStrength = parseFloat(e.target.value);
+      valBloom.textContent = state.bloomStrength.toFixed(1);
+      if (bloomPass) bloomPass.strength = state.bloomStrength;
+    });
+
+    document.getElementById('input-blur').addEventListener('input', (e) => {
+      state.motionBlurAmount = parseFloat(e.target.value);
+      valBlur.textContent = state.motionBlurAmount.toFixed(2);
+      if (afterimagePass && afterimagePass.uniforms["damp"]) {
+        afterimagePass.uniforms["damp"].value = state.motionBlurAmount;
+      }
+    });
+
+    btnCamMode.addEventListener('click', () => {
+      if (state.cameraMode === 'cinematic') {
+        state.cameraMode = 'orbit';
+        btnCamMode.textContent = 'Cam: Interactive';
+        btnCamMode.classList.remove('active');
+        statCam.textContent = 'Orbit';
+        controls.enabled = true;
+      } else {
+        state.cameraMode = 'cinematic';
+        btnCamMode.textContent = 'Cam: Cinematic';
+        btnCamMode.classList.add('active');
+        statCam.textContent = 'Cinematic';
+        controls.enabled = false;
+      }
+    });
+
+    btnShockwave.addEventListener('click', () => {
+      triggerShockwave(new THREE.Vector3(
+        (Math.random() - 0.5) * 80,
+        (Math.random() - 0.5) * 80,
+        (Math.random() - 0.5) * 80
+      ));
+    });
+
+    /* ============================================================================
+     *  RAYCASTING & INTERACTIVE MOUSE GRAVITY WARP & SHOCKWAVES
+     * ========================================================================== */
+    const raycaster = new THREE.Raycaster();
+    const mouseScreen = new THREE.Vector2(-999, -999);
+    const planeFocus = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+
+    function updateMouseWorldPosition() {
+      raycaster.setFromCamera(mouseScreen, camera);
+      const targetPoint = new THREE.Vector3();
+      if (raycaster.ray.intersectPlane(planeFocus, targetPoint)) {
+        state.targetMouseWorld.copy(targetPoint);
+      } else {
+        state.targetMouseWorld.set(9999, 9999, 9999);
+      }
+    }
+
+    function triggerShockwave(worldPos) {
+      const sw = state.shockwaves[state.shockwaveIdx];
+      sw.pos.copy(worldPos);
+      sw.time = 0.0;
+      sw.intensity = 1.0;
+
+      state.shockwaveIdx = (state.shockwaveIdx + 1) % MAX_SHOCKWAVES;
+    }
+
+    window.addEventListener('pointermove', (e) => {
+      mouseScreen.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouseScreen.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      updateMouseWorldPosition();
+    });
+
+    window.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('#controls-panel') || e.target.closest('#stats-badge')) return;
+
+      raycaster.setFromCamera(mouseScreen, camera);
+      const clickPoint = new THREE.Vector3();
+      if (raycaster.ray.intersectPlane(planeFocus, clickPoint)) {
+        triggerShockwave(clickPoint);
+      }
+    });
+
+    /* ============================================================================
+     *  CINEMATIC CAMERA PATHING
+     * ========================================================================== */
+    const cameraMasterPoints = [
+      new THREE.Vector3(0, 40, 160),
+      new THREE.Vector3(130, 20, 40),
+      new THREE.Vector3(60, -70, -120),
+      new THREE.Vector3(-120, -20, -40),
+      new THREE.Vector3(-60, 80, 100),
+      new THREE.Vector3(0, 40, 160)
+    ];
+    const cameraSpline = new THREE.CatmullRomCurve3(cameraMasterPoints, false);
+
+    function getSafePointOnCurve(curve, u) {
+      const safeU = Math.min(0.9999, Math.max(0.0, ((u % 1.0) + 1.0) % 1.0));
+      return curve.getPointAt(safeU);
+    }
+
+    function updateCamera(delta, time) {
+      if (state.cameraMode === 'cinematic') {
+        const camProgress = (time * 0.025) % 1.0;
+        const targetCamPos = getSafePointOnCurve(cameraSpline, camProgress);
+        const lookAtTarget = getSafePointOnCurve(cameraSpline, camProgress + 0.08);
+
+        camera.position.lerp(targetCamPos, 0.04);
+        camera.lookAt(lookAtTarget);
+      } else {
+        controls.update();
+      }
+    }
+
+    /* ============================================================================
+     *  ANIMATION LOOP & PERFORMANCE METRICS
+     * ========================================================================== */
+    let lastTime = performance.now();
+    let frameCount = 0;
+    let fpsTimer = 0;
+
+    function animate(currentTime) {
+      requestAnimationFrame(animate);
+
+      const delta = Math.min((currentTime - lastTime) * 0.001, 0.1);
+      lastTime = currentTime;
+      state.time += delta;
+
+      // FPS Counter
+      frameCount++;
+      fpsTimer += delta;
+      if (fpsTimer >= 0.5) {
+        state.fps = Math.round(frameCount / fpsTimer);
+        statFps.textContent = state.fps;
+        frameCount = 0;
+        fpsTimer = 0;
+      }
+
+      // Smooth mouse lerp
+      state.mouseWorld.lerp(state.targetMouseWorld, 0.1);
+
+      // Update shockwaves
+      for (let i = 0; i < MAX_SHOCKWAVES; i++) {
+        state.shockwaves[i].time += delta;
+      }
+
+      // Sync uniforms
+      ribbonNetwork.uniforms.uTime.value = state.time;
+      ribbonNetwork.uniforms.uGravityStrength.value = state.gravityStrength;
+
+      particleSystem.uniforms.uTime.value = state.time;
+      particleSystem.uniforms.uFlowSpeed.value = state.flowSpeed;
+      particleSystem.uniforms.uGravityStrength.value = state.gravityStrength;
+
+      // Update camera
+      updateCamera(delta, state.time);
+
+      // Render scene with Composer or Fallback Direct Render
+      if (composer) {
+        composer.render();
+      } else {
+        renderer.render(scene, camera);
+      }
+    }
+
+    /* ============================================================================
+     *  WINDOW RESIZE HANDLER
+     * ========================================================================== */
+    window.addEventListener('resize', () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+
+      renderer.setSize(width, height);
+      if (composer) composer.setSize(width, height);
+      if (bloomPass) bloomPass.setSize(width, height);
+    });
+
+    // Start Simulation Loop
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>

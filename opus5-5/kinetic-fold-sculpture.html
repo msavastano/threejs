@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kinetic Fold Sculpture</title>
+<style>
+  :root {
+    --hud-bg: rgba(8, 10, 16, 0.62);
+    --hud-line: rgba(180, 200, 255, 0.14);
+    --hud-text: #d8def0;
+    --hud-dim: #7a849c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #05060a; }
+  body { font: 12px/1.5 ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace; color: var(--hud-text); }
+  canvas { display: block; }
+  #hud {
+    position: absolute; left: 16px; bottom: 16px; padding: 10px 14px; max-width: calc(100vw - 32px);
+    background: var(--hud-bg); border: 1px solid var(--hud-line); border-radius: 6px;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); pointer-events: none;
+  }
+  #hud h1 { margin: 0 0 2px; font-size: 12px; font-weight: 600; letter-spacing: 0.24em; color: #fff; }
+  #hud .row { color: var(--hud-dim); font-variant-numeric: tabular-nums; }
+  #hud .row b { color: var(--hud-text); font-weight: 500; }
+  #hud kbd { font: inherit; color: var(--hud-text); border: 1px solid var(--hud-line); border-radius: 3px; padding: 0 4px; }
+  .hidden { display: none !important; }
+  #fallback {
+    position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: var(--hud-dim);
+  }
+</style>
+</head>
+<body>
+<div id="hud">
+  <h1>KINETIC FOLD</h1>
+  <div class="row"><b id="stat-panels">0</b> hinged panels · <b id="stat-fps">--</b> fps · fold <b id="stat-open">0%</b></div>
+  <div class="row"><kbd>Space</kbd> pause · <kbd>H</kbd> hide UI · drag to orbit</div>
+</div>
+<div id="fallback" class="hidden">WebGL is not available in this browser, so the sculpture cannot be rendered.</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import GUI from 'three/addons/libs/lil-gui.module.min.js';
+
+/* ==========================================================================
+   CONFIG
+   ========================================================================== */
+
+const SQRT3_2 = Math.sqrt(3) / 2;
+
+// One entry per hinge depth (depth 0 is the fixed anchor triangle on each
+// polyhedron face, so levels[0] describes depth 1). Angles are hinge rotations
+// in radians about the hinge edge: 0 = coplanar with the parent panel,
+// +θ folds outward (towards the face normal), ±π tucks the panel back over / under its parent.
+const OUTER_LEVELS = [
+  // Petals: tile the face exactly, so at `closed` the outer shell is a sealed icosahedron.
+  { baseScale: 1.00, heightRatio: SQRT3_2, skew: 0.00, closed: 0.0,               open: 1.05, jitter: 0.30 },
+  // Fins: tucked underneath their petal when closed, swing out when open.
+  { baseScale: 0.94, heightRatio: 0.58,    skew: 0.12, closed: -(Math.PI - 0.12), open: 0.50, jitter: 0.35 },
+  // Tips: tucked under the fins (opposite sense, and steep enough that they never cross the petal).
+  { baseScale: 0.90, heightRatio: 0.78,    skew: 0.00, closed:  (Math.PI - 0.80), open: 0.75, jitter: 0.40 },
+];
+
+const CORE_LEVELS = [
+  { baseScale: 1.00, heightRatio: SQRT3_2, skew: 0.00, closed: 0.0,               open: 0.85, jitter: 0.25 },
+  { baseScale: 0.90, heightRatio: 0.60,    skew: -0.10, closed: -(Math.PI - 0.14), open: 0.55, jitter: 0.30 },
+];
+
+const CONFIG = {
+  maxPixelRatio: 1.75,
+  shadowMapSize: 2048,
+  floorY: -7,
+  pinMaxDepth: 2,
+  shells: [
+    { name: 'outer', polyhedron: () => new THREE.IcosahedronGeometry(1, 0), radius: 3.2,  levels: OUTER_LEVELS, palette: 'outer', seed: 0.0 },
+    { name: 'core',  polyhedron: () => new THREE.OctahedronGeometry(1, 0),  radius: 1.15, levels: CORE_LEVELS,  palette: 'core',  seed: 1.7, spin: new THREE.Vector3(-0.21, -0.29, 0.07) },
+  ],
+  motion: {
+    speed: 1.0,        // simulation time scale
+    amplitude: 1.0,    // strength of the per-panel undulation on top of the global breath
+    breathing: true,   // global open/close cycle; when off, `openness` is used
+    openness: 0.65,
+    explode: 0.35,     // how far each face lifts off along its normal
+    rotY: 0.11,        // master group spin (rad/s)
+    rotZ: 0.045,
+  },
+  material: {
+    roughness: 0.2,
+    metalness: 0.9,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.06,
+    transmission: 1.0,
+    thickness: 0.6,
+    ior: 1.45,
+    iridescence: 0.45,
+    envMapIntensity: 0.5,
+  },
+  lighting: { key: 4.0, core: 45, ambient: 0.35, coreShadows: false },
+  render: { bloom: true, bloomStrength: 0.45, edges: true, pins: true },
+};
+
+// Per-depth colours. With metalness 0.9 `color` acts as the metal's reflectance tint.
+const PALETTES = {
+  outer: [
+    { color: 0x1a1f2b, attenuation: 0x7fa8ff, edge: 0x4f7dff, iridescent: false },
+    { color: 0x353d4f, attenuation: 0x9fd0ff, edge: 0x6fb6ff, iridescent: false },
+    { color: 0x4a3c58, attenuation: 0xd6a8ff, edge: 0xb07dff, iridescent: true  },
+    { color: 0x8a6a40, attenuation: 0xffd29a, edge: 0xffb46a, iridescent: true  },
+  ],
+  core: [
+    { color: 0x2a1622, attenuation: 0xff7ac8, edge: 0xff4fb0, iridescent: false },
+    { color: 0x4a2840, attenuation: 0xffa0dc, edge: 0xff78c8, iridescent: true  },
+    { color: 0x6a3e56, attenuation: 0xffc0e8, edge: 0xffa0dc, iridescent: true  },
+  ],
+};
+
+/* ==========================================================================
+   Small math helpers
+   ========================================================================== */
+
+const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
+const smooth = (x) => x * x * (3 - 2 * x);
+const keyOf = (...nums) => nums.map((n) => n.toFixed(4)).join('|');
+
+/* ==========================================================================
+   Geometry library — shares identical geometries between panels.
+   ========================================================================== */
+
+class GeometryLibrary {
+  #map = new Map();
+  get(key, factory) {
+    let g = this.#map.get(key);
+    if (!g) { g = factory(); this.#map.set(key, g); }
+    return g;
+  }
+  get size() { return this.#map.size; }
+  dispose() { for (const g of this.#map.values()) g.dispose(); this.#map.clear(); }
+}
+
+/**
+ * Builds a flat triangle `THREE.ShapeGeometry` centred on its own centroid,
+ * and returns that centroid so the caller can offset the mesh back into place.
+ * This is what lets a hinge group rotate about an edge instead of the panel's centre.
+ */
+function centeredTriangle(lib, a, b, c) {
+  const cx = (a.x + b.x + c.x) / 3;
+  const cy = (a.y + b.y + c.y) / 3;
+  const pts = [a, b, c].map((p) => new THREE.Vector2(p.x - cx, p.y - cy));
+  const k = keyOf(...pts.flatMap((p) => [p.x, p.y]));
+  const geometry = lib.get('tri' + k, () => {
+    const g = new THREE.ShapeGeometry(new THREE.Shape(pts));
+    g.computeBoundingSphere();
+    return g;
+  });
+  const edges = lib.get('edge' + k, () => new THREE.EdgesGeometry(geometry));
+  return { geometry, edges, centroid: new THREE.Vector2(cx, cy) };
+}
+
+function pinGeometry(lib, length) {
+  return lib.get('pin' + keyOf(length), () => {
+    const g = new THREE.CylinderGeometry(0.022, 0.022, length, 10, 1);
+    g.rotateZ(Math.PI / 2); // cylinder axis -> local X, i.e. along the hinge edge
+    return g;
+  });
+}
+
+/* ==========================================================================
+   Materials
+   ========================================================================== */
+
+function createPanelMaterials(palette, supportsTransmission) {
+  const m = CONFIG.material;
+  return palette.map((p) => new THREE.MeshPhysicalMaterial({
+    color: p.color,
+    roughness: m.roughness,
+    metalness: m.metalness,
+    clearcoat: m.clearcoat,
+    clearcoatRoughness: m.clearcoatRoughness,
+    transmission: supportsTransmission ? m.transmission : 0,
+    thickness: m.thickness,
+    ior: m.ior,
+    attenuationColor: new THREE.Color(p.attenuation),
+    attenuationDistance: 2.5,
+    iridescence: p.iridescent ? m.iridescence : 0,
+    iridescenceIOR: 1.35,
+    envMapIntensity: m.envMapIntensity,
+    side: THREE.DoubleSide,
+    shadowSide: THREE.DoubleSide,
+  }));
+}
+
+function createEdgeMaterials(palette) {
+  return palette.map((p) => new THREE.LineBasicMaterial({
+    color: p.edge,
+    transparent: true,
+    opacity: 0.22,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+  }));
+}
+
+/* ==========================================================================
+   KineticShell — a polyhedron whose faces are hierarchies of hinged panels.
+   --------------------------------------------------------------------------
+   Scene graph per face:
+
+     faceGroup (at face centroid, +Z = face normal)
+       ├─ anchor mesh (fixed midpoint triangle)
+       └─ mount (at hinge-edge midpoint, +X along edge, +Y away from parent)
+            ├─ pin (hinge barrel, static)
+            └─ hinge (rotation.x = fold angle)
+                 ├─ mesh (offset by its centroid so the hinge edge lies on X)
+                 └─ mount → hinge → mesh ...   (recursively on the free edges)
+   ========================================================================== */
+
+class KineticShell {
+  constructor({ polyhedron, radius, levels, materials, edgeMaterials, pinMaterial, lib, seed = 0, spin = null, name }) {
+    this.name = name;
+    this.levels = levels;
+    this.materials = materials;
+    this.edgeMaterials = edgeMaterials;
+    this.pinMaterial = pinMaterial;
+    this.lib = lib;
+    this.seed = seed;
+    this.spin = spin;
+    this.group = new THREE.Group();
+    this.group.name = `shell:${name}`;
+    this.faces = [];
+    this.panels = [];   // parents are always pushed before their children (pre-order)
+    this.edgeLines = [];
+    this.pins = [];
+    this.#build(polyhedron, radius);
+    polyhedron.dispose();
+  }
+
+  #build(poly, radius) {
+    const pos = poly.getAttribute('position');
+    const faceCount = pos.count / 3; // PolyhedronGeometry is non-indexed
+    const A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3();
+    const e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+
+    for (let f = 0; f < faceCount; f++) {
+      A.fromBufferAttribute(pos, f * 3).multiplyScalar(radius);
+      B.fromBufferAttribute(pos, f * 3 + 1).multiplyScalar(radius);
+      C.fromBufferAttribute(pos, f * 3 + 2).multiplyScalar(radius);
+
+      const centroid = new THREE.Vector3().add(A).add(B).add(C).divideScalar(3);
+      const normal = e1.subVectors(B, A).clone().cross(e2.subVectors(C, A)).normalize();
+      if (normal.dot(centroid) < 0) normal.negate();
+
+      // Orthonormal face frame (right-handed, Z = outward normal).
+      const ex = new THREE.Vector3().subVectors(A, centroid).normalize();
+      const ey = new THREE.Vector3().crossVectors(normal, ex);
+      const faceGroup = new THREE.Group();
+      faceGroup.position.copy(centroid);
+      faceGroup.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(ex, ey, normal));
+      this.group.add(faceGroup);
+
+      const to2D = (p) => {
+        const d = p.clone().sub(centroid);
+        return new THREE.Vector2(d.dot(ex), d.dot(ey));
+      };
+      // Anchor = midpoint triangle; the three corner triangles become the first ring of hinged petals.
+      const verts = [
+        to2D(A.clone().add(B).multiplyScalar(0.5)),
+        to2D(B.clone().add(C).multiplyScalar(0.5)),
+        to2D(C.clone().add(A).multiplyScalar(0.5)),
+      ];
+      if ((verts[1].x - verts[0].x) * (verts[2].y - verts[0].y) - (verts[1].y - verts[0].y) * (verts[2].x - verts[0].x) < 0) {
+        verts.reverse(); // enforce CCW so "outward" is always to the right of each directed edge
+      }
+
+      const anchor = this.#makePanelMesh(verts[0], verts[1], verts[2], 0);
+      faceGroup.add(anchor);
+
+      this.faces.push({ group: faceGroup, base: centroid.clone(), normal: normal.clone(), index: f });
+      this.#attachChildren(faceGroup, verts, [[0, 1], [1, 2], [2, 0]], 1, { face: f, dir: normal.clone(), parent: null });
+    }
+  }
+
+  #makePanelMesh(a, b, c, depth) {
+    const { geometry, edges, centroid } = centeredTriangle(this.lib, a, b, c);
+    const mesh = new THREE.Mesh(geometry, this.materials[Math.min(depth, this.materials.length - 1)]);
+    // Offset the centred geometry so the hinge edge (y = 0 in hinge space) sits exactly on the parent's X axis.
+    mesh.position.set(centroid.x, centroid.y, 0);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const line = new THREE.LineSegments(edges, this.edgeMaterials[Math.min(depth, this.edgeMaterials.length - 1)]);
+    mesh.add(line);
+    this.edgeLines.push(line);
+    return mesh;
+  }
+
+  #attachChildren(parentGroup, verts, edgeList, depth, ctx) {
+    const spec = this.levels[depth - 1];
+    if (!spec) return;
+
+    for (const [i, j] of edgeList) {
+      const U = verts[i], V = verts[j];
+      const d = new THREE.Vector2().subVectors(V, U);
+      const L = d.length();
+      d.divideScalar(L);
+
+      // Mount: origin at the edge midpoint, local X along the edge (V→U), local Y pointing
+      // out of the parent (right of U→V for a CCW triangle), local Z = parent's Z.
+      const mount = new THREE.Group();
+      mount.position.set((U.x + V.x) / 2, (U.y + V.y) / 2, 0);
+      mount.rotation.z = Math.atan2(-d.y, -d.x);
+      parentGroup.add(mount);
+
+      const hinge = new THREE.Group();
+      mount.add(hinge);
+
+      const w = L * spec.baseScale;
+      const h = w * spec.heightRatio;
+      const P0 = new THREE.Vector2(-w / 2, 0);
+      const P1 = new THREE.Vector2(w / 2, 0);
+      const P2 = new THREE.Vector2(w * spec.skew, h);
+      hinge.add(this.#makePanelMesh(P0, P1, P2, depth));
+
+      if (depth <= CONFIG.pinMaxDepth) {
+        const pin = new THREE.Mesh(pinGeometry(this.lib, w * 0.86), this.pinMaterial);
+        mount.add(pin);
+        this.pins.push(pin);
+      }
+
+      const index = this.panels.length;
+      const record = {
+        hinge,
+        depth,
+        index,
+        face: ctx.face,
+        dir: ctx.dir,
+        parent: ctx.parent,
+        closed: spec.closed,
+        open: spec.open + spec.jitter * Math.sin(index * 2.39996 + this.seed * 3.1),
+        eff: 0,
+      };
+      hinge.rotation.x = record.closed;
+      this.panels.push(record);
+
+      this.#attachChildren(hinge, [P0, P1, P2], [[1, 2], [2, 0]], depth + 1, { ...ctx, parent: record });
+    }
+  }
+
+  /**
+   * Orchestrates the folding. Every panel's fold is a nested sin/cos function of time,
+   * its index, depth and face, plus a travelling wave sweeping across the shell,
+   * all riding on a global "breath" that opens and closes the whole structure.
+   */
+  update(t, breath, motion, sweep) {
+    const shellPhase = this.seed;
+
+    for (const face of this.faces) {
+      const f = face.index + shellPhase;
+      const lift = 0.5 + 0.5 * Math.sin(t * 0.53 + f * 0.7 + Math.cos(t * 0.21 + f * 1.3));
+      face.group.position.copy(face.base).addScaledVector(face.normal, motion.explode * breath * lift);
+    }
+
+    let openSum = 0;
+    for (const p of this.panels) {
+      const spatial = p.dir.dot(sweep);
+      const phase = p.index * 0.173 + p.depth * 0.9 + p.face * 0.41 + shellPhase;
+      const wave =
+        Math.sin(t * 0.9 + spatial * 2.6 - p.depth * 0.75 + 0.6 * Math.cos(t * 0.41 + phase)) *
+        Math.cos(t * 0.27 + phase * 0.5 + Math.sin(t * 0.19 + p.index * 0.05));
+
+      let o = clamp01(breath * 1.3 - 0.15 - p.depth * 0.07 + wave * 0.5 * motion.amplitude);
+      // Mechanical cascade: a child can only unfold once its parent has swung clear.
+      if (p.parent) o *= smooth(clamp01((p.parent.eff - 0.1) / 0.5));
+      p.eff = o;
+      openSum += o;
+
+      p.hinge.rotation.x = p.closed + (p.open - p.closed) * smooth(o);
+    }
+
+    if (this.spin) {
+      this.group.rotation.x = this.spin.x * t;
+      this.group.rotation.y = this.spin.y * t;
+      this.group.rotation.z = this.spin.z * t;
+    }
+    return openSum / Math.max(1, this.panels.length);
+  }
+}
+
+/* ==========================================================================
+   Scene setup
+   ========================================================================== */
+
+function createRenderer() {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, CONFIG.maxPixelRatio));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap; // crisp, lightly filtered edges
+  document.body.appendChild(renderer.domElement);
+  return renderer;
+}
+
+function createStage(renderer) {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x05060a);
+  scene.fog = new THREE.Fog(0x05060a, 22, 60);
+
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+  pmrem.dispose();
+
+  const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 200);
+  camera.position.set(11.5, 4, 16.5);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.06;
+  controls.minDistance = 6;
+  controls.maxDistance = 40;
+  controls.target.set(0, -0.5, 0);
+
+  const floor = new THREE.Mesh(
+    new THREE.CircleGeometry(60, 96),
+    new THREE.MeshStandardMaterial({ color: 0x0c0d12, roughness: 0.78, metalness: 0.2, envMapIntensity: 0.12 }),
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = CONFIG.floorY;
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  return { scene, camera, controls, floor };
+}
+
+function createLighting(scene, master) {
+  // Key: strong, warm, hard-edged shadows.
+  const key = new THREE.DirectionalLight(0xfff0dc, CONFIG.lighting.key);
+  key.position.set(8, 14, 7);
+  key.castShadow = true;
+  const s = key.shadow;
+  s.mapSize.set(CONFIG.shadowMapSize, CONFIG.shadowMapSize);
+  Object.assign(s.camera, { left: -9, right: 9, top: 9, bottom: -9, near: 2, far: 45 });
+  s.camera.updateProjectionMatrix();
+  s.bias = -0.0004;
+  s.normalBias = 0.02;
+  s.radius = 1;
+  scene.add(key, key.target);
+
+  // Accent rim from behind so silhouettes read against the dark background.
+  const rim = new THREE.DirectionalLight(0x6f9dff, 0.9);
+  rim.position.set(-9, 4, -10);
+  scene.add(rim);
+
+  // Ambient: subtle sky/ground hemisphere on top of the room environment map.
+  const ambient = new THREE.HemisphereLight(0x8ea4ff, 0x1a120a, CONFIG.lighting.ambient);
+  scene.add(ambient);
+
+  // Core: coloured point light buried at the heart of the sculpture.
+  const core = new THREE.PointLight(0xff3fd0, CONFIG.lighting.core, 0, 2);
+  core.castShadow = CONFIG.lighting.coreShadows;
+  core.shadow.mapSize.set(512, 512);
+  core.shadow.bias = -0.002;
+  core.shadow.camera.near = 0.1;
+  core.shadow.camera.far = 30;
+  master.add(core);
+
+  const glow = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.24, 3),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }),
+  );
+  master.add(glow);
+
+  const tmp = new THREE.Color();
+  return {
+    key, rim, ambient, core, glow,
+    update(t, breath) {
+      const hue = 0.86 + 0.12 * Math.sin(t * 0.23) + 0.05 * Math.sin(t * 0.71);
+      core.color.setHSL(hue % 1, 0.95, 0.58);
+      core.intensity = CONFIG.lighting.core * (0.55 + 0.6 * breath + 0.08 * Math.sin(t * 3.1));
+      tmp.copy(core.color).multiplyScalar(2.2 + 1.5 * breath);
+      glow.material.color.copy(tmp);
+      glow.scale.setScalar(0.85 + 0.35 * breath + 0.05 * Math.sin(t * 5.3));
+    },
+  };
+}
+
+function createPostprocessing(renderer, scene, camera) {
+  const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+  const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
+  const composer = new EffectComposer(renderer, target);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), CONFIG.render.bloomStrength, 0.4, 0.92);
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+  return { composer, bloom };
+}
+
+/* ==========================================================================
+   Bootstrap
+   ========================================================================== */
+
+function main() {
+  let renderer;
+  try {
+    renderer = createRenderer();
+  } catch (err) {
+    console.error(err);
+    document.getElementById('fallback').classList.remove('hidden');
+    document.getElementById('hud').classList.add('hidden');
+    return;
+  }
+
+  // Transmission needs WebGL2 (it samples a mip-mapped render target of the opaque scene).
+  const supportsTransmission = renderer.capabilities.isWebGL2;
+
+  const { scene, camera, controls } = createStage(renderer);
+  const master = new THREE.Group();
+  master.name = 'sculpture';
+  scene.add(master);
+
+  const lib = new GeometryLibrary();
+  const pinMaterial = new THREE.MeshStandardMaterial({ color: 0xaab3c6, metalness: 1, roughness: 0.28 });
+  const panelMaterials = [];
+  const edgeMaterials = [];
+
+  const shells = CONFIG.shells.map((def) => {
+    const mats = createPanelMaterials(PALETTES[def.palette], supportsTransmission);
+    const edges = createEdgeMaterials(PALETTES[def.palette]);
+    panelMaterials.push(...mats);
+    edgeMaterials.push(...edges);
+    const shell = new KineticShell({
+      name: def.name,
+      polyhedron: def.polyhedron(),
+      radius: def.radius,
+      levels: def.levels,
+      materials: mats,
+      edgeMaterials: edges,
+      pinMaterial,
+      lib,
+      seed: def.seed,
+      spin: def.spin ?? null,
+    });
+    master.add(shell.group);
+    return shell;
+  });
+
+  const lights = createLighting(scene, master);
+  const { composer, bloom } = createPostprocessing(renderer, scene, camera);
+
+  const panelCount = shells.reduce((n, s) => n + s.panels.length + s.faces.length, 0);
+  document.getElementById('stat-panels').textContent = panelCount;
+
+  /* ---------- GUI ---------- */
+  const gui = new GUI({ title: 'Sculpture' });
+  const M = CONFIG.motion, MAT = CONFIG.material, L = CONFIG.lighting, R = CONFIG.render;
+
+  const fMotion = gui.addFolder('Motion');
+  fMotion.add(M, 'speed', 0, 3, 0.01);
+  fMotion.add(M, 'amplitude', 0, 1.5, 0.01).name('undulation');
+  fMotion.add(M, 'breathing').name('auto breathe');
+  fMotion.add(M, 'openness', 0, 1, 0.01).name('openness (manual)');
+  fMotion.add(M, 'explode', 0, 1.2, 0.01);
+  fMotion.add(M, 'rotY', -0.5, 0.5, 0.005).name('spin Y');
+  fMotion.add(M, 'rotZ', -0.5, 0.5, 0.005).name('spin Z');
+
+  const applyMaterials = () => {
+    panelMaterials.forEach((m) => {
+      m.roughness = MAT.roughness;
+      m.metalness = MAT.metalness;
+      m.clearcoat = MAT.clearcoat;
+      m.transmission = supportsTransmission ? MAT.transmission : 0;
+      m.envMapIntensity = MAT.envMapIntensity;
+    });
+  };
+  // Remember which materials are iridescent so the slider can drive them back up from 0.
+  const iridescentMats = panelMaterials.filter((m) => m.iridescence > 0);
+  const fMat = gui.addFolder('Material');
+  fMat.add(MAT, 'metalness', 0, 1, 0.01).onChange(applyMaterials);
+  fMat.add(MAT, 'roughness', 0, 1, 0.01).onChange(applyMaterials);
+  fMat.add(MAT, 'clearcoat', 0, 1, 0.01).onChange(applyMaterials);
+  const transCtrl = fMat.add(MAT, 'transmission', 0, 1, 0.01).onChange(applyMaterials);
+  if (!supportsTransmission) transCtrl.name('transmission (n/a)').disable();
+  fMat.add(MAT, 'iridescence', 0, 1, 0.01).onChange((v) => iridescentMats.forEach((m) => { m.iridescence = v; }));
+  fMat.add(MAT, 'envMapIntensity', 0, 2, 0.01).name('environment').onChange(applyMaterials);
+  fMat.close();
+
+  const fLight = gui.addFolder('Lighting');
+  fLight.add(L, 'key', 0, 10, 0.1).name('key light').onChange((v) => { lights.key.intensity = v; });
+  fLight.add(L, 'core', 0, 200, 1).name('core light');
+  fLight.add(L, 'ambient', 0, 2, 0.01).onChange((v) => { lights.ambient.intensity = v; });
+  fLight.add(L, 'coreShadows').name('core shadows (slow)').onChange((v) => { lights.core.castShadow = v; });
+  fLight.close();
+
+  const fRender = gui.addFolder('Render');
+  fRender.add(R, 'bloom');
+  fRender.add(R, 'bloomStrength', 0, 2, 0.01).name('bloom strength').onChange((v) => { bloom.strength = v; });
+  fRender.add(R, 'edges').name('edge lines').onChange((v) => shells.forEach((s) => s.edgeLines.forEach((l) => { l.visible = v; })));
+  fRender.add(R, 'pins').name('hinge pins').onChange((v) => shells.forEach((s) => s.pins.forEach((p) => { p.visible = v; })));
+  fRender.close();
+  if (window.innerWidth < 720) gui.close();
+
+  /* ---------- Input ---------- */
+  let paused = false;
+  const hud = document.getElementById('hud');
+  window.addEventListener('keydown', (e) => {
+    if (e.target instanceof HTMLInputElement) return;
+    if (e.code === 'Space') { paused = !paused; e.preventDefault(); }
+    if (e.code === 'KeyH') { hud.classList.toggle('hidden'); gui.show(gui._hidden); }
+  });
+
+  function onResize() {
+    const w = window.innerWidth, h = window.innerHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, CONFIG.maxPixelRatio));
+    renderer.setSize(w, h);
+    composer.setPixelRatio(renderer.getPixelRatio());
+    composer.setSize(w, h);
+  }
+  window.addEventListener('resize', onResize);
+
+  /* ---------- Loop ---------- */
+  const clock = new THREE.Clock();
+  const sweep = new THREE.Vector3();
+  const fpsEl = document.getElementById('stat-fps');
+  const openEl = document.getElementById('stat-open');
+  let simTime = 0, fpsFrames = 0, fpsTime = 0;
+
+  function frame() {
+    const dt = Math.min(clock.getDelta(), 1 / 20); // clamp so tab switches don't cause jumps
+
+    if (!paused) {
+      simTime += dt * M.speed;
+      master.rotation.y += dt * M.speed * M.rotY;
+      master.rotation.z += dt * M.speed * M.rotZ;
+    }
+    const t = simTime;
+
+    // Global breath starts closed (-π/2 phase) and slowly blooms open.
+    const breath = M.breathing ? 0.5 + 0.5 * Math.sin(t * 0.19 - Math.PI / 2) : M.openness;
+    // Direction of the travelling fold wave, itself precessing.
+    sweep.set(Math.cos(t * 0.13), 0.6 * Math.sin(t * 0.087), Math.sin(t * 0.13)).normalize();
+
+    let open = 0;
+    for (const shell of shells) open += shell.update(t, breath, M, sweep);
+    lights.update(t, breath);
+    controls.update();
+
+    if (R.bloom) composer.render();
+    else renderer.render(scene, camera);
+
+    fpsFrames++; fpsTime += dt;
+    if (fpsTime >= 0.5) {
+      fpsEl.textContent = Math.round(fpsFrames / fpsTime);
+      openEl.textContent = Math.round((open / shells.length) * 100) + '%';
+      fpsFrames = 0; fpsTime = 0;
+    }
+  }
+  renderer.setAnimationLoop(frame);
+
+  /* ---------- Teardown ---------- */
+  window.addEventListener('pagehide', () => {
+    renderer.setAnimationLoop(null);
+    gui.destroy();
+    controls.dispose();
+    lib.dispose();
+    [...panelMaterials, ...edgeMaterials, pinMaterial].forEach((m) => m.dispose());
+    scene.environment?.dispose();
+    composer.dispose?.();
+    renderer.dispose();
+  });
+
+  // Handy for debugging from the console.
+  window.__sculpture = { scene, master, shells, CONFIG, renderer };
+}
+
+main();
+</script>
+</body>
+</html>

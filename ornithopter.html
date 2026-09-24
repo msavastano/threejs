@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Da Vinci Ornithopter</title>
+<style>
+  :root {
+    --accent-gold: #d4a24e;
+    --accent-sepia: #8a5a2b;
+    --bg-parchment: #e8dcc3;
+    --text-primary: #3b2a18;
+    --text-secondary: rgba(59, 42, 24, 0.65);
+    --border-color: rgba(90, 60, 30, 0.25);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: var(--bg-parchment);
+    font-family: Georgia, "Times New Roman", serif;
+    color: var(--text-primary);
+  }
+  #app { position: fixed; inset: 0; z-index: 1; }
+  canvas { display: block; }
+
+  #vignette {
+    position: fixed; inset: 0; pointer-events: none; z-index: 10;
+    background: radial-gradient(ellipse at center,
+      rgba(232,220,195,0) 40%, rgba(120,85,45,0.15) 75%, rgba(70,48,22,0.55) 100%);
+  }
+
+  .panel {
+    background: rgba(240, 230, 205, 0.72);
+    backdrop-filter: blur(6px) saturate(120%);
+    -webkit-backdrop-filter: blur(6px) saturate(120%);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 16px 20px;
+    pointer-events: auto;
+    box-shadow: 0 4px 20px rgba(80, 50, 20, 0.25), inset 0 0 40px rgba(200,170,110,0.15);
+  }
+
+  #title-panel {
+    position: fixed; top: 20px; left: 20px; z-index: 20;
+    pointer-events: none; width: 330px;
+  }
+  #title-panel h1 {
+    font-size: 21px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent-sepia); margin-bottom: 6px;
+  }
+  #title-panel p {
+    font-style: italic;
+    font-size: 13px; line-height: 1.5; color: var(--text-secondary);
+  }
+
+  #controls-panel {
+    position: fixed; bottom: 20px; left: 20px; z-index: 20; width: 300px;
+  }
+  #controls-panel h2 {
+    font-size: 12px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--accent-sepia); margin-bottom: 10px;
+  }
+  .ctrl-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .ctrl-row label { flex: 0 0 92px; font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; }
+  .ctrl-row input[type=range] {
+    flex: 1; appearance: none; -webkit-appearance: none; height: 3px;
+    background: rgba(90,60,30,0.35); border-radius: 2px; outline: none;
+  }
+  .ctrl-row input[type=range]::-webkit-slider-thumb {
+    appearance: none; -webkit-appearance: none; width: 13px; height: 13px; border-radius: 50%;
+    background: var(--accent-gold); border: 1px solid var(--accent-sepia); cursor: pointer;
+  }
+  .ctrl-row input[type=range]::-moz-range-thumb {
+    width: 13px; height: 13px; border-radius: 50%; background: var(--accent-gold);
+    border: 1px solid var(--accent-sepia); cursor: pointer;
+  }
+  .btn {
+    width: 100%; margin-top: 6px; padding: 9px 0; cursor: pointer;
+    font-family: Georgia, serif; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent-sepia); background: transparent;
+    border: 1px solid rgba(90,60,30,0.45); border-radius: 3px;
+    transition: all 0.25s ease;
+  }
+  .btn:hover { background: rgba(212,162,78,0.18); border-color: var(--accent-gold); }
+
+  #hint {
+    position: fixed; bottom: 20px; right: 20px; z-index: 20;
+    font-style: italic; font-size: 12px;
+    color: var(--text-secondary); pointer-events: none; text-align: right;
+  }
+
+  @media (max-width: 720px) {
+    #title-panel { width: auto; right: 20px; }
+    #controls-panel { left: 20px; right: 20px; width: auto; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="vignette"></div>
+
+<div id="title-panel" class="panel">
+  <h1>Ornithopter</h1>
+  <p>Study of a flying machine &mdash; Codex on the Flight of Birds, c. 1505. A transverse crankshaft drives the twin wings in beat through connecting rods, while the pilot works the pedals and hand cranks from the supine gondola.</p>
+</div>
+
+<div id="controls-panel" class="panel">
+  <h2>Mechanism</h2>
+  <div class="ctrl-row">
+    <label>Beat rate</label>
+    <input type="range" id="beat-rate" min="0" max="2.2" step="0.01" value="0.55" />
+  </div>
+  <div class="ctrl-row">
+    <label>Wing span</label>
+    <input type="range" id="wing-span" min="0.7" max="1.25" step="0.01" value="1" />
+  </div>
+  <div class="ctrl-row">
+    <label>Flap amplitude</label>
+    <input type="range" id="flap-amplitude" min="0.15" max="0.9" step="0.01" value="0.62" />
+  </div>
+  <button class="btn" id="toggle-view">Toggle X-ray View</button>
+</div>
+
+<div id="hint">Drag to orbit &middot; Scroll to zoom &middot; Right-drag to pan</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xe8dcc3);
+scene.fog = new THREE.Fog(0xe8dcc3, 60, 140);
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 300);
+camera.position.set(13, 7, 15);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.target.set(0, 4.3, 0);
+controls.minDistance = 6;
+controls.maxDistance = 45;
+
+scene.add(new THREE.HemisphereLight(0xfff2dc, 0x9c8a68, 0.85));
+const sun = new THREE.DirectionalLight(0xffe9c4, 2.2);
+sun.position.set(18, 26, 10);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -30; sun.shadow.camera.right = 30;
+sun.shadow.camera.top = 30; sun.shadow.camera.bottom = -30;
+sun.shadow.camera.far = 80;
+sun.shadow.bias = -0.0004;
+scene.add(sun);
+
+const woodMat = new THREE.MeshStandardMaterial({ color: 0x9a6a38, roughness: 0.82, metalness: 0.04 });
+const woodDarkMat = new THREE.MeshStandardMaterial({ color: 0x6e4522, roughness: 0.86, metalness: 0.04 });
+const ropeMat = new THREE.MeshStandardMaterial({ color: 0xc2a065, roughness: 0.95 });
+const canvasMat = new THREE.MeshStandardMaterial({ color: 0xe6d9b8, roughness: 0.9, side: THREE.DoubleSide });
+const ironMat = new THREE.MeshStandardMaterial({ color: 0x3a3632, roughness: 0.5, metalness: 0.75 });
+const leatherMat = new THREE.MeshStandardMaterial({ color: 0x7a4f2c, roughness: 0.88 });
+
+(function makeWoodTexture() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#9a6a38'; ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 46; i++) {
+    ctx.strokeStyle = `rgba(70,42,16,${0.05 + Math.random() * 0.09})`;
+    ctx.lineWidth = 1 + Math.random() * 2;
+    const y = Math.random() * 256;
+    ctx.beginPath(); ctx.moveTo(0, y);
+    for (let x = 0; x <= 256; x += 16) {
+      ctx.lineTo(x, y + Math.sin(x * 0.05 + i) * 2.5);
+    }
+    ctx.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  woodMat.map = t;
+})();
+
+(function makeLinenTexture() {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#e6d9b8'; ctx.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 128; i += 4) {
+    ctx.strokeStyle = 'rgba(120,100,60,0.07)'; ctx.beginPath();
+    ctx.moveTo(i, 0); ctx.lineTo(i, 128); ctx.stroke();
+    ctx.strokeStyle = 'rgba(120,100,60,0.05)'; ctx.beginPath();
+    ctx.moveTo(0, i); ctx.lineTo(128, i); ctx.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(3, 3);
+  canvasMat.map = t;
+})();
+
+const UP = new THREE.Vector3(0, 1, 0);
+const v = (x, y, z) => new THREE.Vector3(x, y, z);
+
+function beam(length, radius, mat = woodMat) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius * 0.92, length, 8), mat);
+  m.castShadow = m.receiveShadow = true;
+  return m;
+}
+
+function beamBetween(a, b, radius, mat = woodMat) {
+  const dir = new THREE.Vector3().subVectors(b, a);
+  const m = beam(dir.length(), radius, mat);
+  m.position.copy(a).add(b).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(UP, dir.normalize());
+  return m;
+}
+
+function plank(w, h, d, mat = woodDarkMat) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.castShadow = m.receiveShadow = true;
+  return m;
+}
+
+const BASE_Y = 2.3;
+const machine = new THREE.Group();
+machine.position.y = BASE_Y;
+scene.add(machine);
+
+const gondola = new THREE.Group();
+machine.add(gondola);
+
+for (let i = 0; i < 5; i++) {
+  const p = plank(2.6 - i * 0.28, 0.08, 1.5 - i * 0.14);
+  p.position.set(0, 1.1 - i * 0.34, 0);
+  p.rotation.x = 0.06 * (i - 2);
+  gondola.add(p);
+}
+for (const s of [-1, 1]) {
+  gondola.add(beamBetween(v(1.25, 1.1, s * 0.7), v(-1.35, 1.02, s * 0.66), 0.045, woodDarkMat));
+  const stanchion = beam(0.95, 0.035, woodDarkMat);
+  stanchion.position.set(s * 1.28, 0.62, 0);
+  gondola.add(stanchion);
+}
+
+const pilot = new THREE.Group();
+pilot.position.set(-0.15, 1.32, 0);
+gondola.add(pilot);
+const torso = plank(0.52, 0.14, 0.42, leatherMat);
+torso.rotation.z = -0.12;
+pilot.add(torso);
+const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 10), leatherMat);
+head.position.set(0.32, 0.06, 0);
+head.castShadow = true;
+pilot.add(head);
+for (const s of [-1, 1]) {
+  pilot.add(beamBetween(v(0, 0, s * 0.12), v(-0.42, -0.18, s * 0.16), 0.06, leatherMat));
+  pilot.add(beamBetween(v(-0.42, -0.18, s * 0.16), v(-0.78, -0.3, s * 0.18), 0.055, leatherMat));
+  pilot.add(beamBetween(v(0, 0.02, s * 0.2), v(0.18, 0.5, s * 0.26), 0.05, leatherMat));
+  pilot.add(beamBetween(v(0.18, 0.5, s * 0.26), v(0.34, 0.62, s * 0.3), 0.04, leatherMat));
+  const pedal = plank(0.16, 0.04, 0.12, ironMat);
+  pedal.position.set(-0.85, 1.02, s * 0.19);
+  gondola.add(pedal);
+}
+
+const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.46, 12), ironMat);
+drum.rotation.x = Math.PI / 2;
+drum.position.set(-0.85, 1.02, 0);
+drum.castShadow = true;
+gondola.add(drum);
+
+const PIVOT_X = 0.35;
+const SHAFT_Y = 2.05;
+
+const shaft = beam(3.4, 0.05, ironMat);
+shaft.material = ironMat;
+shaft.geometry.dispose();
+shaft.geometry = new THREE.CylinderGeometry(0.05, 0.05, 3.4, 10);
+shaft.rotation.order = 'XYZ';
+gondola.add(shaft);
+shaft.position.set(PIVOT_X, SHAFT_Y, 0);
+
+const flywheel = new THREE.Group();
+flywheel.position.set(PIVOT_X, SHAFT_Y, 0);
+const rim = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.032, 10, 32), ironMat);
+rim.castShadow = true;
+flywheel.add(rim);
+for (let i = 0; i < 3; i++) {
+  const spoke = beam(0.5, 0.022, ironMat);
+  spoke.rotation.z = i * Math.PI / 3;
+  flywheel.add(spoke);
+}
+gondola.add(flywheel);
+
+for (const off of [-0.235, 0.235]) {
+  gondola.add(beamBetween(v(PIVOT_X, SHAFT_Y + off, 0.04), v(-0.85, 1.02 + Math.sign(off) * 0.075, 0.04), 0.014, ropeMat));
+}
+
+const wingL = new THREE.Group();
+const wingR = new THREE.Group();
+wingL.position.set(PIVOT_X, 2.0, 0.55);
+wingR.position.set(PIVOT_X, 2.0, -0.55);
+gondola.add(wingL, wingR);
+
+function makeCrank() {
+  const g = new THREE.Group();
+  const web = plank(0.1, 0.26, 0.07, ironMat);
+  web.position.y = -0.1;
+  g.add(web);
+  const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.16, 8), ironMat);
+  pin.rotation.x = Math.PI / 2;
+  pin.position.set(0, -0.2, 0);
+  pin.castShadow = true;
+  g.add(pin);
+  return g;
+}
+const crankL = makeCrank();
+const crankR = makeCrank();
+crankL.position.set(PIVOT_X, SHAFT_Y, 0.55);
+crankR.position.set(PIVOT_X, SHAFT_Y, -0.55);
+gondola.add(crankL, crankR);
+
+const conrodGeo = new THREE.CylinderGeometry(0.028, 0.028, 1, 8);
+const conrodL = new THREE.Mesh(conrodGeo, ironMat);
+const conrodR = new THREE.Mesh(conrodGeo, ironMat);
+conrodL.castShadow = conrodR.castShadow = true;
+gondola.add(conrodL, conrodR);
+
+function buildWing(sign) {
+  const w = new THREE.Group();
+
+  const yoke = plank(0.3, 0.3, 0.12);
+  w.add(yoke);
+
+  const lever = beam(0.46, 0.035, ironMat);
+  lever.position.set(0, -0.21, 0);
+  w.add(lever);
+
+  const mainSpar = beam(5.2, 0.075);
+  mainSpar.rotation.z = Math.PI / 2;
+  mainSpar.position.x = sign * 2.6;
+  w.add(mainSpar);
+
+  let segStart = sign * 0.9;
+  for (let i = 0; i < 4; i++) {
+    const len = 1.05 - i * 0.18;
+    const seg = beam(len, 0.05 - i * 0.009);
+    seg.rotation.z = Math.PI / 2;
+    seg.position.set(segStart + sign * len / 2, -0.06, 0);
+    w.add(seg);
+    segStart += sign * (len - 0.06);
+  }
+
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0);
+  shape.quadraticCurveTo(1.6, -0.5, 3.6, -0.55);
+  shape.quadraticCurveTo(4.3, -0.35, 4.4, 0.05);
+  shape.quadraticCurveTo(3.2, 0.35, 1.2, 0.28);
+  shape.closePath();
+  const memGeo = new THREE.ShapeGeometry(shape, 24);
+  const mem = new THREE.Mesh(memGeo, canvasMat);
+  mem.rotation.x = -Math.PI / 2;
+  if (sign < 0) mem.scale.x = -1;
+  mem.position.set(sign * 0.9, -0.1, 0);
+  mem.receiveShadow = true;
+  w.add(mem);
+
+  for (let i = 1; i <= 3; i++) {
+    const batten = beam(1.0 - i * 0.18, 0.022, woodDarkMat);
+    batten.rotation.x = Math.PI / 2;
+    batten.position.set(sign * (1.6 + i * 0.75), -0.115, 0.02);
+    w.add(batten);
+  }
+
+  const tipMarker = new THREE.Object3D();
+  tipMarker.position.set(sign * 4.15, -0.08, 0);
+  w.add(tipMarker);
+  w.userData.tipMarker = tipMarker;
+
+  return w;
+}
+const wingMeshL = buildWing(1);
+const wingMeshR = buildWing(-1);
+wingL.add(wingMeshL);
+wingR.add(wingMeshR);
+
+const mast = beam(1.7, 0.045, woodDarkMat);
+mast.position.set(PIVOT_X, 2.85, 0);
+gondola.add(mast);
+gondola.add(beamBetween(v(PIVOT_X, 3.7, 0), v(4.5, 2.05, 0), 0.016, ropeMat));
+
+gondola.add(beamBetween(v(1.3, 1.15, 0), v(4.5, 2.05, 0), 0.05, woodDarkMat));
+for (const off of [-0.4, 0.4]) {
+  gondola.add(beamBetween(v(2.9, 1.6, 0), v(3.3, 1.6, off), 0.03, woodDarkMat));
+}
+
+const tailFin = plank(0.06, 0.7, 1.1, canvasMat);
+tailFin.position.set(4.5, 2.4, 0);
+gondola.add(tailFin);
+const tailPlane = plank(0.9, 0.05, 1.4, canvasMat);
+tailPlane.position.set(4.5, 2.05, 0);
+gondola.add(tailPlane);
+
+const mastTopMarker = new THREE.Object3D();
+mastTopMarker.position.set(PIVOT_X, 3.7, 0);
+gondola.add(mastTopMarker);
+const tailMarker = new THREE.Object3D();
+tailMarker.position.set(4.5, 2.1, 0);
+gondola.add(tailMarker);
+
+const ropes = [];
+function makeRope() {
+  const r = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 1, 6), ropeMat);
+  machine.add(r);
+  ropes.push(r);
+  return r;
+}
+makeRope(); makeRope(); makeRope(); makeRope();
+
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(90, 48),
+  new THREE.MeshStandardMaterial({ color: 0xcbb98d, roughness: 1 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+(function drawCompassRose() {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 512;
+  const ctx = c.getContext('2d');
+  ctx.strokeStyle = 'rgba(90,60,30,0.5)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(256, 256, 180, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(256, 256, 120, 0, Math.PI * 2); ctx.stroke();
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 16; i++) {
+    const a = i * Math.PI / 8;
+    ctx.beginPath();
+    ctx.moveTo(256 + Math.cos(a) * 120, 256 + Math.sin(a) * 120);
+    ctx.lineTo(256 + Math.cos(a) * 180, 256 + Math.sin(a) * 180);
+    ctx.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  const rose = new THREE.Mesh(
+    new THREE.PlaneGeometry(26, 26),
+    new THREE.MeshBasicMaterial({ map: t, transparent: true, opacity: 0.55 })
+  );
+  rose.rotation.x = -Math.PI / 2;
+  rose.position.y = 0.02;
+  scene.add(rose);
+})();
+
+const params = { beatRate: 0.55, wingSpanScale: 1, flapAmplitude: 0.62, xray: false };
+
+document.getElementById('beat-rate').addEventListener('input', e => {
+  params.beatRate = parseFloat(e.target.value);
+});
+document.getElementById('wing-span').addEventListener('input', e => {
+  params.wingSpanScale = parseFloat(e.target.value);
+});
+document.getElementById('flap-amplitude').addEventListener('input', e => {
+  params.flapAmplitude = parseFloat(e.target.value);
+});
+document.getElementById('toggle-view').addEventListener('click', () => {
+  params.xray = !params.xray;
+  for (const m of [canvasMat, woodMat, woodDarkMat]) {
+    m.transparent = params.xray;
+    m.opacity = params.xray ? (m === canvasMat ? 0.25 : 0.3) : 1;
+    m.needsUpdate = true;
+  }
+});
+
+const clock = new THREE.Clock();
+let phase = 0;
+let elapsed = 0;
+
+const _pin = new THREE.Vector3();
+const _tip = new THREE.Vector3();
+const _mid = new THREE.Vector3();
+const _dir = new THREE.Vector3();
+
+function solveConrod(conrod, crank, wing) {
+  _pin.set(0, -0.2, 0).applyMatrix4(crank.matrixWorld);
+  _tip.set(0, -0.42, 0).applyMatrix4(wing.matrixWorld);
+  _mid.addVectors(_pin, _tip).multiplyScalar(0.5);
+  conrod.position.copy(_mid);
+  _dir.subVectors(_tip, _pin);
+  const L = _dir.length();
+  conrod.scale.y = L;
+  conrod.quaternion.setFromUnitVectors(UP, _dir.normalize());
+}
+
+function placeRope(mesh, a, b) {
+  _mid.addVectors(a, b).multiplyScalar(0.5);
+  mesh.position.copy(_mid);
+  _dir.subVectors(b, a);
+  const L = Math.max(_dir.length(), 0.001);
+  mesh.scale.set(1, L, 1);
+  mesh.quaternion.setFromUnitVectors(UP, _dir.normalize());
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  elapsed += dt;
+  phase += dt * params.beatRate * Math.PI * 2;
+
+  const flap = Math.sin(phase) * params.flapAmplitude;
+  wingL.rotation.z = flap;
+  wingR.rotation.z = -flap;
+
+  const s = params.wingSpanScale;
+  wingMeshL.scale.x = s;
+  wingMeshR.scale.x = s;
+
+  shaft.rotation.set(Math.PI / 2, phase, 0);
+  flywheel.rotation.z = phase;
+  crankL.rotation.z = phase + Math.PI;
+  crankR.rotation.z = phase;
+
+  machine.updateWorldMatrix(true, true);
+  solveConrod(conrodL, crankL, wingL);
+  solveConrod(conrodR, crankR, wingR);
+
+  mastTopMarker.getWorldPosition(_pin);
+  wingMeshL.userData.tipMarker.getWorldPosition(_tip);
+  placeRope(ropes[0], _pin, _tip);
+  wingMeshR.userData.tipMarker.getWorldPosition(_tip);
+  placeRope(ropes[1], _pin, _tip);
+  tailMarker.getWorldPosition(_pin);
+  wingMeshL.userData.tipMarker.getWorldPosition(_tip);
+  placeRope(ropes[2], _pin, _tip);
+  wingMeshR.userData.tipMarker.getWorldPosition(_tip);
+  placeRope(ropes[3], _pin, _tip);
+
+  const lift = Math.max(0, params.beatRate - 0.35);
+  const rise = Math.min(lift * 1.6, 2.2);
+  machine.position.y = BASE_Y + rise + Math.sin(elapsed * 1.4) * lift * 0.18;
+  machine.rotation.z = Math.sin(elapsed * 0.9) * lift * 0.045;
+  machine.rotation.x = Math.sin(elapsed * 0.63) * lift * 0.035;
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

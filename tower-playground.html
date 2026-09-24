@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#171c20">
+<title>Fall Lab — A demolition playground</title>
+<style>
+:root{color-scheme:dark;--ink:#eeece5;--muted:#949e9f;--orange:#f59656;--line:#ffffff16;--panel:#20272aee;font-family:Arial,Helvetica,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:#171c20;color:var(--ink);overflow:hidden}button,input{font:inherit}button{cursor:pointer}button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--orange);outline-offset:5px}#scene{position:fixed;inset:0}#scene canvas{display:block;width:100%;height:100%;touch-action:none}header{position:absolute;top:28px;left:34px;right:34px;display:flex;justify-content:space-between;align-items:center;pointer-events:none}.brand{display:flex;align-items:center;gap:12px;font-size:18px;font-weight:800;letter-spacing:2px}.logo{width:30px;height:30px;display:grid;grid-template-columns:repeat(2,1fr);gap:3px;transform:rotate(-8deg)}.logo i{background:var(--orange);border-radius:1px}.logo i:last-child{transform:translate(3px,3px) rotate(15deg)}.header-right{display:flex;gap:22px;align-items:center}.eyebrow{font:10px monospace;letter-spacing:2px;text-transform:uppercase;color:var(--muted)}.live{border:1px solid var(--line);padding:9px 12px;border-radius:30px;font:10px monospace;letter-spacing:1px;color:#c5d4c7}.live::before{content:'';display:inline-block;width:5px;height:5px;border-radius:50%;background:#abd4b7;margin-right:8px;box-shadow:0 0 12px #abd4b755}.intro{position:absolute;left:34px;top:124px;pointer-events:none}.intro .eyebrow{color:var(--orange)}h1{font-size:clamp(38px,4.5vw,68px);font-weight:500;line-height:1.02;letter-spacing:-3px;margin:17px 0}h1 em{font-family:Georgia,serif;font-weight:400;color:#e2bd97}.intro p{font-size:12px;color:var(--muted);line-height:1.7;margin:19px 0}.panel{position:absolute;right:28px;top:50%;transform:translateY(-45%);width:274px;padding:23px;background:var(--panel);border:1px solid #ffffff13;border-radius:13px;box-shadow:0 15px 60px #0002;backdrop-filter:blur(18px)}.panel-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:23px}.panel-top h2{font-size:14px;font-weight:500;margin:0}.panel-top span{font:10px monospace;color:var(--orange)}.field{border-top:1px solid var(--line);padding-top:22px;margin-top:20px}.field label{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#d6dbd9}.field output{font:12px monospace;color:var(--orange)}input[type=range]{appearance:none;width:100%;height:3px;background:linear-gradient(to right,var(--orange) var(--fill,40%),#ffffff18 var(--fill,40%));margin:22px 0 13px;border-radius:2px;cursor:pointer}input[type=range]::-webkit-slider-thumb{appearance:none;background:#f3e7d9;border:3px solid #b97949;width:13px;height:13px;border-radius:50%}input[type=range]::-moz-range-thumb{background:#f3e7d9;border:3px solid #b97949;width:8px;height:8px;border-radius:50%}.range-labels{display:flex;justify-content:space-between;color:#7f8b8f;font:9px monospace}.segmented{display:flex;gap:5px;margin-top:16px}.segmented button{flex:1;border:1px solid var(--line);border-radius:4px;background:none;color:var(--muted);font-size:10px;padding:7px 2px}.segmented button.active{background:#f5965616;color:var(--orange);border-color:#f5965644}.reset{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;background:var(--orange);border:0;color:#30261f;padding:14px;border-radius:6px;font-size:12px;font-weight:700;margin-top:24px;transition:background .2s,transform .2s}.reset:hover{background:#ffb27c;transform:translateY(-1px)}.secondary{display:flex;gap:8px;margin-top:9px}.secondary button{width:50%;padding:10px 4px;background:none;color:#b7c0bf;border:1px solid var(--line);border-radius:5px;font-size:10px}.secondary button:hover{background:#ffffff09}.panel-foot{display:flex;justify-content:space-between;color:#778489;font:9px monospace;margin-top:20px}.stats{position:absolute;bottom:81px;left:34px;display:flex;gap:0;pointer-events:none}.stat{padding:0 26px;border-right:1px solid #ffffff20}.stat:first-child{padding-left:0}.stat:last-child{border:none}.stat strong{display:block;font-size:23px;font-weight:400;font-variant-numeric:tabular-nums}.stat span{display:block;font:9px monospace;color:var(--muted);letter-spacing:1px;margin-top:8px}.stat small{font:11px monospace;color:#758888;margin-left:4px}footer{position:absolute;bottom:24px;left:34px;right:34px;border-top:1px solid var(--line);padding-top:17px;display:flex;align-items:center;justify-content:space-between;color:#899598;font:10px monospace}.hints{display:flex;gap:23px}.hints b{font-weight:400;color:#d3d8d3}.key{display:inline-grid;place-items:center;border:1px solid #ffffff23;border-radius:3px;min-width:18px;height:17px;margin-right:6px;font:9px monospace}.footer-right{color:#647478;font:9px monospace;letter-spacing:1px}.status{position:absolute;top:93px;right:34px;font:10px monospace;color:#95a9a4;letter-spacing:1px}.status::before{content:'◈';color:var(--orange);margin-right:7px}#reticle{position:fixed;display:none;width:26px;height:26px;border:1px solid #ffbf81;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;box-shadow:0 0 16px #ffad4f33}#reticle::before,#reticle::after{content:'';position:absolute;background:#ffd5a3;left:50%;top:50%;transform:translate(-50%,-50%)}#reticle::before{width:7px;height:1px}#reticle::after{width:1px;height:7px}#toast{position:absolute;bottom:153px;left:50%;transform:translateX(-50%);background:#232c2aee;border:1px solid #ffffff15;padding:10px 18px;border-radius:25px;font:11px monospace;color:#e4c4a1;opacity:0;transition:opacity .3s;pointer-events:none;white-space:nowrap}#loading{position:fixed;inset:0;display:grid;place-content:center;text-align:center;background:#171c20;z-index:10;transition:opacity .4s}#loading.hidden{opacity:0;pointer-events:none}#loading strong{font-size:28px;font-weight:500;letter-spacing:-1px}#loading p{color:#9ba4a3;font:12px monospace;line-height:1.8;max-width:400px;margin:18px 28px}.spinner{height:2px;width:140px;margin:8px auto;background:#ffffff12;overflow:hidden}.spinner::after{content:'';display:block;width:60px;height:2px;background:var(--orange);animation:load 1s infinite alternate}@keyframes load{to{transform:translateX(80px)}}@media(max-width:900px){.intro{top:105px}.intro p{max-width:160px}.panel{width:235px;right:18px;padding:18px}.header-right .eyebrow{display:none}.footer-right{display:none}.stats{gap:0}.stat{padding:0 16px}}@media(max-width:620px){header{top:20px;left:20px;right:20px}.brand{font-size:14px}.live{font-size:8px;padding:7px 9px}.intro{left:20px;top:76px}.intro h1{font-size:36px;letter-spacing:-1.5px;margin:9px 0}.intro p{display:none}.intro .eyebrow{font-size:8px}.status{top:76px;right:20px;font-size:8px}.panel{top:auto;bottom:73px;right:12px;left:12px;width:auto;transform:none;display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;padding:13px 16px}.panel-top{grid-column:1/-1;margin:0}.panel-top h2{font-size:12px}.field{margin:0;padding-top:10px}.field label{font-size:10px}input[type=range]{margin:15px 0 9px}.segmented{margin-top:10px}.segmented button{padding:5px 2px;font-size:9px}.reset{margin:0;padding:10px}.secondary{margin:0;gap:5px}.secondary button{font-size:9px;padding:7px 3px}.panel-foot{display:none}.stats{bottom:280px;left:20px}.stat{padding:0 13px}.stat strong{font-size:18px}.stat span{font-size:8px}footer{left:20px;right:20px;bottom:15px;padding-top:12px}.hints{gap:12px;font-size:8px}.hints .keyboard{display:none}#toast{bottom:340px;font-size:9px}}
+#loading.hidden{visibility:hidden}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head>
+<body>
+<main id="scene" aria-label="Interactive 3D demolition arena"></main>
+<header><div class="brand"><span class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span>FALL / LAB</div><div class="header-right"><span class="eyebrow">An experiment in controlled chaos</span><span class="live">PHYSICS PLAYGROUND</span></div></header>
+<section class="intro"><div class="eyebrow">Experiment 001 / The tower</div><h1>Built to<br><em>break.</em></h1><p>A thousand pieces. One chain reaction.<br>Pick a point. Let gravity do the rest.</p></section>
+<div id="status" class="status" aria-live="polite">TOWER READY</div>
+<aside class="panel" aria-label="Simulation controls">
+ <div class="panel-top"><h2>Take control</h2><span>01 — 03</span></div>
+ <div class="field"><label for="strength">Explosion strength <output id="strengthValue">55%</output></label><input id="strength" type="range" min="5" max="100" value="55" style="--fill:52.6%"><div class="range-labels"><span>PRECISE</span><span>DEVASTATING</span></div></div>
+ <div class="field"><label for="gravity">Gravity <output id="gravityValue">9.81 m/s²</output></label><input id="gravity" type="range" min="0" max="20" value="9.81" step="0.01" style="--fill:49.05%"><div class="range-labels"><span>0 m/s²</span><span>20 m/s²</span></div><div class="segmented" aria-label="Gravity presets"><button data-gravity="1.62">Moon</button><button class="active" data-gravity="9.81" aria-pressed="true">Earth</button><button data-gravity="20">Heavy</button></div></div>
+ <button id="reset" class="reset"><span aria-hidden="true">↻</span> Rebuild tower <span style="opacity:.5;font:10px monospace">R</span></button>
+ <div class="secondary"><button id="pause" aria-pressed="false">Ⅱ Pause</button><button id="camera">↗ Reset view</button></div>
+ <div class="panel-foot"><span>RAPIER / RIGID BODY</span><span>● INSTANCED</span></div>
+</aside>
+<div class="stats" aria-label="Live simulation statistics"><div class="stat"><strong id="objects">1,000</strong><span>BLOCKS</span></div><div class="stat"><strong id="awake">0</strong><span>ACTIVE BODIES</span></div><div class="stat"><strong><span id="fps" style="display:inline;font:inherit;color:inherit;letter-spacing:0">—</span><small>FPS</small></strong><span>PERFORMANCE</span></div></div>
+<footer><div class="hints"><span><b>Click</b> to explode</span><span><b>Drag</b> to orbit</span><span><b>Scroll</b> to zoom</span><span class="keyboard"><span class="key">Space</span>pause</span></div><span class="footer-right">PROCEDURAL STRUCTURE · REAL-TIME DESTRUCTION</span></footer>
+<div id="reticle" aria-hidden="true"></div><div id="toast" role="status"></div>
+<div id="loading"><strong>Constructing the inevitable.</strong><p id="loadMessage">Loading the physics engine and assembling 1,000 blocks…</p><div class="spinner"></div></div>
+<script type="module">
+// Everything is generated here. The only external resources are pinned engine modules.
+const $ = id => document.getElementById(id);
+try {
+ const [THREE, { OrbitControls }, { RoundedBoxGeometry }] = await Promise.all([
+  import('three'), import('three/addons/controls/OrbitControls.js'),
+  import('three/addons/geometries/RoundedBoxGeometry.js')
+ ]);
+ const COUNT = 1000, COURSES = 25, SEGMENTS = 40, RADIUS = 6.6;
+ const BW = .91, BH = .72, BD = 1.3, STEP = 1 / 60;
+ const scene = new THREE.Scene();
+ scene.background = new THREE.Color('#171e22');
+ scene.fog = new THREE.FogExp2('#171e22', .010);
+ const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+ renderer.setPixelRatio(Math.min(devicePixelRatio, 1.6));
+ renderer.setSize(innerWidth, innerHeight);
+ renderer.shadowMap.enabled = true;
+ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+ renderer.toneMapping = THREE.ACESFilmicToneMapping;
+ renderer.toneMappingExposure = 1.18;
+ $('scene').appendChild(renderer.domElement);
+ renderer.domElement.setAttribute('aria-label', 'Drag to orbit; click a block to detonate.');
+ const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, .1, 240);
+ const controls = new OrbitControls(camera, renderer.domElement);
+ controls.enableDamping = true; controls.dampingFactor = .065;
+ controls.minDistance = 13; controls.maxDistance = 85;
+ controls.maxPolarAngle = Math.PI / 2 - .04; controls.minPolarAngle = .15;
+ controls.enablePan = false; controls.target.set(0, 7, 0);
+ function resetView() { camera.position.set(32, 25, 38); controls.target.set(0, 7, 0); controls.update(); }
+ resetView();
+ scene.add(new THREE.HemisphereLight('#d4e7f4', '#484338', 2.0));
+ const sun = new THREE.DirectionalLight('#ffdfb2', 3.3);
+ sun.position.set(-16, 33, 13); sun.castShadow = true;
+ sun.shadow.mapSize.set(2048, 2048);
+ Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30, near: 1, far: 90 });
+ sun.shadow.normalBias = .035; sun.shadow.bias = -.00012;
+ scene.add(sun);
+ const rim = new THREE.DirectionalLight('#b7d3ef', 1.6); rim.position.set(8, 20, -23); scene.add(rim);
+ const mat = (color, roughness = .85, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
+ function box(w,h,d,material,x,y,z) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material);
+  mesh.position.set(x,y,z); mesh.receiveShadow = true; scene.add(mesh); return mesh;
+ }
+ box(240, .6, 240, mat('#202b2e'), 0, -.6, 0);
+ const ground = box(49, .3, 49, mat('#354144'), 0, -.15, 0);
+ const grid = new THREE.GridHelper(48, 48, '#71807c', '#566568');
+ grid.position.y = .006; grid.material.transparent = true; grid.material.opacity = .18; scene.add(grid);
+ const wallMaterial = mat('#465255');
+ for (const [w,d,x,z] of [[49, .6, 0, -24], [49, .6, 0, 24], [.6, 48, -24, 0], [.6, 48, 24, 0]]) {
+  const wall = box(w,1.6,d,wallMaterial,x,.8,z); wall.castShadow = true;
+  box(w,.045,d,mat('#8c9388'),x,1.62,z);
+ }
+ // Arena markings are vector geometry, without texture or asset downloads.
+ const lineMat = new THREE.LineBasicMaterial({ color: '#bb9167', transparent: true, opacity: .5 });
+ for (const radius of [8.5, 9, 19]) {
+  const points = Array.from({length:129},(_,i) => new THREE.Vector3(Math.cos(i/128*Math.PI*2)*radius,.012,Math.sin(i/128*Math.PI*2)*radius));
+  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),lineMat));
+ }
+ const markerMat = mat('#ca8753');
+ for(let i=0;i<4;i++) {
+  const a=i*Math.PI/2;
+  const marker=box(.08,.02,1.5,markerMat,Math.sin(a)*10.6,.02,Math.cos(a)*10.6); marker.rotation.y=a;
+ }
+ const blockGeometry = new RoundedBoxGeometry(BW, BH, BD, 1, .025);
+ const blocks = new THREE.InstancedMesh(blockGeometry,mat('#ffffff',.82),COUNT);
+ blocks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+ blocks.castShadow = true; blocks.receiveShadow = true;
+ // Debris can move outside its original tower bounds; retain one draw call without incorrect culling.
+ blocks.frustumCulled = false; scene.add(blocks);
+ const dummy = new THREE.Object3D(), color = new THREE.Color();
+ const palette = ['#b7b5a3','#c8c5b0','#d1cdb7','#afaf9e','#c1bcaa','#d6ceba'];
+ const initial = [];
+ for(let layer=0;layer<COURSES;layer++) for(let j=0;j<SEGMENTS;j++) {
+  const a=(j+(layer%2)*.5)/SEGMENTS*Math.PI*2;
+  dummy.position.set(Math.sin(a)*RADIUS, BH/2 + layer*(BH+.003)+.008, Math.cos(a)*RADIUS);
+  dummy.rotation.set(0,a,0); dummy.updateMatrix();
+  const i=layer*SEGMENTS+j; blocks.setMatrixAt(i,dummy.matrix);
+  const accent = layer === 5 || layer === 6 || layer === 17 || layer === 18 || layer === 24;
+  color.set(accent ? ['#ad754e','#bc8258','#ca966b'][(j*7+layer)%3] : palette[(j*13+layer*7)%palette.length]);
+  blocks.setColorAt(i,color);
+  initial.push({position:dummy.position.clone(),rotation:dummy.quaternion.clone()});
+ }
+ blocks.instanceMatrix.needsUpdate = true; blocks.instanceColor.needsUpdate = true;
+ // The worker is embedded in this file. Transferable buffers keep 1,000-body
+ // collision solving off the rendering thread without allocating per-frame messages.
+ function physicsThread() {
+  let RAPIER,world,bodies=[],generation=0,accumulator=0,activated=false;
+  const ready=import('https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.17.3/+esm').then(async module=>{RAPIER=module.default;await RAPIER.init();});
+  self.onmessage=async({data:m})=>{
+   try {
+    await ready;
+    if(m.type==='build') {
+     generation=m.generation;accumulator=0;activated=false;
+     if(world)world.free();world=new RAPIER.World({x:0,y:-m.gravity,z:0});
+     world.timestep=1/60;world.numSolverIterations=4;
+     world.createCollider(RAPIER.ColliderDesc.cuboid(120,.3,120).setTranslation(0,-.3,0).setFriction(.85));
+     for(const [hx,hz,x,z] of [[24.5,.3,0,-24],[24.5,.3,0,24],[.3,24,-24,0],[.3,24,24,0]])
+      world.createCollider(RAPIER.ColliderDesc.cuboid(hx,.8,hz).setTranslation(x,.8,z).setFriction(.75).setRestitution(.12));
+     bodies=m.initial.map(({p,q})=>{
+      const b=world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(p.x,p.y,p.z).setRotation(q).setLinearDamping(.09).setAngularDamping(.16).setCanSleep(true));
+      world.createCollider(RAPIER.ColliderDesc.cuboid(m.width/2,m.height/2,m.depth/2).setDensity(2).setFriction(.72).setRestitution(.07),b);b.sleep();return b;
+     });
+     self.postMessage({type:'ready',generation});return;
+    }
+    if(m.generation!==generation)return;
+    if(m.type==='gravity') {world.gravity.y=-m.value;if(activated)bodies.forEach(b=>b.wakeUp());}
+    if(m.type==='explode') {
+     if(!activated){bodies.forEach(b=>b.wakeUp());activated=true;}
+     const radius=2.8+m.power*5.5;let affected=0;
+     for(const b of bodies){
+      const p=b.translation(),dx=p.x-m.point.x,dy=p.y-m.point.y,dz=p.z-m.point.z,distance=Math.hypot(dx,dy,dz);
+      if(distance>radius)continue;
+      const impulse=(4+m.power*30)*Math.pow(1-distance/radius,1.35)*b.mass(),inv=1/Math.max(distance,.15);
+      b.enableCcd(true);
+      b.applyImpulse({x:dx*inv*impulse,y:(dy*inv+.38)*impulse,z:dz*inv*impulse},true);
+      b.applyTorqueImpulse({x:(Math.random()-.5)*impulse*.24,y:(Math.random()-.5)*impulse*.24,z:(Math.random()-.5)*impulse*.24},true);affected++;
+     }
+     self.postMessage({type:'blast',generation,affected});
+    }
+    if(m.type==='step') {
+     accumulator+=Math.min(m.dt,.05);let steps=0;
+     while(accumulator>=1/60&&steps<3){world.step();accumulator-=1/60;steps++;}
+     if(steps===3)accumulator=Math.min(accumulator,1/60);
+     const out=m.buffer;let active=0;
+     for(let i=0;i<bodies.length;i++){
+      const b=bodies[i],p=b.translation(),q=b.rotation(),offset=i*7;
+      out[offset]=p.x;out[offset+1]=p.y;out[offset+2]=p.z;out[offset+3]=q.x;out[offset+4]=q.y;out[offset+5]=q.z;out[offset+6]=q.w;
+      if(!b.isSleeping())active++;
+      if(b.isCcdEnabled()){const v=b.linvel();if(v.x*v.x+v.y*v.y+v.z*v.z<100)b.enableCcd(false);}
+     }
+     self.postMessage({type:'frame',generation,buffer:out,active},[out.buffer]);
+    }
+   } catch(error) {self.postMessage({type:'error',message:error.message});}
+  };
+ }
+ const workerURL=URL.createObjectURL(new Blob(['('+physicsThread.toString()+')()'],{type:'text/javascript'}));
+ const physics=new Worker(workerURL);URL.revokeObjectURL(workerURL);
+ let running=true,activated=false,blasts=0,generation=0,workerReady=false,inFlight=false,active=0;
+ let transformBuffer=new Float32Array(COUNT*7),pendingTransforms=false,lastPhysicsSend=performance.now();
+ let readyResolve,readyReject;
+ const firstBuild=new Promise((resolve,reject)=>{readyResolve=resolve;readyReject=reject;});
+ function physicsFailure(message){readyReject(new Error(message));$('status').textContent='PHYSICS ERROR';$('loading').classList.remove('hidden');$('loadMessage').textContent='Physics could not continue. Reload to try again. '+message;}
+ physics.onerror=e=>physicsFailure(e.message);
+ physics.onmessage=({data:m})=>{
+  if(m.type==='error'){physicsFailure(m.message);return;}
+  if(m.type==='frame')transformBuffer=m.buffer;
+  if(m.generation!==generation)return;
+  if(m.type==='ready'){workerReady=true;inFlight=false;lastPhysicsSend=performance.now();readyResolve();}
+  if(m.type==='frame'){pendingTransforms=true;inFlight=false;active=m.active;}
+  if(m.type==='blast')toast(`${m.affected} blocks inside the blast radius`);
+ };
+ function buildWorld() {
+  generation++;workerReady=false;pendingTransforms=false;activated=false;blasts=0;active=0;
+  initial.forEach(({position:p,rotation:q},i)=>{dummy.position.copy(p);dummy.quaternion.copy(q);dummy.scale.setScalar(1);dummy.updateMatrix();blocks.setMatrixAt(i,dummy.matrix);});
+  blocks.instanceMatrix.needsUpdate=true;blocks.computeBoundingSphere();$('awake').textContent='0';
+  physics.postMessage({type:'build',generation,gravity:Number($('gravity').value),width:BW,height:BH,depth:BD,initial:initial.map(({position:p,rotation:q})=>({p:{x:p.x,y:p.y,z:p.z},q:{x:q.x,y:q.y,z:q.z,w:q.w}}))});
+ }
+ buildWorld();await firstBuild;
+ // Fixed-size particle pool: no transient geometry or materials on detonation.
+ const PARTICLES=160, particleState=Array.from({length:PARTICLES},()=>({life:0,x:0,y:0,z:0,vx:0,vy:0,vz:0,size:0}));
+ const sparks = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1,0),mat('#e5ad79'),PARTICLES);
+ sparks.instanceMatrix.setUsage(THREE.DynamicDrawUsage); sparks.frustumCulled=false; scene.add(sparks);
+ const shock = new THREE.Mesh(new THREE.SphereGeometry(1,24,12), new THREE.MeshBasicMaterial({color:'#ffc291',transparent:true,opacity:0,wireframe:true,depthWrite:false}));
+ shock.visible=false; scene.add(shock); let shockLife=0;
+ const flash = new THREE.PointLight('#ffb064',0,20,2); scene.add(flash);
+ let particleCursor=0, toastTimer;
+ function toast(text) { $('toast').textContent=text; $('toast').style.opacity=1; clearTimeout(toastTimer); toastTimer=setTimeout(()=>$('toast').style.opacity=0,2200); }
+ function effects(point) {
+  shock.position.copy(point); shock.scale.setScalar(.1); shock.visible=true; shockLife=.5;
+  flash.position.copy(point); flash.intensity=60;
+  for(let i=0;i<65;i++) {
+   const p=particleState[particleCursor++%PARTICLES]; p.life=.5+Math.random()*.8;
+   p.x=point.x;p.y=point.y;p.z=point.z;
+   p.vx=(Math.random()-.5)*13;p.vy=Math.random()*12;p.vz=(Math.random()-.5)*13;p.size=.035+Math.random()*.11;
+  }
+ }
+ function explode(point) {
+  if(!running) { toast('Resume the simulation to detonate'); return; }
+  if(!workerReady)return;
+  activated=true;lastPhysicsSend=performance.now();
+  physics.postMessage({type:'explode',generation,power:Number($('strength').value)/100,point:{x:point.x,y:point.y,z:point.z}});
+  blasts++; $('status').textContent=`DETONATION ${String(blasts).padStart(2,'0')} / SIMULATING`;
+  effects(point);
+ }
+ const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2();
+ function hitAt(x,y) {
+  const rect=renderer.domElement.getBoundingClientRect();
+  pointer.set((x-rect.left)/rect.width*2-1,-(y-rect.top)/rect.height*2+1);
+  raycaster.setFromCamera(pointer,camera);
+  // Refresh the bounding volume before picking after debris has moved.
+  blocks.computeBoundingSphere();
+  return raycaster.intersectObject(blocks,false)[0];
+ }
+ const touches=new Set(); let down=null, lastHover=0;
+ renderer.domElement.addEventListener('pointerdown',e=>{
+  touches.add(e.pointerId);
+  if(touches.size>1) down=null;
+  else if(e.button===0) down={x:e.clientX,y:e.clientY,id:e.pointerId,time:performance.now(),moved:false};
+ });
+ renderer.domElement.addEventListener('pointermove',e=>{
+  if(down&&Math.hypot(e.clientX-down.x,e.clientY-down.y)>6) down.moved=true;
+  if(e.pointerType==='touch') return;
+  $('reticle').style.left=e.clientX+'px'; $('reticle').style.top=e.clientY+'px';
+  if(performance.now()-lastHover<70) return;
+  lastHover=performance.now();
+  const hit=!touches.size&&hitAt(e.clientX,e.clientY);
+  $('reticle').style.display=hit?'block':'none'; renderer.domElement.style.cursor=hit?'none':'grab';
+ });
+ window.addEventListener('pointerup',e=>{
+  const click=down&&down.id===e.pointerId&&!down.moved&&performance.now()-down.time<600&&e.target===renderer.domElement;
+  touches.delete(e.pointerId); down=null;
+  if(click) {const hit=hitAt(e.clientX,e.clientY); if(hit) explode(hit.point);}
+ });
+ window.addEventListener('pointercancel',e=>{touches.delete(e.pointerId);down=null;});
+ renderer.domElement.addEventListener('pointerleave',()=>{$('reticle').style.display='none';});
+ function updateRange(input) { input.style.setProperty('--fill',((input.value-input.min)/(input.max-input.min)*100)+'%'); }
+ $('strength').addEventListener('input',e=>{updateRange(e.target);$('strengthValue').value=e.target.value+'%';});
+ function updateGravity() {
+  const g=Number($('gravity').value); updateRange($('gravity')); $('gravityValue').value=g.toFixed(2)+' m/s²';
+  physics.postMessage({type:'gravity',generation,value:g});
+  document.querySelectorAll('[data-gravity]').forEach(b=>{const selected=Math.abs(Number(b.dataset.gravity)-g)<.01;b.classList.toggle('active',selected);b.setAttribute('aria-pressed',selected);});
+ }
+ $('gravity').addEventListener('input',updateGravity);
+ document.querySelectorAll('[data-gravity]').forEach(b=>b.addEventListener('click',()=>{$('gravity').value=b.dataset.gravity;updateGravity();}));
+ function setPaused(paused) {running=!paused;lastPhysicsSend=performance.now();$('pause').textContent=paused?'▶ Resume':'Ⅱ Pause';$('pause').setAttribute('aria-pressed',paused);$('status').textContent=paused?'SIMULATION PAUSED':activated?'SIMULATING':'TOWER READY';}
+ $('pause').addEventListener('click',()=>setPaused(running));
+ $('camera').addEventListener('click',resetView);
+ function reset() {buildWorld();particleState.forEach(p=>p.life=0);shockLife=0;shock.visible=false;flash.intensity=0;setPaused(false);toast('1,000 blocks. A fresh start.');}
+ $('reset').addEventListener('click',reset);
+ window.addEventListener('keydown',e=>{
+  if(/INPUT|BUTTON|TEXTAREA|SELECT/.test(document.activeElement.tagName)||e.ctrlKey||e.metaKey||e.altKey||e.repeat)return;
+  if(e.code==='KeyR')reset();
+  if(e.code==='Space'){e.preventDefault();setPaused(running);}
+ });
+ function resize() {
+  renderer.setSize(innerWidth,innerHeight); camera.aspect=innerWidth/innerHeight;camera.fov=innerWidth<=620?60:42;
+  // Reserve visual space for the control panel without distorting the scene.
+  camera.setViewOffset(innerWidth,innerHeight,innerWidth>620?135:0,innerWidth>620?-10:50,innerWidth,innerHeight);
+  camera.updateProjectionMatrix();
+ }
+ addEventListener('resize',resize);resize();
+ let lastTime=performance.now(), sampleTime=lastTime, frames=0, qualitySamples=0;
+ document.addEventListener('visibilitychange',()=>{lastTime=performance.now();lastPhysicsSend=lastTime;});
+ function animate(now) {
+  requestAnimationFrame(animate);
+  if(document.hidden) return;
+  const dt=Math.min((now-lastTime)/1000,.075);lastTime=now;
+  controls.update();
+  if(pendingTransforms&&running){
+   for(let i=0;i<COUNT;i++){
+    const offset=i*7;
+    dummy.position.fromArray(transformBuffer,offset);dummy.quaternion.fromArray(transformBuffer,offset+3);dummy.scale.setScalar(1);dummy.updateMatrix();blocks.setMatrixAt(i,dummy.matrix);
+   }
+   blocks.instanceMatrix.needsUpdate=true;pendingTransforms=false;
+  }
+  if(running&&activated&&workerReady&&!inFlight){
+   const elapsed=(now-lastPhysicsSend)/1000;
+   if(elapsed>=STEP){inFlight=true;lastPhysicsSend=now;physics.postMessage({type:'step',generation,dt:elapsed,buffer:transformBuffer},[transformBuffer.buffer]);}
+  }
+  const effectDt=running?dt:0;
+  dummy.quaternion.identity();
+  for(let i=0;i<PARTICLES;i++){
+   const p=particleState[i];
+   if(p.life>0){p.life-=effectDt;p.vy-=8*effectDt;p.x+=p.vx*effectDt;p.y+=p.vy*effectDt;p.z+=p.vz*effectDt;dummy.position.set(p.x,p.y,p.z);dummy.scale.setScalar(Math.max(0,Math.min(p.life*3,1))*p.size);}
+   else {dummy.position.set(0,-10,0);dummy.scale.setScalar(0);}
+   dummy.updateMatrix();sparks.setMatrixAt(i,dummy.matrix);
+  }
+  sparks.instanceMatrix.needsUpdate=true;
+  if(shockLife>0){shockLife-=effectDt;shock.scale.setScalar(1+(.5-shockLife)*19);shock.material.opacity=Math.max(0,shockLife*.3);flash.intensity=Math.max(0,shockLife*100);}else{shock.visible=false;flash.intensity=0;}
+  renderer.render(scene,camera);frames++;
+  if(now-sampleTime>=600){
+   const fps=Math.round(frames*1000/(now-sampleTime));$('fps').textContent=fps;$('awake').textContent=active.toLocaleString();
+   if(activated&&active===0&&running)$('status').textContent='DEBRIS SETTLED';
+   // Reduce fill-rate on slower GPUs, while keeping the physics time step fixed.
+   if(fps<38)qualitySamples++;else qualitySamples=0;
+   if(qualitySamples>=4&&renderer.getPixelRatio()>1){renderer.setPixelRatio(1);resize();qualitySamples=0;}
+   frames=0;sampleTime=now;
+  }
+ }
+ $('loading').classList.add('hidden');requestAnimationFrame(animate);
+ renderer.domElement.addEventListener('webglcontextlost',e=>{e.preventDefault();setPaused(true);$('loading').classList.remove('hidden');$('loadMessage').textContent='The graphics context was interrupted. Reload this page to rebuild the playground.';});
+} catch(error) {
+ console.error(error);
+ $('loadMessage').textContent='Could not start the playground. Check your internet connection for the CDN modules and use a browser with WebGL 2 enabled. '+error.message;
+ document.querySelector('.spinner').style.display='none';
+}
+</script>
+</body>
+</html>

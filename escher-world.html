@@ -1,0 +1,1086 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>HOUSE OF STAIRS — an Escher engine</title>
+  <style>
+    :root { color-scheme: dark; --ink: #e8e2d4; --muted: #8b93a0; --glass: rgba(8, 10, 14, .78); --line: rgba(216, 180, 90, .30); --gold: #d8b45a; --cyan: #7fd8e8; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #05070a; color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    canvas { display: block; }
+    #app { position: fixed; inset: 0; }
+    #veil { position: fixed; inset: 0; pointer-events: none; z-index: 2; background: radial-gradient(ellipse at center, transparent 34%, rgba(0, 2, 5, .12) 58%, rgba(0, 1, 3, .74) 100%); }
+    .hud { position: fixed; z-index: 5; user-select: none; }
+    #identity { top: 27px; left: 30px; pointer-events: none; }
+    .eyebrow { color: var(--gold); font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; letter-spacing: .26em; text-transform: uppercase; opacity: .85; }
+    h1 { margin: 7px 0 0; font-size: 21px; font-weight: 600; letter-spacing: .19em; line-height: 1; text-transform: uppercase; text-shadow: 0 0 28px rgba(216, 180, 90, .35); }
+    #readouts { margin-top: 12px; display: flex; flex-direction: column; gap: 5px; color: #b9c2cc; font: 11px/1.4 "SFMono-Regular", Consolas, monospace; letter-spacing: .09em; text-transform: uppercase; }
+    #readouts b { color: var(--ink); font-weight: 500; }
+    #objectives { top: 25px; right: 27px; width: 264px; padding: 14px 14px 10px; border: 1px solid var(--line); border-radius: 4px; background: linear-gradient(145deg, rgba(16, 18, 24, .88), rgba(6, 8, 12, .74)); box-shadow: 0 14px 50px rgba(0, 0, 0, .30), inset 0 1px rgba(255,255,255,.04); backdrop-filter: blur(10px); }
+    .panel-head { display: flex; justify-content: space-between; align-items: baseline; font: 600 9px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: .17em; text-transform: uppercase; color: #efe6cf; }
+    .panel-head span { color: var(--cyan); font-size: 8px; opacity: .85; }
+    #obj-list { list-style: none; margin: 10px 0 4px; padding: 0; font: 10px/2.05 "SFMono-Regular", Consolas, monospace; letter-spacing: .07em; text-transform: uppercase; color: #9aa5b1; }
+    #obj-list li { display: flex; gap: 8px; align-items: baseline; transition: color .4s; }
+    #obj-list li::before { content: "◇"; color: #5a636e; }
+    #obj-list li.done { color: #e8dfc2; }
+    #obj-list li.done::before { content: "◆"; color: var(--gold); text-shadow: 0 0 9px rgba(216, 180, 90, .8); }
+    .panel-note { color: #6f7885; font: 9px/1.4 "SFMono-Regular", Consolas, monospace; letter-spacing: .05em; border-top: 1px solid rgba(216, 180, 90, .12); padding-top: 8px; }
+    #controls { bottom: 25px; left: 30px; color: #8b93a0; font: 10px/1.75 "SFMono-Regular", Consolas, monospace; letter-spacing: .11em; text-transform: uppercase; pointer-events: none; }
+    #controls b { color: var(--ink); font-weight: 500; }
+    #crosshair { position: fixed; top: 50%; left: 50%; z-index: 4; width: 14px; height: 14px; margin: -7px; pointer-events: none; opacity: .5; }
+    #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #f2ecd9; box-shadow: 0 0 5px rgba(216, 180, 90, .9); }
+    #crosshair::before { width: 14px; height: 1px; top: 6px; }
+    #crosshair::after { width: 1px; height: 14px; left: 6px; }
+    #toast { position: fixed; top: 15%; left: 50%; transform: translateX(-50%); z-index: 6; padding: 10px 22px; border: 1px solid var(--line); background: var(--glass); color: #efe6cf; font: 600 11px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: .22em; text-transform: uppercase; opacity: 0; transition: opacity .5s ease; pointer-events: none; text-align: center; }
+    #toast.show { opacity: 1; }
+    #align-meter { position: fixed; top: calc(50% + 30px); left: 50%; transform: translateX(-50%); z-index: 5; width: 150px; height: 3px; background: rgba(255,255,255,.08); opacity: 0; transition: opacity .3s; }
+    #align-meter.show { opacity: 1; }
+    #align-fill { width: 0%; height: 100%; background: var(--gold); box-shadow: 0 0 10px rgba(216, 180, 90, .9); }
+    #start { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: radial-gradient(circle at center, rgba(20, 18, 12, .18), rgba(1, 2, 4, .80)); transition: opacity .65s ease; }
+    #start.hidden { opacity: 0; pointer-events: none; }
+    #start-card { width: min(460px, calc(100vw - 46px)); padding: 31px 34px 29px; border: 1px solid rgba(216, 180, 90, .42); background: rgba(7, 8, 11, .82); box-shadow: 0 0 70px rgba(216, 180, 90, .10), inset 0 0 30px rgba(216, 180, 90, .03); text-align: center; backdrop-filter: blur(10px); }
+    #start-card .sigil { width: 28px; height: 28px; margin: 0 auto 17px; border: 1px solid var(--gold); transform: rotate(45deg); box-shadow: 0 0 18px rgba(216, 180, 90, .5); }
+    #start-card h2 { margin: 0; font-size: 17px; letter-spacing: .19em; font-weight: 500; text-transform: uppercase; }
+    #start-card p { margin: 13px auto 21px; max-width: 340px; color: #9aa5b1; font-size: 12px; line-height: 1.7; }
+    #enter { border: 1px solid #e6d9b8; padding: 11px 18px; background: rgba(216, 180, 90, .12); color: #f4ecd6; font: 600 10px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: .16em; text-transform: uppercase; cursor: pointer; }
+    #enter:hover { background: rgba(216, 180, 90, .28); }
+    #flash { position: fixed; inset: 0; z-index: 3; pointer-events: none; background: #f4ecd6; opacity: 0; transition: opacity .08s; mix-blend-mode: screen; }
+    @media (max-width: 650px) { #objectives { transform: scale(.78); transform-origin: top right; } #identity { left: 18px; top: 20px; } #controls { left: 18px; bottom: 17px; max-width: 265px; } }
+  </style>
+  <script type="importmap">
+  { "imports": {
+    "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+  } }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="veil"></div><div id="flash"></div><div id="crosshair"></div>
+  <div id="toast"></div>
+  <div id="align-meter"><div id="align-fill"></div></div>
+  <section id="identity" class="hud">
+    <div class="eyebrow">Lithograph Engine // 1953</div>
+    <h1>House of Stairs</h1>
+    <div id="readouts">
+      <span>Gravity — <b id="grav-readout">floor</b></span>
+      <span>Tower laps — <b id="lap-count">0</b></span>
+      <span>East gallery — <b id="room-state">locked</b></span>
+    </div>
+  </section>
+  <section id="objectives" class="hud">
+    <div class="panel-head">Itinerary <span>5 exhibits</span></div>
+    <ul id="obj-list">
+      <li data-obj="room">Disturb the east gallery</li>
+      <li data-obj="tribar">Resolve the west paradox</li>
+      <li data-obj="portal">Step through a threshold</li>
+      <li data-obj="laps">Climb a full lap</li>
+      <li data-obj="wall">Walk upon a wall</li>
+    </ul>
+    <div class="panel-note">The house rearranges what is not watched. Trust vantage points, not corridors.</div>
+  </section>
+  <div id="controls" class="hud"><b>Click</b> to enter &nbsp; <b>WASD</b> walk &nbsp; <b>Space</b> jump<br><b>Shift</b> run &nbsp; <b>R</b> re-scatter the paradox</div>
+  <div id="start"><div id="start-card"><div class="sigil"></div><h2>Orientation is optional</h2><p>Four exhibits and one tower. Staircases return to themselves, rooms redraw their proportions behind your back, and one triangle only exists from a single spot on the floor. The thresholds are live — walk through them.</p><button id="enter" type="button">Enter the house</button></div></div>
+
+  <script type="module">
+  import * as THREE from 'three';
+
+  // ---------------------------------------------------------------------------
+  // Renderer / scene / camera
+  // ---------------------------------------------------------------------------
+  const app = document.querySelector('#app');
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.92;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.autoUpdate = false;   // re-rendered once per frame, not per portal pass
+  app.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x05070a);
+  scene.fog = new THREE.FogExp2(0x05070a, 0.016);
+
+  const camera = new THREE.PerspectiveCamera(66, innerWidth / innerHeight, 0.08, 900);
+
+  // Lighting: one warm key light with shadows over the hub, cool hemisphere fill.
+  const hemi = new THREE.HemisphereLight(0xaebdd0, 0x1a1610, 0.55);
+  scene.add(hemi);
+  const key = new THREE.DirectionalLight(0xffe8c4, 2.0);
+  key.position.set(18, 34, 12);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.camera.left = -42; key.shadow.camera.right = 42;
+  key.shadow.camera.top = 42;
+  key.shadow.camera.bottom = -42; key.shadow.camera.far = 120;
+  key.shadow.bias = -0.0004;
+  scene.add(key, key.target);
+  const fill = new THREE.DirectionalLight(0x7f95b5, 0.5);
+  fill.position.set(-24, 18, -20);
+  scene.add(fill);
+
+  // ---------------------------------------------------------------------------
+  // Materials — lithograph palette: bone stone, ink outlines, brass accents.
+  // ---------------------------------------------------------------------------
+  const MAT = {
+    stone:  new THREE.MeshStandardMaterial({ color: 0xcfc8b8, roughness: 0.86, metalness: 0.02 }),
+    dark:   new THREE.MeshStandardMaterial({ color: 0x2a2c31, roughness: 0.92 }),
+    floor:  new THREE.MeshStandardMaterial({ color: 0x8f897c, roughness: 0.94 }),
+    brass:  new THREE.MeshStandardMaterial({ color: 0xb08d3e, roughness: 0.35, metalness: 0.85 }),
+    gold:   new THREE.MeshStandardMaterial({ color: 0xd8b45a, roughness: 0.4, metalness: 0.6, emissive: 0x6b4d10, emissiveIntensity: 0.35 }),
+    cyan:   new THREE.MeshStandardMaterial({ color: 0x9fd8e8, roughness: 0.5, emissive: 0x2a7a8c, emissiveIntensity: 0.8 }),
+  };
+  const INK_MAT = new THREE.LineBasicMaterial({ color: 0x0b0e12, transparent: true, opacity: 0.85 });
+
+  const walkables = [];   // meshes the ground ray may land on
+  const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE.Vector3();
+  const tmpQ = new THREE.Quaternion(), tmpQ2 = new THREE.Quaternion();
+  const tmpM = new THREE.Matrix4();
+
+  // Box helper: adds a mesh, ink outline, optional walkable flag, optional shadow.
+  function box(parent, w, h, d, x, y, z, mat = MAT.stone, opts = {}) {
+    const g = new THREE.BoxGeometry(w, h, d);
+    const m = new THREE.Mesh(g, mat);
+    m.position.set(x, y, z);
+    if (opts.ry) m.rotation.y = opts.ry;
+    if (opts.rx) m.rotation.x = opts.rx;
+    if (opts.rz) m.rotation.z = opts.rz;
+    m.castShadow = opts.shadow !== false;
+    m.receiveShadow = true;
+    parent.add(m);
+    if (opts.ink !== false) {
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, 30), INK_MAT);
+      m.add(edges);
+    }
+    if (opts.walk) { m.updateWorldMatrix(true, false); walkables.push(m); }
+    return m;
+  }
+
+  const damp = THREE.MathUtils.damp;
+  const clamp = THREE.MathUtils.clamp;
+
+
+  // ---------------------------------------------------------------------------
+  // WORLD LAYOUT
+  //   Hub "Relativity Hall"  — 34x34 at origin, doors E/W/S, sealed N.
+  //   East  — corridor to the Unobserved Gallery (morphs when unwatched).
+  //   West  — corridor to the Anamorphosis Chapel (tribar puzzle).
+  //   South — colonnade of the Recursive Portals (facing pair).
+  //   Tower — Penrose stair shaft at (62, 62); reachable only via the chapel
+  //           portal, loops vertically with seamless wrap.
+  // ---------------------------------------------------------------------------
+  const world = new THREE.Group();
+  scene.add(world);
+  let neckerCube, dustField;
+
+  // Wall with a rectangular door hole (built in the XZ plane, then rotated).
+  function wallWithDoor(parent, length, height, doorW, doorH, thickness, mat) {
+    const g = new THREE.Group();
+    const side = (length - doorW) / 2;
+    box(g, side, height, thickness, -(doorW / 2 + side / 2), height / 2, 0, mat);
+    box(g, side, height, thickness, +(doorW / 2 + side / 2), height / 2, 0, mat);
+    box(g, doorW, height - doorH, thickness, 0, doorH + (height - doorH) / 2, 0, mat);
+    parent.add(g);
+    return g;
+  }
+
+  // ---- HUB -----------------------------------------------------------------
+  {
+    const H = 34, WALL_H = 12, T = 0.8, DOOR_W = 4, DOOR_H = 5;
+    box(world, H, 0.6, H, 0, -0.3, 0, MAT.floor, { walk: true });
+
+    // North wall — sealed, with an ink "door that goes nowhere" motif.
+    box(world, H, WALL_H, T, 0, WALL_H / 2, -H / 2, MAT.stone, { walk: true });
+    const motif = box(world, DOOR_W, DOOR_H, 0.15, 0, DOOR_H / 2, -H / 2 + 0.5, MAT.dark);
+    // Sealed-door tribar sigil: three gold bars in a triangle.
+    const sigil = new THREE.Group();
+    for (let i = 0; i < 3; i++) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.7, 0.08), MAT.gold);
+      bar.position.set(Math.sin(i * Math.PI * 2 / 3) * 0.62, Math.cos(i * Math.PI * 2 / 3) * 0.62, 0);
+      bar.rotation.z = i * Math.PI * 2 / 3 + Math.PI / 2;
+      sigil.add(bar);
+    }
+    sigil.position.set(0, 3.1, -H / 2 + 0.62);
+    world.add(sigil);
+
+    // East / West / South walls with doors.
+    const e = wallWithDoor(world, H, WALL_H, DOOR_W, DOOR_H, T, MAT.stone);
+    e.position.set(H / 2, 0, 0); e.rotation.y = -Math.PI / 2;
+    e.traverse(o => { if (o.isMesh) { o.updateWorldMatrix(true, false); walkables.push(o); } });
+    const w = wallWithDoor(world, H, WALL_H, DOOR_W, DOOR_H, T, MAT.stone);
+    w.position.set(-H / 2, 0, 0); w.rotation.y = Math.PI / 2;
+    w.traverse(o => { if (o.isMesh) { o.updateWorldMatrix(true, false); walkables.push(o); } });
+    const s = wallWithDoor(world, H, WALL_H, DOOR_W, DOOR_H, T, MAT.stone);
+    s.position.set(0, 0, H / 2);
+    s.traverse(o => { if (o.isMesh) { o.updateWorldMatrix(true, false); walkables.push(o); } });
+
+    // Ceiling ring (open oculus — sky above the hall center).
+    box(world, H, 0.6, 10, 0, WALL_H + 0.3, -12, MAT.stone);
+    box(world, H, 0.6, 10, 0, WALL_H + 0.3, +12, MAT.stone);
+    box(world, 10, 0.6, 14, -12, WALL_H + 0.3, 0, MAT.stone);
+    box(world, 10, 0.6, 14, +12, WALL_H + 0.3, 0, MAT.stone);
+
+    // Necker cube — slowly tumbling wireframe above the hall center.
+    const cubeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(2.4, 2.4, 2.4));
+    neckerCube = new THREE.LineSegments(cubeGeo, new THREE.LineBasicMaterial({ color: 0xd8b45a, transparent: true, opacity: 0.9 }));
+    neckerCube.position.set(0, 6.4, 0);
+    world.add(neckerCube);
+    const diagGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-1.2, -1.2, -1.2), new THREE.Vector3(1.2, 1.2, 1.2)]);
+    neckerCube.add(new THREE.Line(diagGeo, neckerCube.material));
+
+    // Dust motes.
+    const dustGeo = new THREE.BufferGeometry();
+    const dustPos = new Float32Array(700 * 3);
+    for (let i = 0; i < 700; i++) {
+      dustPos[i * 3] = (Math.random() - 0.5) * 32;
+      dustPos[i * 3 + 1] = Math.random() * 12;
+      dustPos[i * 3 + 2] = (Math.random() - 0.5) * 32;
+    }
+    dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+    const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ color: 0xd8c9a0, size: 0.045, transparent: true, opacity: 0.55, depthWrite: false }));
+    world.add(dust);
+    dustField = dust;
+  }
+
+  // ---- WALL STAIRCASES + GRAVITY PADS (Relativity, 1953) -------------------
+  // Treads protrude from the wall; walkable only under that wall's gravity.
+  const gravityPads = [];   // { box: Box3, wallDown: Vector3, name }
+  {
+    // North wall (z=-17, inner face z=-16.6): flight runs +x from x=-12.
+    for (let i = 0; i < 10; i++) {
+      const depth = 0.38 * (i + 1);
+      box(world, 1.05, 1.6, depth, -12 + i * 1.05 + 0.525, 1.8, -16.6 + depth / 2, MAT.stone, { walk: true });
+    }
+    box(world, 12, 2, 0.7, -7, 1.8, -12.75, MAT.stone, { walk: true });   // landing shelf
+    box(world, 12, 0.12, 0.12, -7, 2.9, -12.45, MAT.brass);               // railing
+
+    // East wall (x=+17, inner face x=16.6): flight runs +z from z=4.
+    for (let i = 0; i < 10; i++) {
+      const depth = 0.38 * (i + 1);
+      box(world, depth, 1.6, 1.05, 16.6 - depth / 2, 1.8, 4 + i * 1.05 + 0.525, MAT.stone, { walk: true });
+    }
+    box(world, 0.7, 2, 11, 12.75, 1.8, 9.5, MAT.stone, { walk: true });   // landing shelf
+    box(world, 0.12, 0.12, 11, 12.45, 2.9, 9.5, MAT.brass);
+
+    // Gravity pads: glowing rings, on the floor AND on each wall at stair base.
+    function pad(x, y, z, normal, wallDown, name) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.95, 0.07, 10, 40), MAT.cyan);
+      ring.position.set(x, y, z);
+      ring.lookAt(tmpV.set(x + normal.x, y + normal.y, z + normal.z));
+      world.add(ring);
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(0.8, 32),
+        new THREE.MeshBasicMaterial({ color: 0x2a7a8c, transparent: true, opacity: 0.35, side: THREE.DoubleSide }));
+      disc.position.copy(ring.position).addScaledVector(normal, 0.02);
+      disc.lookAt(tmpV.copy(ring.position).addScaledVector(normal, 2));
+      world.add(disc);
+      const c = new THREE.Vector3(x, y, z);
+      gravityPads.push({
+        box: new THREE.Box3().setFromCenterAndSize(c, new THREE.Vector3(2.4, 2.6, 2.4)),
+        wallDown, name, cooldown: 0, ring,
+      });
+    }
+    pad(-14, 0.06, -14, new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1), 'north wall');
+    pad(-13.5, 1.8, -16.4, new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1), 'north wall');
+    pad(14, 0.06, 3, new THREE.Vector3(0, 1, 0), new THREE.Vector3(1, 0, 0), 'east wall');
+    pad(16.4, 1.8, 2.2, new THREE.Vector3(-1, 0, 0), new THREE.Vector3(1, 0, 0), 'east wall');
+  }
+
+  // ---- CORRIDORS -------------------------------------------------------------
+  function corridor(x0, x1, z0, z1, h = 5) {
+    const w = z1 - z0, l = x1 - x0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    box(world, l, 0.6, w, cx, -0.3, cz, MAT.floor, { walk: true });
+    box(world, l, 0.5, w, cx, h + 0.25, cz, MAT.stone);
+    if (l > w) { // runs along x: walls on z sides
+      box(world, l, h, 0.6, cx, h / 2, z0 - 0.3, MAT.stone, { walk: true });
+      box(world, l, h, 0.6, cx, h / 2, z1 + 0.3, MAT.stone, { walk: true });
+    } else {     // runs along z: walls on x sides
+      box(world, 0.6, h, w, x0 - 0.3, h / 2, cz, MAT.stone, { walk: true });
+      box(world, 0.6, h, w, x1 + 0.3, h / 2, cz, MAT.stone, { walk: true });
+    }
+  }
+  corridor(17, 31, -2.2, 2.2);     // east, to the Unobserved Gallery
+  corridor(-31, -17, -2.2, 2.2);   // west, to the Chapel
+  corridor(-2, 2, 17, 23);         // south, to the Portal Colonnade
+
+  // ---- UNOBSERVED GALLERY (east) ---------------------------------------------
+  // Interior morphs only while no observer can see it. West wall (door) fixed.
+  const room = { d: 1, w: 1, h: 1, preset: 0, timer: 0, armed: false, parts: {}, presets: [
+    { d: 1.0,  w: 1.0,  h: 1.0,  name: 'the gallery' },
+    { d: 1.55, w: 0.72, h: 1.02, name: 'the long hall' },
+    { d: 0.68, w: 1.45, h: 1.55, name: 'the shaft' },
+  ] };
+  {
+    const g = new THREE.Group();
+    world.add(g);
+    // Fixed west wall with door (corridor ends here).
+    const ww = wallWithDoor(g, 18, 8, 4, 5, 0.8, MAT.stone);
+    ww.position.set(31, 0, 0); ww.rotation.y = -Math.PI / 2;
+    ww.traverse(o => { if (o.isMesh) { o.updateWorldMatrix(true, false); walkables.push(o); } });
+
+    // Morphing parts — positions/scales driven per-frame from room.{d,w,h}.
+    room.parts.floor   = box(g, 18, 0.6, 18, 40, -0.3, 0, MAT.floor, { walk: true });
+    room.parts.east    = box(g, 0.8, 8, 18, 49, 4, 0, MAT.stone, { walk: true });
+    room.parts.north   = box(g, 18, 8, 0.8, 40, 4, -9, MAT.stone, { walk: true });
+    room.parts.south   = box(g, 18, 8, 0.8, 40, 4, 9, MAT.stone, { walk: true });
+    room.parts.ceiling = box(g, 18, 0.5, 18, 40, 8.25, 0, MAT.stone);
+    room.parts.pillars = [];
+    for (let i = 0; i < 3; i++) {
+      const p = box(g, 1.1, 7.6, 1.1, 36 + i * 4, 3.8, (i % 2 ? -3.2 : 3.2), MAT.stone, { walk: true });
+      room.parts.pillars.push(p);
+    }
+    // Plinth + orb at the far end — the orb's glow marks the east wall.
+    room.parts.plinth = box(g, 1.4, 1.1, 1.4, 47, 0.55, 0, MAT.dark, { walk: true });
+    const orb = new THREE.Mesh(new THREE.SphereGeometry(0.42, 24, 16),
+      new THREE.MeshStandardMaterial({ color: 0xfff2dd, emissive: 0xffca66, emissiveIntensity: 2.2 }));
+    orb.position.set(47, 1.6, 0);
+    g.add(orb);
+    room.parts.orb = orb;
+    room.parts.orbLight = new THREE.PointLight(0xffca66, 14, 16, 2);
+    room.parts.orbLight.position.copy(orb.position);
+    g.add(room.parts.orbLight);
+
+    // Plaque in the corridor.
+    box(world, 1.6, 0.9, 0.12, 29.5, 1.6, 2.0, MAT.brass);
+  }
+  function roomLayout(r) {
+    const d = r.d, w = r.w, h = r.h, P = r.parts;
+    P.floor.scale.set(d, 1, w);  P.floor.position.set(31 + 9 * d, -0.3, 0);
+    P.east.position.set(31 + 18 * d + 0.4, 4 * h, 0);
+    P.east.scale.set(1, h, w);
+    P.north.scale.set(d, h, 1);  P.north.position.set(31 + 9 * d, 4 * h, -9 * w);
+    P.south.scale.set(d, h, 1);  P.south.position.set(31 + 9 * d, 4 * h, +9 * w);
+    P.ceiling.scale.set(d, 1, w); P.ceiling.position.set(31 + 9 * d, 8 * h + 0.25, 0);
+    P.pillars.forEach((p, i) => {
+      p.scale.y = h;
+      p.position.set(31 + 18 * d * (0.3 + 0.2 * i), 3.8 * h, (i % 2 ? -3.2 : 3.2) * w);
+    });
+    P.plinth.position.set(31 + 18 * d * 0.9, 0.55, 0);
+    P.orb.position.set(31 + 18 * d * 0.9, 1.6, 0);
+    P.orbLight.position.copy(P.orb.position);
+    // Keep collision fresh: scaled boxes need updated matrices before raycast.
+    Object.values(P).forEach(v => {
+      if (v && v.isMesh) v.updateMatrixWorld();
+      else if (Array.isArray(v)) v.forEach(m => m.isMesh && m.updateMatrixWorld());
+    });
+  }
+
+  // ---- ANAMORPHOSIS CHAPEL (west) ---------------------------------------------
+  // Six fragments hang scattered; from the brass vantage ring they align into
+  // a Penrose tribar. Solving it opens the arch portal to the tower.
+  const tribar = { pieces: [], s: 0, solved: false, charge: 0, center: new THREE.Vector3(-45, 3.8, 0), vantage: new THREE.Vector3(-34, 1.7, 0) };
+  {
+    // Shell: x -51..-29, z -8..8, ceiling 9.
+    box(world, 22, 0.6, 16, -40, -0.3, 0, MAT.floor, { walk: true });
+    const ew = wallWithDoor(world, 16, 9, 4, 5, 0.8, MAT.stone);
+    ew.position.set(-29, 0, 0); ew.rotation.y = Math.PI / 2;
+    ew.traverse(o => { if (o.isMesh) { o.updateWorldMatrix(true, false); walkables.push(o); } });
+    box(world, 0.8, 9, 16, -50.6, 4.5, 0, MAT.stone, { walk: true });   // west wall (portal arch punched visually by frame)
+    box(world, 22, 9, 0.8, -40, 4.5, -8, MAT.stone, { walk: true });
+    box(world, 22, 9, 0.8, -40, 4.5, 8, MAT.stone, { walk: true });
+    box(world, 22, 0.5, 16, -40, 9.25, 0, MAT.stone);
+
+    // Vantage ring + eye marker.
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.06, 10, 48), MAT.brass);
+    ring.rotation.x = -Math.PI / 2; ring.position.set(-34, 0.05, 0);
+    world.add(ring);
+    const eye = new THREE.Mesh(new THREE.CircleGeometry(0.22, 24), new THREE.MeshBasicMaterial({ color: 0xd8b45a }));
+    eye.rotation.x = -Math.PI / 2; eye.position.set(-34, 0.06, 0);
+    world.add(eye);
+
+    // Tribar, flat in the y-z plane (normal = -x, toward vantage).
+    const grp = new THREE.Group();
+    grp.position.copy(tribar.center);
+    world.add(grp);
+    const R = 3.1, verts = [];
+    for (let i = 0; i < 3; i++) {
+      const a = Math.PI / 2 + i * Math.PI * 2 / 3;   // in (z, y) plane
+      verts.push(new THREE.Vector2(Math.cos(a) * R, Math.sin(a) * R));
+    }
+    const mkPiece = (geo) => {
+      const m = new THREE.Mesh(geo, MAT.stone);
+      m.castShadow = false; m.receiveShadow = true;
+      m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), INK_MAT));
+      grp.add(m);
+      return m;
+    };
+    for (let i = 0; i < 3; i++) {
+      const a = verts[i], b = verts[(i + 1) % 3];
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      const ang = Math.atan2(b.y - a.y, b.x - a.x);
+      const beam = mkPiece(new THREE.BoxGeometry(0.6, 1.05, 6.7));
+      beam.position.set(0, mid.y, mid.x);
+      beam.rotation.x = -ang;
+      const corner = mkPiece(new THREE.BoxGeometry(0.7, 1.05, 1.05));
+      corner.position.set(0, a.y, a.x);
+      corner.rotation.x = (i % 2 ? 1 : -1) * Math.PI / 4;
+      tribar.pieces.push(beam, corner);
+    }
+    // Home transforms recorded; scatter now.
+    tribar.pieces.forEach(p => {
+      p.userData.home = { pos: p.position.clone(), rot: new THREE.Euler().copy(p.rotation) };
+      p.userData.scatter = {
+        pos: p.position.clone().add(new THREE.Vector3(-(2 + Math.random() * 6), (Math.random() - 0.5) * 7, (Math.random() - 0.5) * 8)),
+        rot: new THREE.Euler((Math.random() - 0.5) * 1.6, (Math.random() - 0.5) * 1.6, (Math.random() - 0.5) * 1.6),
+      };
+    });
+  }
+  function tribarApply(t) {
+    const k = t * t * (3 - 2 * t);
+    for (const p of tribar.pieces) {
+      const { home, scatter } = p.userData;
+      p.position.lerpVectors(scatter.pos, home.pos, k);
+      p.rotation.set(
+        scatter.rot.x + (home.rot.x - scatter.rot.x) * k,
+        scatter.rot.y + (home.rot.y - scatter.rot.y) * k,
+        scatter.rot.z + (home.rot.z - scatter.rot.z) * k,
+      );
+    }
+  }
+  tribarApply(0);
+
+  // ---- PORTAL COLONNADE (south) ----------------------------------------------
+  {
+    box(world, 10, 0.6, 44, 0, -0.3, 45, MAT.floor, { walk: true });
+    box(world, 0.6, 6, 44, -5.3, 3, 45, MAT.stone, { walk: true });
+    box(world, 0.6, 6, 44, +5.3, 3, 45, MAT.stone, { walk: true });
+    box(world, 10, 0.5, 44, 0, 6.25, 45, MAT.stone);
+    // Entry wall (z=23) with opening matching the corridor.
+    box(world, 2.8, 6, 0.6, -3.6, 3, 23, MAT.stone, { walk: true });
+    box(world, 2.8, 6, 0.6, +3.6, 3, 23, MAT.stone, { walk: true });
+    box(world, 4.4, 1.0, 0.6, 0, 5.5, 23, MAT.stone);
+    // End wall (z=67) — the regress terminates in a barred, dark window.
+    box(world, 10, 6, 0.6, 0, 3, 67, MAT.stone, { walk: true });
+    box(world, 2.2, 3.6, 0.7, 0, 2.4, 67, MAT.dark);
+    for (let i = 0; i < 4; i++) box(world, 0.08, 3.4, 0.1, -0.75 + i * 0.5, 2.4, 66.6, MAT.brass);
+    // Colonnade pillars.
+    for (let z = 27; z <= 63; z += 6) {
+      box(world, 0.9, 5.6, 0.9, -4.2, 2.8, z, MAT.stone, { walk: true });
+      box(world, 0.9, 5.6, 0.9, +4.2, 2.8, z, MAT.stone, { walk: true });
+    }
+  }
+
+  // ---- PENROSE TOWER (62, 62) — portal access only ----------------------------
+  // Four stacked copies of one lap; the player wraps between copy bands, so
+  // ascent and descent are both endless. Wrap points sit on identical landings.
+  const TOWER = { x: 62, z: 62, lap: 11.2, bandHi: 11.6, bandLo: 0.2 };
+  {
+    // Shaft: 26x26, y -14..44, near-black inside.
+    box(world, 27, 58, 1, 62, 15, 48.5, MAT.dark, { walk: true, ink: false, shadow: false });
+    box(world, 27, 58, 1, 62, 15, 75.5, MAT.dark, { walk: true, ink: false, shadow: false });
+    box(world, 1, 58, 27, 48.5, 15, 62, MAT.dark, { walk: true, ink: false, shadow: false });
+    box(world, 1, 58, 27, 75.5, 15, 62, MAT.dark, { walk: true, ink: false, shadow: false });
+    box(world, 27, 1, 27, 62, 44, 62, MAT.dark, { ink: false, shadow: false });   // cap
+    const cage = new THREE.PointLight(0xffd9a0, 90, 70, 2);
+    cage.position.set(62, 26, 62);
+    world.add(cage);
+    const cageLow = new THREE.PointLight(0x7fb5d8, 40, 50, 2);
+    cageLow.position.set(62, -6, 62);
+    world.add(cageLow);
+
+    const cornerSigns = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+    for (let copy = 0; copy < 4; copy++) {
+      const yB = -TOWER.lap + copy * TOWER.lap;
+      for (let f = 0; f < 4; f++) {
+        const [sx, sz] = cornerSigns[f];
+        for (let i = 0; i < 8; i++) {
+          const top = yB + 2.8 * f + 0.35 * (i + 1);
+          let x = TOWER.x + sx * 6, z = TOWER.z + sz * 6, w = 2.2, d = 2.2;
+          if (f === 0) { x = TOWER.x - 6 + i * 1.5 + 0.75; w = 1.5; }
+          if (f === 1) { z = TOWER.z - 6 + i * 1.5 + 0.75; d = 1.5; }
+          if (f === 2) { x = TOWER.x + 6 - i * 1.5 - 0.75; w = 1.5; }
+          if (f === 3) { z = TOWER.z + 6 - i * 1.5 - 0.75; d = 1.5; }
+          box(world, w, 0.5, d, x, top - 0.25, z, MAT.stone, { walk: true, shadow: false });
+        }
+        // Landing at the END corner of each flight.
+        const [ex, ez] = cornerSigns[(f + 1) % 4];
+        const wide = (f === 1) ? 3.4 : 2.4;   // corner2 landing carries the portal
+        const ly = yB + 2.8 * (f + 1);
+        box(world, wide, 0.5, wide, TOWER.x + ex * 6, ly - 0.25, TOWER.z + ez * 6, MAT.stone, { walk: true, shadow: false });
+        // Brass edge strip — readability in the gloom.
+        box(world, wide, 0.06, 0.1, TOWER.x + ex * 6, ly + 0.03, TOWER.z + ez * 6 - ez * (wide / 2), MAT.brass, { ink: false, shadow: false });
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // PORTALS — live render-target thresholds with depth-limited recursion.
+  // A portal pair (A, B): A's surface shows the scene from behind B looking out
+  // (virtual camera = T_A * cam, T_A = M_B * Ry(pi) * M_A^-1). Recursion level k
+  // reuses the level k+1 texture; the deepest level renders dark glass.
+  // ---------------------------------------------------------------------------
+  const PORTAL_VERT = /* glsl */`
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+  `;
+  const PORTAL_FRAG = /* glsl */`
+    varying vec2 vUv;
+    uniform sampler2D map;
+    uniform vec2 res;
+    uniform float live;
+    uniform float glow;
+    void main() {
+      vec2 suv = gl_FragCoord.xy / res;
+      vec3 view = texture2D(map, suv).rgb;
+      vec3 dark = vec3(0.012, 0.018, 0.032);
+      vec3 col = mix(dark, view, live);
+      vec2 e = abs(vUv - 0.5) * 2.0;
+      float edge = max(e.x, e.y);
+      float rim = smoothstep(0.84, 1.0, edge);
+      col *= 1.0 - 0.4 * rim;
+      col += vec3(0.85, 0.62, 0.22) * rim * rim * (0.35 + 0.3 * glow);
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `;
+
+  const portalPairs = [];
+  class PortalPair {
+    /**
+     * @param a {{pos:Vector3, yaw:number, w:number, h:number}} front = local +z
+     * @param b same shape
+     * @param depth recursion depth (render passes per portal)
+     */
+    constructor(a, b, depth = 2) {
+      this.depth = depth;
+      this.liveValue = 1;                    // 0 = sealed dark glass
+      this.portals = [this._build(a), this._build(b)];
+      this.T = [null, null];                 // T[0]: A->B, T[1]: B->A
+      const flip = new THREE.Matrix4().makeRotationY(Math.PI);
+      const [A, B] = this.portals;
+      this.T[0] = new THREE.Matrix4().copy(B.frame.matrixWorld).multiply(flip).multiply(new THREE.Matrix4().copy(A.frame.matrixWorld).invert());
+      this.T[1] = new THREE.Matrix4().copy(A.frame.matrixWorld).multiply(flip).multiply(new THREE.Matrix4().copy(B.frame.matrixWorld).invert());
+      this.lastSd = [null, null];
+      this.rts = null;                       // created on resize
+      this.visible = false;
+      portalPairs.push(this);
+    }
+
+    _build(spec) {
+      const frame = new THREE.Group();
+      frame.position.copy(spec.pos);
+      frame.rotation.y = spec.yaw;
+      world.add(frame);
+      const w = spec.w, h = spec.h;
+      // Jambs (floor to header), header, pediment, threshold — dark bronze + brass.
+      box(frame, 0.5, h + 0.9, 0.6, -(w / 2 + 0.25), 0.05, 0, MAT.dark, { shadow: false });
+      box(frame, 0.5, h + 0.9, 0.6, +(w / 2 + 0.25), 0.05, 0, MAT.dark, { shadow: false });
+      box(frame, w + 1.0, 0.5, 0.6, 0, h / 2 + 0.45, 0, MAT.dark, { shadow: false });
+      box(frame, w + 1.6, 0.28, 0.8, 0, h / 2 + 0.95, 0, MAT.brass, { shadow: false });
+      box(frame, w + 0.8, 0.18, 0.9, 0, -h / 2 + 0.09, 0.1, MAT.brass, { shadow: false });
+      // Surface.
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: PORTAL_VERT, fragmentShader: PORTAL_FRAG,
+        uniforms: {
+          map: { value: null },
+          res: { value: new THREE.Vector2(1, 1) },
+          live: { value: 0 },
+          glow: { value: 0 },
+        },
+      });
+      const surf = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+      surf.position.set(0, 0, 0);
+      frame.add(surf);
+      frame.updateWorldMatrix(true, true);
+      const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(frame.getWorldQuaternion(tmpQ2)).clone();
+      return {
+        spec, frame, surf, mat,
+        center: frame.getWorldPosition(new THREE.Vector3()),
+        normal,
+        inv: new THREE.Matrix4().copy(frame.matrixWorld).invert(),
+      };
+    }
+
+    setLive(v) {
+      this.liveValue = v;
+      for (const p of this.portals) p.mat.uniforms.live.value = v;
+    }
+
+    allocRts(w, h) {
+      this.rts = [0, 1].map(() =>
+        Array.from({ length: this.depth }, () => new THREE.WebGLRenderTarget(w, h, {
+          minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true,
+        }))
+      );
+    }
+
+    /** Render the portal views (deepest recursion level first). */
+    render(camera, screenRes) {
+      if (this.liveValue < 0.05 || !this.rts) return;
+      const D = this.depth;
+      const vcam = PortalPair.vcam;
+      vcam.fov = camera.fov; vcam.aspect = camera.aspect;
+      vcam.near = camera.near; vcam.far = camera.far;
+      vcam.updateProjectionMatrix();
+      const baseProj = vcam.projectionMatrix.clone();
+
+      // Level matrices: L[p][k] — p=0 is A, p=1 is B. L[p][0] = camera.
+      const L = [[camera.matrixWorld.clone()], [camera.matrixWorld.clone()]];
+      for (let k = 1; k <= D; k++) {
+        L[0][k] = new THREE.Matrix4().multiplyMatrices(this.T[0], L[1][k - 1]);
+        L[1][k] = new THREE.Matrix4().multiplyMatrices(this.T[1], L[0][k - 1]);
+      }
+      for (let k = D; k >= 1; k--) {
+        for (let p = 0; p < 2; p++) {
+          const me = this.portals[p], other = this.portals[1 - p];
+          // My surface renders dark in my own pass; the other shows level k+1 (or dark).
+          me.mat.uniforms.live.value = 0;
+          const deeper = k + 1 <= D ? this.rts[1 - p][k] : null;   // rts[p][level-1] indexing below
+          other.mat.uniforms.map.value = deeper ? deeper.texture : null;
+          other.mat.uniforms.live.value = deeper ? this.liveValue : 0;
+          vcam.matrixWorld.copy(L[p][k]);
+          vcam.matrixWorldInverse.copy(vcam.matrixWorld).invert();
+          vcam.projectionMatrix.copy(baseProj);
+          obliqueProjection(vcam.projectionMatrix, vcam, other.center, other.normal);
+          const rt = this.rts[p][k - 1];
+          me.mat.uniforms.res.value.set(rt.width, rt.height);
+          other.mat.uniforms.res.value.set(rt.width, rt.height);
+          renderer.setRenderTarget(rt);
+          renderer.render(scene, vcam);
+        }
+      }
+      renderer.setRenderTarget(null);
+      // Main pass textures.
+      for (let p = 0; p < 2; p++) {
+        const me = this.portals[p];
+        me.mat.uniforms.map.value = this.rts[p][0].texture;
+        me.mat.uniforms.live.value = this.liveValue;
+        me.mat.uniforms.res.value.copy(screenRes);
+      }
+    }
+
+    /** Seamless walk-through: preserves position/velocity relative to the frame. */
+    tryTeleport(player) {
+      if (this.liveValue < 0.9) return false;
+      for (let p = 0; p < 2; p++) {
+        const me = this.portals[p];
+        const sd = tmpV.copy(player.pos).sub(me.center).dot(me.normal);
+        const prev = this.lastSd[p];
+        this.lastSd[p] = sd;
+        if (prev === null || Math.abs(sd) > 0.9 || Math.abs(prev) > 0.9) continue;
+        if (Math.sign(sd) === Math.sign(prev) || prev === 0) continue;
+        // Within the frame rectangle?
+        const local = tmpV2.copy(player.pos).applyMatrix4(me.inv);
+        if (Math.abs(local.x) > me.spec.w / 2 + 0.3) continue;
+        if (local.y < -me.spec.h / 2 - 0.7 || local.y > me.spec.h / 2 + 0.3) continue;
+        // Teleport across.
+        const T = this.T[p];
+        player.pos.applyMatrix4(T);
+        const qT = tmpQ.setFromRotationMatrix(T);
+        player.vel.applyQuaternion(qT);
+        player.basisQ.premultiply(qT);
+        player.basisTarget.premultiply(qT);
+        this.lastSd[1 - p] = null;   // don't immediately re-trigger the partner
+        this.lastSd[p] = null;
+        return true;
+      }
+      return false;
+    }
+  }
+  PortalPair.vcam = new THREE.PerspectiveCamera();
+  PortalPair.vcam.matrixAutoUpdate = false;      // we drive matrixWorld directly
+  PortalPair.vcam.matrixWorldAutoUpdate = false;
+
+  // Lengyel oblique near-plane clipping: clip everything on the camera's side
+  // of the partner portal's plane, so only "beyond the threshold" is rendered.
+  function obliqueProjection(proj, cam, point, normal) {
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, point);
+    plane.applyMatrix4(cam.matrixWorldInverse);
+    const clip = new THREE.Vector4(plane.normal.x, plane.normal.y, plane.normal.z, plane.constant);
+    const q = new THREE.Vector4();
+    const pm = proj.elements;
+    q.x = (Math.sign(clip.x) + pm[8]) / pm[0];
+    q.y = (Math.sign(clip.y) + pm[9]) / pm[5];
+    q.z = -1.0;
+    q.w = (1.0 + pm[10]) / pm[14];
+    clip.multiplyScalar(2.0 / clip.dot(q));
+    pm[2] = clip.x;
+    pm[6] = clip.y;
+    pm[10] = clip.z + 1.0;
+    pm[14] = clip.w;
+  }
+
+  // Pair 1 — the Regress: facing portals down the colonnade.
+  const pairRegress = new PortalPair(
+    { pos: new THREE.Vector3(0, 2.6, 30), yaw: 0, w: 3.0, h: 4.4 },
+    { pos: new THREE.Vector3(0, 2.6, 60), yaw: Math.PI, w: 3.0, h: 4.4 },
+    2,
+  );
+  // Pair 2 — the Arch: chapel west wall <-> tower corner2 landing. Sealed
+  // until the tribar is resolved.
+  const pairArch = new PortalPair(
+    { pos: new THREE.Vector3(-50.55, 2.2, 0), yaw: Math.PI / 2, w: 2.4, h: 3.6 },
+    { pos: new THREE.Vector3(68, 7.8, 68), yaw: -3 * Math.PI / 4, w: 2.0, h: 3.6 },
+    1,
+  );
+  pairArch.setLive(0);
+
+  // ---------------------------------------------------------------------------
+  // PLAYER — pointer-lock look that works under arbitrary gravity.
+  // camera.quaternion = basisQ * Euler(pitch, yaw); basisQ rotates with gravity.
+  // ---------------------------------------------------------------------------
+  const player = {
+    pos: new THREE.Vector3(0, 1.7, 10),   // eye position
+    vel: new THREE.Vector3(),
+    yaw: Math.PI, pitch: 0,
+    basisQ: new THREE.Quaternion(),
+    basisTarget: new THREE.Quaternion(),
+    down: new THREE.Vector3(0, -1, 0),
+    downTarget: new THREE.Vector3(0, -1, 0),
+    grounded: false, eye: 1.7, fallTime: 0, wallTime: 0,
+  };
+  const FLOOR_DOWN = new THREE.Vector3(0, -1, 0);
+  const keys = Object.create(null);
+  let started = false;
+
+  const qLook = new THREE.Quaternion();
+  const eLook = new THREE.Euler(0, 0, 0, 'YXZ');
+  const ray = new THREE.Raycaster();
+  ray.far = player.eye + 0.7;
+
+  addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyR') resetTribar(); });
+  addEventListener('keyup', e => { keys[e.code] = false; });
+  addEventListener('mousemove', e => {
+    if (document.pointerLockElement !== renderer.domElement) return;
+    player.yaw -= e.movementX * 0.0021;
+    player.pitch = clamp(player.pitch - e.movementY * 0.0021, -1.45, 1.45);
+  });
+  renderer.domElement.addEventListener('click', () => {
+    if (started) renderer.domElement.requestPointerLock();
+  });
+  document.addEventListener('pointerlockchange', () => {
+    if (document.pointerLockElement !== renderer.domElement) {
+      for (const k in keys) keys[k] = false;
+    }
+  });
+
+  /** Rotate gravity (and the view basis) toward a new down vector. */
+  function setGravity(nd) {
+    if (player.downTarget.equals(nd)) return;
+    const upOld = tmpV.copy(player.down).negate().normalize();
+    const upNew = tmpV2.copy(nd).negate().normalize();
+    tmpQ.setFromUnitVectors(upOld, upNew);
+    player.basisTarget.copy(player.basisQ).premultiply(tmpQ);
+    player.downTarget.copy(nd);
+  }
+
+  function gravityName() {
+    const d = player.downTarget;
+    if (d.y < -0.5) return 'floor';
+    if (d.z < -0.5) return 'north wall';
+    if (d.x > 0.5) return 'east wall';
+    return 'shifting';
+  }
+
+  function stepPlayer(dt) {
+    // Smooth orientation & gravity.
+    player.basisQ.slerp(player.basisTarget, 1 - Math.exp(-3.0 * dt));
+    player.down.lerp(player.downTarget, 1 - Math.exp(-2.8 * dt)).normalize();
+    const up = tmpV.copy(player.down).negate();
+    eLook.set(player.pitch, player.yaw, 0);
+    qLook.setFromEuler(eLook);
+    camera.quaternion.multiplyQuaternions(player.basisQ, qLook);
+
+    // Walk basis on the plane perpendicular to current up.
+    const fwd = camera.getWorldDirection(tmpV2);
+    fwd.addScaledVector(up, -fwd.dot(up));
+    if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    fwd.normalize();
+    const right = tmpV3.crossVectors(fwd, up);
+
+    const iz = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
+    const ix = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
+    const wish = new THREE.Vector3().addScaledVector(fwd, iz).addScaledVector(right, ix);
+    if (wish.lengthSq() > 0) wish.normalize();
+    const speed = keys.ShiftLeft || keys.ShiftRight ? 9.0 : 5.4;
+
+    // Split velocity into along-gravity and tangential parts.
+    const vd = player.vel.dot(player.down);
+    const tang = new THREE.Vector3().copy(player.vel).addScaledVector(player.down, -vd);
+    tang.lerp(wish.multiplyScalar(speed), 1 - Math.exp(-(player.grounded ? 10 : 1.8) * dt));
+    player.vel.copy(tang).addScaledVector(player.down, vd);
+
+    // Gravity & jump.
+    player.vel.addScaledVector(player.down, 18 * dt);
+    if (player.grounded && keys.Space) {
+      player.vel.addScaledVector(up, 7.4);
+      player.grounded = false;
+    }
+
+    player.pos.addScaledVector(player.vel, dt);
+
+    // Ground snap via raycast along gravity (handles steps up to ~0.42).
+    ray.set(player.pos, player.down);
+    ray.far = player.eye + 0.7;
+    const hits = ray.intersectObjects(walkables, false);
+    const hit = hits[0];
+    const vdNow = player.vel.dot(player.down);
+    if (hit && hit.distance <= player.eye + 0.42 && (vdNow > -0.5 || hit.distance >= player.eye - 0.45)) {
+      player.pos.addScaledVector(player.down, hit.distance - player.eye);
+      if (vdNow > 0) player.vel.addScaledVector(player.down, -vdNow);
+      player.grounded = true;
+      player.fallTime = 0;
+    } else {
+      player.grounded = false;
+      if (vdNow > 8) player.fallTime += dt;
+    }
+
+    mechanics(dt);
+
+    camera.position.copy(player.pos);
+    camera.updateMatrixWorld();
+  }
+
+  // ---------------------------------------------------------------------------
+  // MECHANICS — triggers and per-frame exhibit logic.
+  // ---------------------------------------------------------------------------
+  const frustum = new THREE.Frustum();
+  const objState = { room: false, tribar: false, portal: false, laps: false, wall: false };
+  let laps = 0;
+  const lapReadout = document.querySelector('#lap-count');
+  const gravReadout = document.querySelector('#grav-readout');
+  const roomReadout = document.querySelector('#room-state');
+  const toastEl = document.querySelector('#toast');
+  const alignEl = document.querySelector('#align-meter');
+  const alignFill = document.querySelector('#align-fill');
+  const flashEl = document.querySelector('#flash');
+  let toastTimer = 0;
+
+  function toast(msg, ms = 2800) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
+  }
+  function complete(id, msg) {
+    if (objState[id]) return;
+    objState[id] = true;
+    document.querySelector(`[data-obj="${id}"]`).classList.add('done');
+    if (msg) toast(msg);
+  }
+  function flash(op = 0.28) {
+    flashEl.style.opacity = op;
+    setTimeout(() => { flashEl.style.opacity = 0; }, 90);
+  }
+
+  // Corridor mouths: leaving the hall restores floor gravity.
+  const GRAV_RESETS = [
+    new THREE.Box3(new THREE.Vector3(15.5, -1, -2.5), new THREE.Vector3(18.5, 5, 2.5)),
+    new THREE.Box3(new THREE.Vector3(-18.5, -1, -2.5), new THREE.Vector3(-15.5, 5, 2.5)),
+    new THREE.Box3(new THREE.Vector3(-2.5, -1, 15.5), new THREE.Vector3(2.5, 5, 18.5)),
+  ];
+
+  const roomCorners = Array.from({ length: 9 }, () => new THREE.Vector3());
+
+  function mechanics(dt) {
+    const t = clock.elapsedTime;
+    frustum.setFromProjectionMatrix(tmpM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+
+    // -- Tower wrap (Penrose loop) -------------------------------------------
+    const feetY = player.pos.y - player.eye;
+    const inTower = Math.abs(player.pos.x - TOWER.x) < 14 && Math.abs(player.pos.z - TOWER.z) < 14;
+    if (inTower) {
+      if (feetY > TOWER.bandHi) { player.pos.y -= TOWER.lap; laps++; }
+      else if (feetY < TOWER.bandLo) { player.pos.y += TOWER.lap; laps--; }
+      if (laps >= 1) complete('laps', 'one lap — and yet you have not descended');
+      // The void catches the falling.
+      if (player.fallTime > 2.8) {
+        player.pos.set(66.6, 5.6 + player.eye + 0.05, 66.6);
+        player.vel.set(0, 0, 0);
+        player.fallTime = 0;
+        flash();
+        toast('the house catches you');
+      }
+    }
+    lapReadout.textContent = String(laps);
+
+    // -- Gravity pads ---------------------------------------------------------
+    const chest = tmpV.copy(player.pos).addScaledVector(player.down, player.eye * 0.5);
+    for (const pad of gravityPads) {
+      pad.cooldown -= dt;
+      pad.ring.rotation.z += dt * 0.8;
+      if (pad.cooldown > 0) continue;
+      if (pad.box.containsPoint(player.pos) || pad.box.containsPoint(chest)) {
+        const toWall = !player.downTarget.equals(pad.wallDown);
+        setGravity(toWall ? pad.wallDown : FLOOR_DOWN);
+        pad.cooldown = 1.6;
+        toast('gravity — ' + (toWall ? pad.name : 'floor'));
+      }
+    }
+    for (const b of GRAV_RESETS) if (b.containsPoint(player.pos)) setGravity(FLOOR_DOWN);
+    if (!player.downTarget.equals(FLOOR_DOWN)) {
+      player.wallTime += dt;
+      if (player.wallTime > 1.2) complete('wall', 'you are standing on a wall');
+    } else player.wallTime = 0;
+    gravReadout.textContent = gravityName();
+
+    // -- Unobserved Gallery -----------------------------------------------------
+  {
+    const r = room;
+    const inside = player.pos.x > 31 && player.pos.x < 31 + 18 * r.d + 1 &&
+      Math.abs(player.pos.z) < 9 * r.w + 1 && feetY < 8 * r.h + 1;
+    if (inside && !r.armed) { r.armed = true; toast('the gallery takes note of you'); }
+
+    let observed = inside;
+    if (!observed) {
+      const xs = [31.6, 31 + 18 * r.d - 0.4], ys = [0.6, 8 * r.h - 0.4], zs = [-9 * r.w + 0.6, 9 * r.w - 0.6];
+      let i = 0;
+      for (const x of xs) for (const y of ys) for (const z of zs) roomCorners[i++].set(x, y, z);
+      roomCorners[8].set(31 + 9 * r.d, 4 * r.h, 0);
+      for (const p of roomCorners) if (frustum.containsPoint(p)) { observed = true; break; }
+    }
+
+    if (r.armed && !observed) {
+      const target = r.presets[r.preset];
+      r.d = damp(r.d, target.d, 1.7, dt);
+      r.w = damp(r.w, target.w, 1.7, dt);
+      r.h = damp(r.h, target.h, 1.7, dt);
+      if (Math.abs(r.d - target.d) < 0.01 && Math.abs(r.w - target.w) < 0.01 && Math.abs(r.h - target.h) < 0.01) {
+        r.timer += dt;
+        if (r.timer > 2.5) {
+          r.timer = 0;
+          r.preset = (r.preset + 1 + Math.floor(Math.random() * 2)) % r.presets.length;
+        }
+      }
+      roomReadout.textContent = 'drifting';
+    } else {
+      r.timer = 0;
+      roomReadout.textContent = r.armed ? 'locked' : 'asleep';
+    }
+    roomLayout(r);
+
+    if (inside && r.armed &&
+        (Math.abs(r.d - 1) > 0.12 || Math.abs(r.w - 1) > 0.12 || Math.abs(r.h - 1) > 0.12)) {
+      complete('room', 'the gallery is not as you left it');
+    }
+  }
+
+    // -- Anamorphosis Chapel -----------------------------------------------------
+    if (!tribar.solved) {
+      const toC = tmpV2.copy(tribar.center).sub(player.pos);
+      const distV = tmpV.copy(tribar.vantage).sub(player.pos).length();
+      const dir = camera.getWorldDirection(tmpV3);
+      const align = distV < 1.7 && dir.angleTo(toC.normalize()) < 0.16;
+      tribar.charge = clamp(tribar.charge + (align ? dt / 1.3 : -dt * 1.4), 0, 1);
+      alignEl.classList.toggle('show', tribar.charge > 0.02);
+      alignFill.style.width = (tribar.charge * 100).toFixed(1) + '%';
+      if (tribar.charge >= 1) {
+        tribar.solved = true;
+        alignEl.classList.remove('show');
+        complete('tribar', 'paradox resolved — the arch stands open');
+      }
+    }
+    const sTarget = tribar.solved ? 1 : 0;
+    if (Math.abs(tribar.s - sTarget) > 1e-4) {
+      tribar.s = damp(tribar.s, sTarget, 1.8, dt);
+      tribarApply(tribar.s);
+    }
+    if (tribar.s > 0.98 && tribar.pieces[0].material !== tribarGold) {
+      for (const p of tribar.pieces) p.material = tribarGold;
+    }
+    if (tribar.solved) {
+      tribarGold.emissiveIntensity = 0.35 + 0.22 * Math.sin(t * 2.2);
+      pairArch.liveValue = damp(pairArch.liveValue, 1, 1.5, dt);
+      if (pairArch.liveValue > 0.95) pairArch.setLive(1); else pairArch.setLive(pairArch.liveValue);
+    } else if (pairArch.liveValue > 0) {
+      pairArch.setLive(Math.max(0, pairArch.liveValue - dt * 1.5));
+    }
+
+    // -- Portals ------------------------------------------------------------------
+    for (const pair of portalPairs) {
+      pair.portals.forEach(p => { p.mat.uniforms.glow.value = 0.5 + 0.5 * Math.sin(t * 1.7); });
+      if (pair.tryTeleport(player)) {
+        complete('portal', 'you are elsewhere now');
+        flash(0.22);
+        if (pair === pairArch) setGravity(FLOOR_DOWN);   // tower is floor-gravity only
+      }
+    }
+
+    // Ambient motion.
+    neckerCube.rotation.x = t * 0.21;
+    neckerCube.rotation.y = t * 0.17;
+    dustField.rotation.y = t * 0.008;
+    room.parts.orb.material.emissiveIntensity = 2.0 + 0.5 * Math.sin(t * 1.3);
+  }
+
+  const tribarGold = new THREE.MeshStandardMaterial({ color: 0xd8b45a, roughness: 0.35, metalness: 0.7, emissive: 0x8a6414, emissiveIntensity: 0.35 });
+
+  function resetTribar() {
+    if (!started || !tribar.solved) return;
+    tribar.solved = false;
+    tribar.charge = 0;
+    for (const p of tribar.pieces) {
+      p.material = MAT.stone;
+      p.userData.scatter.pos.copy(p.userData.home.pos).add(
+        new THREE.Vector3(-(2 + Math.random() * 6), (Math.random() - 0.5) * 7, (Math.random() - 0.5) * 8));
+      p.userData.scatter.rot.set((Math.random() - 0.5) * 1.6, (Math.random() - 0.5) * 1.6, (Math.random() - 0.5) * 1.6);
+    }
+    toast('the paradox scatters');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Resize / portal targets
+  // ---------------------------------------------------------------------------
+  const screenRes = new THREE.Vector2();
+  function onResize() {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.getDrawingBufferSize(screenRes);
+    const pw = Math.max(256, screenRes.x >> 1), ph = Math.max(256, screenRes.y >> 1);
+    for (const pair of portalPairs) {
+      if (pair.rts) pair.rts.flat().forEach(rt => rt.dispose());
+      pair.allocRts(pw, ph);
+    }
+  }
+  addEventListener('resize', onResize);
+  onResize();
+
+  // ---------------------------------------------------------------------------
+  // Start overlay
+  // ---------------------------------------------------------------------------
+  const startEl = document.querySelector('#start');
+  document.querySelector('#enter').addEventListener('click', () => {
+    started = true;
+    startEl.classList.add('hidden');
+    renderer.domElement.requestPointerLock();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Main loop — portal passes first (they render the scene into textures),
+  // then the main pass.
+  // ---------------------------------------------------------------------------
+  const clock = new THREE.Clock();
+  function portalVisible(pair) {
+    if (pair.liveValue < 0.05) return false;
+    for (const p of pair.portals) {
+      tmpV.copy(p.center);
+      if (player.pos.distanceTo(tmpV) < 80 && frustum.containsPoint(tmpV)) return true;
+    }
+    // Also render when the player stands between a facing pair (both behind view).
+    return pair === pairRegress && player.pos.z > 24 && player.pos.z < 66 && Math.abs(player.pos.x) < 8;
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    const dt = Math.min(clock.getDelta(), 0.05);
+
+    if (started) stepPlayer(dt);
+    else {
+      // Idle attract: slow drift around the hall.
+      const t = clock.elapsedTime * 0.06;
+      camera.position.set(Math.sin(t) * 12, 6.5, Math.cos(t) * 12);
+      camera.lookAt(0, 4, 0);
+      camera.updateMatrixWorld();
+      frustum.setFromProjectionMatrix(tmpM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    }
+
+    renderer.shadowMap.needsUpdate = true;   // consumed by the first render call this frame
+    for (const pair of portalPairs) if (portalVisible(pair)) pair.render(camera, screenRes);
+    renderer.render(scene, camera);
+  }
+  animate();
+  </script>
+</body>
+</html>

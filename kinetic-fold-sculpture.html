@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Kinetic Fold Sculpture — Three.js</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #05060a; overflow: hidden; }
+  canvas { display: block; }
+  #info {
+    position: fixed; left: 12px; bottom: 12px;
+    color: #b8c4e0; font: 12px/1.5 monospace;
+    text-shadow: 0 0 8px rgba(80, 120, 255, 0.4); pointer-events: none;
+    background: rgba(5, 8, 18, 0.45); padding: 8px 10px; border-radius: 6px;
+    border: 1px solid rgba(120, 150, 255, 0.12);
+  }
+
+  /* ---------------- Control panel ---------------- */
+  #panel {
+    position: fixed; left: 16px; top: 16px; z-index: 20;
+    width: 264px; padding: 16px;
+    background: linear-gradient(160deg, rgba(24, 28, 40, 0.92), rgba(9, 11, 17, 0.94));
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 14px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 14px 44px rgba(0, 0, 0, 0.55);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    color: #e8eaf2;
+    user-select: none;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+  }
+  #panel .label {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.18em;
+    text-transform: uppercase; color: #8a93a8; margin: 14px 0 6px;
+  }
+  #panel .label:first-child { margin-top: 0; }
+
+  .seg {
+    display: flex; gap: 3px; padding: 3px;
+    background: rgba(255, 255, 255, 0.06); border-radius: 9px;
+  }
+  .seg button {
+    flex: 1; border: 0; border-radius: 7px; cursor: pointer;
+    background: transparent; color: #cfd4e2;
+    font: 600 12px/1 "Segoe UI", system-ui, sans-serif;
+    padding: 8px 0; transition: background 0.15s, color 0.15s;
+  }
+  .seg button:hover { background: rgba(255, 255, 255, 0.08); }
+  .seg button.active { background: #f2f3f7; color: #14161e; }
+
+  #speed { width: 100%; accent-color: #c95df0; margin: 2px 0 0; cursor: pointer; }
+
+  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+  .toggle {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: rgba(255, 255, 255, 0.05); border-radius: 9px;
+    padding: 9px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .toggle input { display: none; }
+  .toggle .knob {
+    flex: none; width: 34px; height: 18px; border-radius: 999px;
+    background: #3a3f4e; position: relative; transition: background 0.2s;
+  }
+  .toggle .knob::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%; background: #fff;
+    transition: transform 0.2s;
+  }
+  .toggle input:checked + .knob { background: #c95df0; }
+  .toggle input:checked + .knob::after { transform: translateX(16px); }
+
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+  .actions button {
+    border: 0; border-radius: 9px; padding: 11px 0; cursor: pointer;
+    font: 700 12px/1 "Segoe UI", system-ui, sans-serif;
+    transition: filter 0.15s;
+  }
+  .actions button:hover { filter: brightness(1.15); }
+  #reshuffle { background: #c95df0; color: #1a0b22; }
+  #resetView { background: rgba(255, 255, 255, 0.08); color: #e8eaf2; }
+</style>
+</head>
+<body>
+<div id="info">KINETIC FOLD SCULPTURE — drag to orbit &middot; scroll to zoom</div>
+
+<div id="panel">
+  <div class="label">Core polyhedron</div>
+  <div class="seg" id="segCore">
+    <button data-value="icosa" class="active">Icosa</button>
+    <button data-value="dodeca">Dodeca</button>
+    <button data-value="octa">Octa</button>
+  </div>
+
+  <div class="label">Complexity</div>
+  <div class="seg" id="segComplexity">
+    <button data-value="low">Low</button>
+    <button data-value="med" class="active">Med</button>
+    <button data-value="high">High</button>
+  </div>
+
+  <div class="label">Material</div>
+  <div class="seg" id="segMaterial">
+    <button data-value="chrome" class="active">Dark chrome</button>
+    <button data-value="glass">Frosted glass</button>
+  </div>
+
+  <div class="label" id="speedLabel">Speed &middot; 1.00&times;</div>
+  <input type="range" id="speed" min="0" max="3" step="0.05" value="1" />
+
+  <div class="toggles">
+    <label class="toggle">Shadows<input type="checkbox" id="tglShadows" checked><span class="knob"></span></label>
+    <label class="toggle">Transmission<input type="checkbox" id="tglTransmission" checked><span class="knob"></span></label>
+    <label class="toggle">Hinge pins<input type="checkbox" id="tglPins" checked><span class="knob"></span></label>
+    <label class="toggle">Auto-rotate<input type="checkbox" id="tglRotate" checked><span class="knob"></span></label>
+  </div>
+
+  <div class="actions">
+    <button id="reshuffle">Reshuffle seed</button>
+    <button id="resetView">Reset view</button>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+// =====================================================================
+// STATE & PRESETS
+// =====================================================================
+const state = {
+  core: 'icosa',
+  complexity: 'med',
+  material: 'chrome',
+  speed: 1.0,
+  shadows: true,
+  transmission: true,
+  hingePins: true,
+  autoRotate: true,
+  seed: 1337,
+};
+
+const CONFIG = {
+  panelLength: 1.35,
+  panelWidth: 0.95,
+  lengthDecay: 0.68,
+  widthDecay: 0.72,
+  spreadAngle: 0.85,
+  coreRadius: 0.42,
+  foldSpeed: 0.55,
+};
+
+const COMPLEXITY = {
+  low:  { branches: 5, depth: 3, branching: 2 },
+  med:  { branches: 6, depth: 4, branching: 2 },
+  high: { branches: 8, depth: 4, branching: 3 },
+};
+
+const MATERIAL_PRESETS = {
+  chrome: { hueBase: 0.60, sat: 0.35, light: 0.16, metalness: 0.90, roughness: 0.20, clearcoatRoughness: 0.15, envMapIntensity: 1.4, transmissionBase: 0.30 },
+  glass:  { hueBase: 0.55, sat: 0.10, light: 0.78, metalness: 0.05, roughness: 0.35, clearcoatRoughness: 0.10, envMapIntensity: 1.0, transmissionBase: 0.90 },
+};
+
+const CORE_GEOMS = {
+  icosa:  () => new THREE.IcosahedronGeometry(CONFIG.coreRadius, 0),
+  dodeca: () => new THREE.DodecahedronGeometry(CONFIG.coreRadius, 0),
+  octa:   () => new THREE.OctahedronGeometry(CONFIG.coreRadius, 0),
+};
+
+// Seeded RNG (mulberry32) so "Reshuffle seed" yields new sculptures
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+let rng = mulberry32(state.seed);
+
+// =====================================================================
+// RENDERER / SCENE / CAMERA
+// =====================================================================
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05060a);
+scene.fog = new THREE.FogExp2(0x05060a, 0.028);
+
+const INITIAL_CAM = new THREE.Vector3(6.5, 4.0, 8.5);
+const INITIAL_TARGET = new THREE.Vector3(0, 1.2, 0);
+
+const camera = new THREE.PerspectiveCamera(
+  45, window.innerWidth / window.innerHeight, 0.1, 200
+);
+camera.position.copy(INITIAL_CAM);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.minDistance = 3.0;
+controls.maxDistance = 30.0;
+controls.target.copy(INITIAL_TARGET);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+// =====================================================================
+// MATERIALS
+// =====================================================================
+const panelMaterials = [];
+
+function createPanelMaterial(hueShift) {
+  const m = new THREE.MeshPhysicalMaterial({
+    clearcoat: 1.0,
+    thickness: 0.4,
+    ior: 1.5,
+    side: THREE.DoubleSide,
+  });
+  m.userData.hueShift = hueShift;
+  panelMaterials.push(m);
+  return m;
+}
+
+const coreMaterial = new THREE.MeshPhysicalMaterial({
+  clearcoat: 1.0,
+  thickness: 0.6,
+  flatShading: true,
+});
+coreMaterial.userData.hueShift = 0;
+
+const pinMaterial = new THREE.MeshStandardMaterial({
+  color: 0x9aa0b4, metalness: 1.0, roughness: 0.35, envMapIntensity: 1.2,
+});
+
+function applyMaterialPreset() {
+  const p = MATERIAL_PRESETS[state.material];
+  for (const m of [...panelMaterials, coreMaterial]) {
+    m.metalness = p.metalness;
+    m.roughness = p.roughness;
+    m.clearcoatRoughness = p.clearcoatRoughness;
+    m.envMapIntensity = p.envMapIntensity;
+    m.color.setHSL(p.hueBase + m.userData.hueShift * 0.012, p.sat, p.light);
+    m.userData.transmissionBase = p.transmissionBase;
+    m.transmission = state.transmission ? p.transmissionBase : 0;
+    m.needsUpdate = true;
+  }
+}
+
+// =====================================================================
+// GEOMETRY — hinge edge on the local X axis so pivots fold on the edge
+// =====================================================================
+const geometryCache = [];
+const pinCache = [];
+
+function panelGeometry(depth) {
+  if (!geometryCache[depth]) {
+    const w = panelWidthAt(depth);
+    const l = panelLengthAt(depth);
+    const shape = new THREE.Shape();
+    shape.moveTo(-w / 2, 0);
+    shape.lineTo(w / 2, 0);
+    shape.lineTo(0, l);
+    shape.closePath();
+    geometryCache[depth] = new THREE.ShapeGeometry(shape, 1);
+  }
+  return geometryCache[depth];
+}
+
+function pinGeometry(depth) {
+  if (!pinCache[depth]) {
+    const r = 0.03 * Math.pow(0.8, depth);
+    pinCache[depth] = new THREE.CylinderGeometry(r, r, panelWidthAt(depth) * 1.06, 10);
+  }
+  return pinCache[depth];
+}
+
+function panelLengthAt(depth) { return CONFIG.panelLength * Math.pow(CONFIG.lengthDecay, depth); }
+function panelWidthAt(depth)  { return CONFIG.panelWidth  * Math.pow(CONFIG.widthDecay, depth); }
+
+// =====================================================================
+// SCULPTURE ASSEMBLY — recursive hinge hierarchy, rebuildable
+// =====================================================================
+const sculpture = new THREE.Group();
+sculpture.position.y = 1.4;
+scene.add(sculpture);
+
+const heartLight = new THREE.PointLight(0xff4488, 40, 14, 2);
+
+let core = null;
+const foldNodes = [];
+let nodeCounter = 0;
+
+function buildPanelNode(depth) {
+  const pivot = new THREE.Group();
+
+  const mesh = new THREE.Mesh(panelGeometry(depth), createPanelMaterial(nodeCounter));
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  pivot.add(mesh);
+
+  const pin = new THREE.Mesh(pinGeometry(depth), pinMaterial);
+  pin.rotation.z = Math.PI / 2;   // cylinder axis Y -> along hinge X
+  pin.castShadow = true;
+  pin.userData.hingePin = true;
+  pin.visible = state.hingePins;
+  pivot.add(pin);
+
+  foldNodes.push({ group: pivot, index: nodeCounter, depth, baseX: 0 });
+  nodeCounter++;
+
+  const c = COMPLEXITY[state.complexity];
+  if (depth < c.depth - 1) {
+    for (let i = 0; i < c.branching; i++) {
+      const child = buildPanelNode(depth + 1);
+      child.position.set(0, panelLengthAt(depth), 0);
+
+      const fan = (i - (c.branching - 1) / 2) * CONFIG.spreadAngle;
+      child.rotation.y = fan + (rng() - 0.5) * 0.3;
+      child.rotation.z = (rng() > 0.5 ? 1 : -1) * (0.3 + rng() * 0.3 + depth * 0.1);
+      child.rotation.x = Math.PI * (0.4 + rng() * 0.45);
+
+      pivot.add(child);
+      // Preserve the authored hinge angle: the animation loop rebuilds
+      // rotation.x from baseX each frame, so record it here.
+      foldNodes.find(n => n.group === child).baseX = child.rotation.x;
+    }
+  }
+  return pivot;
+}
+
+function buildSculpture() {
+  sculpture.traverse(o => {
+    if (o.isMesh && !o.userData.hingePin && o !== core) o.material.dispose();
+  });
+  sculpture.clear();
+  foldNodes.length = 0;
+  panelMaterials.length = 0;
+  nodeCounter = 0;
+  rng = mulberry32(state.seed);
+
+  const c = COMPLEXITY[state.complexity];
+  for (let b = 0; b < c.branches; b++) {
+    const root = buildPanelNode(0);
+    const angle = (b / c.branches) * Math.PI * 2;
+    const tilt = rng() > 0.5 ? 1 : -1;
+    root.rotation.set(tilt * Math.PI * (0.24 + rng() * 0.16), angle, tilt * (0.2 + rng() * 0.2), 'YXZ');
+    root.position.set(
+      Math.cos(angle) * CONFIG.coreRadius,
+      Math.sin(angle * 2.0) * 0.25,
+      Math.sin(angle) * CONFIG.coreRadius
+    );
+    sculpture.add(root);
+    foldNodes.find(n => n.group === root).baseX = root.rotation.x;
+  }
+
+  core = new THREE.Mesh(CORE_GEOMS[state.core](), coreMaterial);
+  core.castShadow = true;
+  core.receiveShadow = true;
+  sculpture.add(core);
+  sculpture.add(heartLight);
+
+  applyMaterialPreset();
+}
+
+function setCoreGeometry(type) {
+  core.geometry.dispose();
+  core.geometry = CORE_GEOMS[type]();
+}
+
+// =====================================================================
+// LIGHTING — dramatic three-point scheme
+// =====================================================================
+const keyLight = new THREE.DirectionalLight(0xfff2e0, 3.2);
+keyLight.position.set(8, 12, 6);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.camera.left = -8;
+keyLight.shadow.camera.right = 8;
+keyLight.shadow.camera.top = 8;
+keyLight.shadow.camera.bottom = -8;
+keyLight.shadow.camera.near = 1;
+keyLight.shadow.camera.far = 40;
+keyLight.shadow.bias = -0.0004;
+scene.add(keyLight);
+
+const fillLight = new THREE.DirectionalLight(0x5060ff, 0.5);
+fillLight.position.set(-7, 3, -5);
+scene.add(fillLight);
+
+const rimLight = new THREE.DirectionalLight(0x9060ff, 1.1);
+rimLight.position.set(-2, 6, -9);
+scene.add(rimLight);
+
+scene.add(new THREE.AmbientLight(0x28304a, 0.7));
+
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(16, 64),
+  new THREE.MeshStandardMaterial({ color: 0x0a0c14, roughness: 0.85, metalness: 0.1 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -2.6;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// =====================================================================
+// KINETIC ANIMATION — nested sin/cos folds, speed-scaled time
+// =====================================================================
+const clock = new THREE.Clock();
+let t = 0;
+let tumble = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.1);
+  t += dt * state.speed;
+  if (state.autoRotate) tumble += dt * state.speed;
+
+  for (const { group, index, depth, baseX } of foldNodes) {
+    const phase = index * 0.37 + depth * 1.3;
+
+    const primary = Math.sin(t * 0.9 + phase) * 0.55
+                  + Math.sin(t * 1.7 + phase * 0.5) * 0.25;
+
+    const flutter = Math.cos(t * (1.2 + depth * 0.35) + index * 0.21)
+                  * (0.12 + depth * 0.04);
+
+    const bias = depth === 0 ? 0 : (0.35 + depth * 0.28) * Math.PI * 0.5;
+
+    group.rotation.x = baseX + bias + primary + flutter;
+    group.rotation.z += Math.sin(t * 0.6 + phase * 0.8) * 0.0015;
+  }
+
+  sculpture.rotation.y = tumble * 0.12;
+  sculpture.rotation.z = Math.sin(tumble * 0.21) * 0.16;
+
+  heartLight.intensity = 30 + Math.sin(t * 2.3) * 14 + Math.sin(t * 5.1) * 5;
+  heartLight.color.setHSL((0.9 + Math.sin(t * 0.15) * 0.12) % 1, 0.9, 0.6);
+
+  core.rotation.x = t * 0.4;
+  core.rotation.y = -t * 0.6;
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+// =====================================================================
+// UI WIRING
+// =====================================================================
+function bindSegment(id, onChange) {
+  const el = document.getElementById(id);
+  el.addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn || btn.classList.contains('active')) return;
+    el.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+    onChange(btn.dataset.value);
+  });
+}
+
+bindSegment('segCore', v => { state.core = v; setCoreGeometry(v); });
+bindSegment('segComplexity', v => { state.complexity = v; buildSculpture(); });
+bindSegment('segMaterial', v => { state.material = v; applyMaterialPreset(); });
+
+const speedSlider = document.getElementById('speed');
+const speedLabel = document.getElementById('speedLabel');
+speedSlider.addEventListener('input', () => {
+  state.speed = parseFloat(speedSlider.value);
+  speedLabel.innerHTML = `Speed &middot; ${state.speed.toFixed(2)}&times;`;
+});
+
+document.getElementById('tglShadows').addEventListener('change', e => {
+  state.shadows = e.target.checked;
+  keyLight.castShadow = state.shadows;
+});
+
+document.getElementById('tglTransmission').addEventListener('change', e => {
+  state.transmission = e.target.checked;
+  for (const m of [...panelMaterials, coreMaterial]) {
+    m.transmission = state.transmission ? m.userData.transmissionBase : 0;
+    m.needsUpdate = true;
+  }
+});
+
+document.getElementById('tglPins').addEventListener('change', e => {
+  state.hingePins = e.target.checked;
+  sculpture.traverse(o => { if (o.userData.hingePin) o.visible = state.hingePins; });
+});
+
+document.getElementById('tglRotate').addEventListener('change', e => {
+  state.autoRotate = e.target.checked;
+});
+
+document.getElementById('reshuffle').addEventListener('click', () => {
+  state.seed = (Math.random() * 0xffffffff) >>> 0;
+  buildSculpture();
+});
+
+document.getElementById('resetView').addEventListener('click', () => {
+  camera.position.copy(INITIAL_CAM);
+  controls.target.copy(INITIAL_TARGET);
+  controls.update();
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+buildSculpture();
+animate();
+</script>
+</body>
+</html>

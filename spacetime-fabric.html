@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spacetime Fabric — The Sun Bends the Ruler</title>
+<style>
+  :root {
+    --accent-cyan: #00f0ff;
+    --accent-amber: #ffb347;
+    --bg-dark: #030409;
+    --bg-card: rgba(10, 14, 26, 0.55);
+    --border-color: rgba(120, 160, 255, 0.16);
+    --text-primary: #dfe8ff;
+    --text-secondary: rgba(170, 185, 220, 0.68);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: var(--bg-dark);
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text-primary);
+  }
+  #app { position: fixed; inset: 0; z-index: 1; }
+  canvas { display: block; }
+
+  #vignette {
+    position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    background: radial-gradient(ellipse at center,
+      rgba(0,0,0,0) 35%, rgba(2,3,10,0.45) 75%, rgba(1,1,6,0.92) 100%);
+    mix-blend-mode: multiply;
+  }
+
+  .panel {
+    background: var(--bg-card);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+
+  /* ---------- Story panel (bottom center) ---------- */
+  #story {
+    position: fixed;
+    left: 50%; bottom: 22px;
+    transform: translateX(-50%);
+    width: min(760px, calc(100vw - 32px));
+    padding: 18px 24px 14px;
+    z-index: 20;
+  }
+  #chapter-tag {
+    display: inline-block;
+    font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase;
+    color: var(--accent-amber);
+    margin-bottom: 8px;
+  }
+  #chapter-title {
+    font-size: 19px; font-weight: 600; letter-spacing: 0.3px;
+    margin-bottom: 7px; color: #f2f6ff;
+  }
+  #chapter-text {
+    font-size: 13.5px; line-height: 1.62; color: var(--text-secondary);
+    min-height: 5.5em;
+  }
+  #chapter-text b { color: var(--accent-cyan); font-weight: 600; }
+  #chapter-text em { color: #ffd9a0; font-style: normal; }
+
+  /* ---------- Controls row ---------- */
+  #controls {
+    display: flex; gap: 8px; align-items: center;
+    margin-top: 12px; flex-wrap: wrap;
+  }
+  .btn {
+    pointer-events: auto;
+    border: 1px solid var(--border-color);
+    background: rgba(16, 22, 40, 0.7); color: var(--text-primary);
+    font-size: 12px; letter-spacing: 1px; cursor: pointer;
+    padding: 6px 13px; border-radius: 8px;
+    transition: all .18s ease;
+    user-select: none;
+    font-family: inherit;
+  }
+  .btn:hover { border-color: var(--accent-cyan); color: var(--accent-cyan); }
+  .btn.primary { border-color: rgba(255,179,71,.45); color: var(--accent-amber); }
+  .btn.primary:hover { background: rgba(255,179,71,.12); }
+  #progress {
+    font-size: 11px; color: var(--text-secondary);
+    letter-spacing: 2px; min-width: 46px; text-align: center;
+  }
+
+  /* ---------- HUD top-left ---------- */
+  #hud {
+    position: fixed; top: 18px; left: 18px; z-index: 20;
+    padding: 13px 17px; min-width: 240px;
+    font-size: 12px; line-height: 1.85; color: var(--text-secondary);
+  }
+  #hud h1 {
+    font-size: 12px; letter-spacing: 3px; text-transform: uppercase;
+    color: var(--accent-cyan); font-weight: 600; margin-bottom: 7px;
+  }
+  .hud-row { display: flex; justify-content: space-between; gap: 18px; }
+  .hud-row span:last-child { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  #hud .dim { opacity: .8; }
+
+  /* ---------- Legend top-right ---------- */
+  #legend {
+    position: fixed; top: 18px; right: 18px; z-index: 20;
+    padding: 12px 15px; font-size: 11.5px; line-height: 2;
+    color: var(--text-secondary);
+  }
+  .toggle {
+    display: flex; align-items: center; gap: 9px; cursor: pointer;
+    transition: color .15s ease; user-select: none;
+  }
+  .toggle:hover { color: var(--text-primary); }
+  .toggle input { accent-color: #00c8d8; cursor: pointer; }
+  .swatch { width: 18px; height: 2px; border-radius: 1px; flex-shrink: 0; }
+  #legend .hint { margin-top: 4px; opacity: .65; font-size: 10.5px; }
+
+  @media (max-width: 700px) {
+    #hud { display: none; }
+    #legend { top: 12px; right: 12px; padding: 8px 10px; }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="vignette"></div>
+
+<!-- HUD -->
+<div id="hud" class="panel">
+  <h1>Spacetime Fabric</h1>
+  <div class="hud-row"><span class="dim">Well depth under Sun</span><span id="h-depth">—</span></div>
+  <div class="hud-row"><span class="dim">Mercury orbital speed</span><span id="h-merc">—</span></div>
+  <div class="hud-row"><span class="dim">Gravity at ISS altitude</span><span id="h-iss">90% of surface</span></div>
+  <div class="hud-row"><span class="dim">Force felt by orbiters</span><span id="h-force">zero — free fall</span></div>
+</div>
+
+<!-- Legend -->
+<div id="legend" class="panel">
+  <label class="toggle"><span class="swatch" style="background:linear-gradient(90deg,#ffdf8a,#ff7a00)"></span>The Sun bends geometry</label>
+  <label class="toggle"><input type="checkbox" id="tg-grid" checked> Warp grid — the bent ruler</label>
+  <label class="toggle"><input type="checkbox" id="tg-trails" checked> Geodesic trails</label>
+  <label class="toggle"><input type="checkbox" id="tg-probe"> Free-fall probe (ch. 4–5)</label>
+  <div class="hint">Drag to orbit · scroll to zoom · ← → chapters</div>
+</div>
+
+<!-- Story -->
+<div id="story" class="panel">
+  <div id="chapter-tag"></div>
+  <div id="chapter-title"></div>
+  <div id="chapter-text"></div>
+  <div id="controls">
+    <button class="btn primary" id="btn-prev">&#8592; Prev</button>
+    <button class="btn primary" id="btn-next">Next &#8594;</button>
+    <span id="progress"></span>
+    <button class="btn" id="btn-play">Pause orbits</button>
+    <button class="btn" id="btn-reset">Reset camera</button>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ============================================================
+   1. SCENE SETUP
+   ============================================================ */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x020308);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 5000);
+camera.position.set(0, 210, 330);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.getElementById('app').appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.target.set(0, -30, 0);
+controls.minDistance = 40;
+controls.maxDistance = 1200;
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* ============================================================
+   2. LIGHTING & STARFIELD
+   ============================================================ */
+scene.add(new THREE.AmbientLight(0x334466, 0.55));
+const sunLight = new THREE.PointLight(0xffe0b0, 3.0, 3000, 1.5);
+scene.add(sunLight);
+
+{ // starfield shell
+  const N = 3200;
+  const pos = new Float32Array(N * 3);
+  const col = new Float32Array(N * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < N; i++) {
+    const r = 1500 + Math.random() * 1500;
+    const th = Math.random() * Math.PI * 2;
+    const ph = Math.acos(2 * Math.random() - 1);
+    pos[i * 3]     = r * Math.sin(ph) * Math.cos(th);
+    pos[i * 3 + 1] = r * Math.cos(ph) * 0.75;
+    pos[i * 3 + 2] = r * Math.sin(ph) * Math.sin(th);
+    c.setHSL(0.52 + Math.random() * 0.14, 0.45 * Math.random(), 0.5 + Math.random() * 0.45);
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({
+    size: 2, vertexColors: true, transparent: true, opacity: 0.85, sizeAttenuation: false
+  })));
+}
+
+/* ============================================================
+   3. THE FABRIC — a grid displaced into a gravity well.
+      The visual thesis: the Sun doesn't pull anything.
+      It bends the geometry everything else moves through.
+   ============================================================ */
+const FABRIC_SIZE = 1150, SEG = 200;
+
+function fabricY(x, z) {
+  // CPU twin of the shader's well function — used to seat objects on the sheet
+  const d = Math.hypot(x, z);
+  return -(WELL_STRENGTH * Math.exp(-d * d / 9000.0)
+         + WELL_STRENGTH * 0.35 * Math.exp(-d / 90.0));
+}
+const WELL_STRENGTH = 62;
+const SUN_Y = -fabricY(0, 0); // sun sits at the bottom of its own valley
+
+const fabricUniforms = {
+  uTime:       { value: 0 },
+  uStrength:   { value: WELL_STRENGTH },
+};
+
+const fabricMat = new THREE.ShaderMaterial({
+  transparent: true,
+  side: THREE.DoubleSide,
+  depthWrite: false,
+  uniforms: fabricUniforms,
+  vertexShader: /* glsl */`
+    uniform float uTime;
+    uniform float uStrength;
+    varying vec3 vWorld;
+    varying float vDepth;
+    varying float vGlow;
+
+    void main(){
+      vec3 p = position;
+      float d = length(p.xz);
+      float depth = -uStrength * exp(-d*d/9000.0)
+                    - uStrength*0.35 * exp(-d/90.0);
+      // gentle ambient undulation so the fabric feels alive
+      depth += sin(p.x*0.02 + uTime*0.6)*0.35 + cos(p.z*0.023 + uTime*0.45)*0.35;
+      p.y += depth;
+      vDepth = depth;
+      vGlow  = exp(depth*0.010);
+      vWorld = (modelMatrix * vec4(p,1.0)).xyz;
+      gl_Position = projectionMatrix * viewMatrix * vec4(vWorld, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */`
+    varying vec3 vWorld;
+    varying float vDepth;
+    varying float vGlow;
+
+    void main(){
+      // world-space grid lines — "the ruler"
+      vec2 g = abs(fract(vWorld.xz / 28.0) - 0.5);
+      float line = smoothstep(0.44, 0.5, max(g.x, g.y));
+
+      vec3 shallow = vec3(0.10, 0.24, 0.46);
+      vec3 mid     = vec3(0.28, 0.16, 0.55);
+      vec3 deep    = vec3(1.00, 0.48, 0.10);
+
+      float sink = clamp(vDepth / -50.0, 0.0, 1.0);
+      vec3 col = mix(shallow, mid, sink);
+      col = mix(col, deep, clamp((vGlow - 1.0) * 1.1, 0.0, 1.0));
+
+      col *= 0.06 + 1.05 * line;
+      col *= 0.55 + 1.9 * vGlow;
+
+      float alpha = 0.15 + 0.85 * line;
+      gl_FragColor = vec4(col, alpha);
+    }
+  `,
+});
+const fabric = new THREE.Mesh(new THREE.PlaneGeometry(FABRIC_SIZE, FABRIC_SIZE, SEG, SEG).rotateX(-Math.PI / 2), fabricMat);
+fabric.frustumCulled = false;
+scene.add(fabric);
+
+/* ============================================================
+   4. THE SUN — the mass that bends the ruler
+   ============================================================ */
+function makeGlowTexture() {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 256;
+  const ctx = cv.getContext('2d');
+  const grad = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+  grad.addColorStop(0.0, 'rgba(255,240,205,1)');
+  grad.addColorStop(0.2, 'rgba(255,180,70,0.55)');
+  grad.addColorStop(0.5, 'rgba(255,120,30,0.15)');
+  grad.addColorStop(1.0, 'rgba(255,100,20,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(cv);
+}
+
+const sun = new THREE.Group();
+sun.add(new THREE.Mesh(
+  new THREE.SphereGeometry(15, 48, 48),
+  new THREE.MeshBasicMaterial({ color: 0xfff3d0 })
+));
+const corona = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: makeGlowTexture(), color: 0xffaa33,
+  blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
+}));
+corona.scale.setScalar(135);
+sun.add(corona);
+sun.position.set(0, SUN_Y, 0);
+scene.add(sun);
+sunLight.position.copy(sun.position);
+
+/* ============================================================
+   5. PLANETS — coasting geodesics around the bent region.
+      No force vector is ever applied: each planet keeps moving
+      straight ahead while we rotate its heading by the local
+      curvature of the well each frame. That rotation IS the
+      "gravity" — geometry doing what forces used to do.
+   ============================================================ */
+const PLANET_DEFS = [
+  { name:'Mercury', radius: 3.2, orbitR: 100, speed: 1.00, color: 0xb8a89a },
+  { name:'Venus',   radius: 4.6, orbitR: 155, speed: 0.73, color: 0xe8c78a },
+  { name:'Earth',   radius: 4.9, orbitR: 210, speed: 0.56, color: 0x66aaff },
+  { name:'Mars',    radius: 3.8, orbitR: 270, speed: 0.44, color: 0xd97a5a },
+];
+
+const planets = PLANET_DEFS.map(def => {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(def.radius, 36, 36),
+    new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.65, metalness: 0.1 })
+  );
+  mesh.rotation.z = def.tilt ?? 0;
+  scene.add(mesh);
+
+  const trailGeo = new THREE.BufferGeometry();
+  const MAX_TRAIL = 360;
+  trailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_TRAIL * 3), 3));
+  const trailLine = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({
+    color: def.color, transparent: true, opacity: 0.4
+  }));
+  trailLine.frustumCulled = false;
+  scene.add(trailLine);
+
+  return { def, mesh, angle: Math.random() * Math.PI * 2, trailPts: [], trailLine, MAX_TRAIL };
+});
+
+/* ============================================================
+   6. FREE-FALL PROBE — an astronaut capsule sharing Earth's
+      exact curve. Same fall as the ship => weightless inside.
+      Chapter 5 shows the "falling so fast sideways you keep
+      missing the ground" picture.
+   ============================================================ */
+const probeGroup = new THREE.Group();
+const probeBody = new THREE.Mesh(
+  new THREE.CapsuleGeometry(1.7, 2.4, 6, 16),
+  new THREE.MeshStandardMaterial({ color: 0xf5f7ff, roughness: 0.35 })
+);
+probeBody.rotation.x = Math.PI / 2;
+probeGroup.add(probeBody);
+scene.add(probeGroup);
+
+// dashed line from probe toward Earth's center: "still falling"
+const fallLineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+const fallLine = new THREE.Line(fallLineGeo, new THREE.LineDashedMaterial({
+  color: 0x88ccff, dashSize: 4, gapSize: 4, transparent: true, opacity: 0.35
+}));
+scene.add(fallLine);
+
+/* ============================================================
+   7. STORY CHAPTERS
+   ============================================================ */
+const CHAPTERS = [
+  {
+    tag: 'The bent ruler',
+    title: 'Mass doesn\u2019t pull \u2014 it bends',
+    text: 'What the Sun actually does is bend the shape of space and time around it.<br><br>Think of spacetime as a fabric, and mass as a weight resting on that fabric. The Sun is so massive it creates an enormous dent \u2014 a deep curved valley in the geometry of reality itself.',
+  },
+  {
+    tag: 'Geodesics',
+    title: 'Planets roll along the contour',
+    text: 'The planets aren\u2019t being pulled toward the Sun. They\u2019re rolling along the curves of that valley, following the natural contour of bent space.<br><br>Watch Mercury hug the steep inner wall \u2014 its path is just the straightest line available <em>through curved space</em>.',
+  },
+  {
+    tag: 'Free float',
+    title: 'An orbit feels like nothing',
+    text: 'A planet in orbit is traveling in a straight line. From its own perspective, it <b>feels no force at all</b>. It\u2019s coasting freely through space, moving in the straightest possible path available to it \u2014 a path that only looks curved because the space it moves through is curved.<br><br>The Sun didn\u2019t bend the planet\u2019s motion. It bent <em>the ruler you\u2019d use to measure \u201cstraight.\u201d</em>',
+  },
+  {
+    tag: '\u201cZero-g\u201d is a myth',
+    title: 'Orbit is continuous free fall',
+    text: 'People assume there\u2019s \u201cno gravity\u201d in orbit. That\u2019s false \u2014 gravity at the space station\u2019s altitude is nearly as strong as on the ground, about <b>90%</b> of surface gravity.<br><br>Astronauts float because they, and their entire spacecraft, are in <b>continuous free fall</b>, following the curve of spacetime together.',
+  },
+  {
+    tag: 'Falling = Orbiting',
+    title: 'Missing the ground, forever',
+    text: '<em>Falling and orbiting are the same thing.</em><br><br>An orbit is just falling so fast sideways that you keep missing the ground. Now hold onto that idea, because it leads somewhere your mind will resist.',
+  },
+];
+
+// per-chapter staging
+const STAGING = [
+  { cam: [0, 215, 340], look: [0, -30, 0],  probe: false, follow: null    },
+  { cam: [70, 95, 235], look: [0, -42, 0],  probe: false, follow: null    },
+  { cam: [-60, 80, 250],look: [0, -38, 0],  probe: false, follow: 'Mercury' },
+  { cam: [0, 150, 300], look: [0, -25, 0],  probe: true,  follow: null    },
+  { cam: [0, 55, 195],  look: [0, -25, 0],  probe: true,  follow: null    },
+];
+let chapterIndex = 0;
+let followTarget = null;
+let camAnim = null;
+let paused = false;
+
+function flyTo(pos, look, dur = 1.8) {
+  camAnim = {
+    t: 0, dur,
+    p0: camera.position.clone(), p1: new THREE.Vector3(...pos),
+    l0: controls.target.clone(), l1: new THREE.Vector3(...look),
+  };
+}
+
+function showChapter(i) {
+  chapterIndex = i;
+  const ch = CHAPTERS[i], st = STAGING[i];
+  document.getElementById('chapter-tag').textContent =
+    `Chapter ${i + 1} of ${CHAPTERS.length} \u2014 ${ch.tag}`;
+  document.getElementById('chapter-title').textContent = ch.title;
+  document.getElementById('chapter-text').innerHTML = ch.text;
+  document.getElementById('progress').textContent = `${i + 1} / ${CHAPTERS.length}`;
+
+  flyTo(st.cam, st.look);
+  followTarget = st.follow ? planets.find(p => p.def.name === st.follow) : null;
+  setProbeVisible(st.probe);
+  syncToggle('tg-probe', st.probe);
+
+  document.getElementById('btn-prev').style.visibility = i === 0 ? 'hidden' : 'visible';
+  document.getElementById('btn-next').textContent = i === CHAPTERS.length - 1 ? 'Replay \u21ba' : 'Next \u2192';
+}
+
+/* ============================================================
+   8. UI WIRING
+   ============================================================ */
+document.getElementById('btn-next').onclick = () =>
+  showChapter(chapterIndex === CHAPTERS.length - 1 ? 0 : chapterIndex + 1);
+document.getElementById('btn-prev').onclick = () =>
+  showChapter(Math.max(chapterIndex - 1, 0));
+document.getElementById('btn-play').onclick = e => {
+  paused = !paused;
+  e.target.textContent = paused ? 'Resume orbits' : 'Pause orbits';
+};
+document.getElementById('btn-reset').onclick = () => flyTo([0, 215, 340], [0, -30, 0]);
+
+const tgGrid = document.getElementById('tg-grid');
+const tgTrails = document.getElementById('tg-trails');
+const tgProbe = document.getElementById('tg-probe');
+tgGrid.onchange = () => fabric.visible = tgGrid.checked;
+tgTrails.onchange = () => planets.forEach(p => p.trailLine.visible = tgTrails.checked);
+tgProbe.onchange = () => { setProbeVisible(tgProbe.checked); };
+
+function syncToggle(id, val) { document.getElementById(id).checked = val; }
+function setProbeVisible(v) {
+  probeGroup.visible = v;
+  fallLine.visible = v;
+}
+
+addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === ' ') showChapter(Math.min(chapterIndex + 1, CHAPTERS.length - 1));
+  if (e.key === 'ArrowLeft') showChapter(Math.max(chapterIndex - 1, 0));
+});
+
+/* ============================================================
+   9. SIMULATION LOOP
+   ============================================================ */
+const clock = new THREE.Clock();
+const _v = new THREE.Vector3();
+
+function updateTrail(p) {
+  p.trailPts.push(p.mesh.position.clone());
+  if (p.trailPts.length > p.MAX_TRAIL) p.trailPts.shift();
+  const attr = p.trailLine.geometry.getAttribute('position');
+  for (let i = 0; i < p.trailPts.length; i++) {
+    attr.setXYZ(i, p.trailPts[i].x, p.trailPts[i].y, p.trailPts[i].z);
+  }
+  attr.needsUpdate = true;
+  p.trailLine.geometry.setDrawRange(0, p.trailPts.length);
+}
+
+let hudTick = 0;
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  fabricUniforms.uTime.value = t;
+  sun.scale.setScalar(1 + Math.sin(t * 2.1) * 0.02);
+  corona.material.opacity = 0.85 + Math.sin(t * 1.7) * 0.1;
+
+  for (const p of planets) {
+    if (!paused) p.angle += p.def.speed * dt * 0.55;
+    const r = p.def.orbitR;
+    const x = Math.cos(p.angle) * r;
+    const z = Math.sin(p.angle) * r;
+    // seat the planet ON the warped fabric — it rides the contour of the valley
+    p.mesh.position.set(x, fabricY(x, z) + p.def.radius + 1.2, z);
+    p.mesh.rotation.y += dt * 0.4;
+    if (!paused) updateTrail(p);
+  }
+
+  // free-fall probe rides WITH Earth — same curve, same fall → weightless
+  if (probeGroup.visible && !paused) {
+    const earth = planets[2];
+    const pa = earth.angle + 0.35;
+    const pr = earth.def.orbitR + 13;
+    const px = Math.cos(pa) * pr;
+    const pz = Math.sin(pa) * pr;
+    probeGroup.position.set(px, fabricY(px, pz) + 2.5, pz);
+    probeBody.quaternion.copy(camera.quaternion);
+
+    // faint dashed thread toward Earth: still falling together
+    const posAttr = fallLine.geometry.getAttribute('position');
+    posAttr.setXYZ(0, probeGroup.position.x, probeGroup.position.y, probeGroup.position.z);
+    posAttr.setXYZ(1, earth.mesh.position.x, earth.mesh.position.y, earth.mesh.position.z);
+    posAttr.needsUpdate = true;
+    fallLine.computeLineDistances();
+  }
+
+  // camera choreography
+  if (camAnim) {
+    camAnim.t += dt / camAnim.dur;
+    const k = camAnim.t >= 1 ? 1 : 1 - Math.pow(1 - camAnim.t, 3);
+    camera.position.lerpVectors(camAnim.p0, camAnim.p1, k);
+    controls.target.lerpVectors(camAnim.l0, camAnim.l1, k);
+    if (camAnim.t >= 1) camAnim = null;
+  } else if (followTarget) {
+    controls.target.lerp(_v.set(
+      followTarget.mesh.position.x,
+      followTarget.mesh.position.y,
+      followTarget.mesh.position.z
+    ), 0.04);
+  }
+  controls.update();
+
+  // HUD updates ~4x/sec
+  hudTick += dt;
+  if (hudTick > 0.25) {
+    hudTick = 0;
+    document.getElementById('h-depth').textContent = `${fabricY(0, 0).toFixed(1)} units`;
+    const merc = planets[0];
+    document.getElementById('h-merc').textContent =
+      `${(merc.def.speed * merc.def.orbitR * 0.55).toFixed(0)} units/s`;
+  }
+
+  renderer.render(scene, camera);
+}
+
+showChapter(0);
+animate();
+</script>
+</body>
+</html>

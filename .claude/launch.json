@@ -6,6 +6,24 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8341"],
       "port": 8341
+    },
+    {
+      "name": "alien-ecosystem",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "alien-ecosystem", "run", "dev", "--", "--port", "5175", "--strictPort"],
+      "port": 5175
+    },
+    {
+      "name": "ocean-surface",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "ocean-surface", "run", "dev", "--", "--port", "5174", "--strictPort"],
+      "port": 5174
+    },
+    {
+      "name": "dyson-sphere-drone-simulation",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "dyson-sphere-drone-simulation", "run", "dev", "--", "--port", "5176", "--strictPort"],
+      "port": 5176
     }
   ]
 }

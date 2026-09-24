@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Physics Playground — Three.js + Rapier (fixed timestep)</title>
+<style>
+  body { margin: 0; overflow: hidden; background: #000; }
+  #info {
+    position: absolute; top: 10px; left: 10px; color: #ccc;
+    font: 13px monospace; pointer-events: none;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+    "@dimforge/rapier3d-compat": "https://cdn.skypack.dev/@dimforge/rapier3d-compat@0.11.2"
+  }
+}
+</script>
+</head>
+<body>
+<div id="info">Rapier physics playground — a sphere or compound body drops every second. Drag to orbit.</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import RAPIER from '@dimforge/rapier3d-compat';
+
+// Load the embedded WASM module before touching any RAPIER API.
+await RAPIER.init();
+
+// ---------------------------------------------------------------------------
+// Renderer / scene / camera / lights
+// ---------------------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x10141c);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(14, 12, 18);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 2, 0);
+
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x2a241c, 0.7));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(10, 20, 8);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = sun.shadow.camera.bottom = -20;
+sun.shadow.camera.right = sun.shadow.camera.top = 20;
+scene.add(sun);
+
+// ---------------------------------------------------------------------------
+// Physics world
+// ---------------------------------------------------------------------------
+const world = new RAPIER.World(new RAPIER.Vector3(0, -9.81, 0));
+world.timestep = 1 / 60; // fixed step, driven by the accumulator below
+
+const ARENA = 15;      // half-extent of the floor on X and Z
+const WALL_H = 3;      // wall height
+const WALL_T = 0.5;    // wall thickness
+
+// --- static floor -----------------------------------------------------------
+{
+  const body = world.createRigidBody(
+    RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0)
+  );
+  world.createCollider(
+    RAPIER.ColliderDesc.cuboid(ARENA, 0.5, ARENA).setFriction(0.8),
+    body
+  );
+
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(ARENA * 2, 1, ARENA * 2),
+    new THREE.MeshStandardMaterial({ color: 0x2c3440, roughness: 0.95 })
+  );
+  mesh.position.set(0, -0.5, 0); // top surface at y = 0
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  scene.add(new THREE.GridHelper(ARENA * 2, ARENA * 2, 0x3d4655, 0x232a36));
+}
+
+// --- static wall boundaries ---------------------------------------------------
+const wallMat = new THREE.MeshStandardMaterial({
+  color: 0x4a6fa5, roughness: 0.6, transparent: true, opacity: 0.25
+});
+
+function addWall(x, z, w, d) {
+  const body = world.createRigidBody(
+    RAPIER.RigidBodyDesc.fixed().setTranslation(x, WALL_H / 2, z)
+  );
+  world.createCollider(
+    RAPIER.ColliderDesc.cuboid(w / 2, WALL_H / 2, d / 2).setFriction(0.2),
+    body
+  );
+
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, WALL_H, d), wallMat);
+  mesh.position.set(x, WALL_H / 2, z);
+  scene.add(mesh);
+}
+
+addWall( ARENA + WALL_T / 2, 0, WALL_T, ARENA * 2 + WALL_T * 2);
+addWall(-ARENA - WALL_T / 2, 0, WALL_T, ARENA * 2 + WALL_T * 2);
+addWall(0,  ARENA + WALL_T / 2, ARENA * 2, WALL_T);
+addWall(0, -ARENA - WALL_T / 2, ARENA * 2, WALL_T);
+
+// ---------------------------------------------------------------------------
+// Dynamic bodies: spawner + mesh<->body registry
+// ---------------------------------------------------------------------------
+const dynamics = [];       // { body: RAPIER.RigidBody, object: THREE.Object3D }
+const MAX_BODIES = 60;
+
+function randomColor() {
+  return new THREE.Color().setHSL(Math.random(), 0.65, 0.55);
+}
+
+function registerDynamic(body, object) {
+  object.traverse((c) => { if (c.isMesh) c.castShadow = c.receiveShadow = true; });
+  scene.add(object);
+  dynamics.push({ body, object });
+
+  // Cap the body count: remove the oldest pair from physics and scene.
+  if (dynamics.length > MAX_BODIES) {
+    const oldest = dynamics.shift();
+    scene.remove(oldest.object);
+    world.removeRigidBody(oldest.body);
+  }
+}
+
+function randomImpulse(body) {
+  body.applyImpulse(new RAPIER.Vector3(
+    (Math.random() - 0.5) * 6,
+    Math.random() * 2.5,
+    (Math.random() - 0.5) * 6
+  ), true);
+  body.applyTorqueImpulse(new RAPIER.Vector3(
+    (Math.random() - 0.5) * 1.5,
+    (Math.random() - 0.5) * 1.5,
+    (Math.random() - 0.5) * 1.5
+  ), true);
+}
+
+function spawnPosition() {
+  return {
+    x: (Math.random() - 0.5) * (ARENA - 4) * 2,
+    y: 7 + Math.random() * 3,
+    z: (Math.random() - 0.5) * (ARENA - 4) * 2
+  };
+}
+
+function spawnSphere() {
+  const radius = 0.3 + Math.random() * 0.45;
+  const p = spawnPosition();
+
+  const body = world.createRigidBody(
+    RAPIER.RigidBodyDesc.dynamic().setTranslation(p.x, p.y, p.z)
+  );
+  world.createCollider(
+    RAPIER.ColliderDesc.ball(radius).setRestitution(0.5).setFriction(0.6),
+    body
+  );
+  randomImpulse(body);
+
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(radius, 24, 24),
+    new THREE.MeshStandardMaterial({ color: randomColor(), roughness: 0.45 })
+  );
+  registerDynamic(body, mesh);
+}
+
+// "Compound box": ONE rigid body built from several cuboid colliders at
+// local offsets (an L-shape). The visual is a Group of matching box meshes.
+function spawnCompound() {
+  const p = spawnPosition();
+
+  const body = world.createRigidBody(
+    RAPIER.RigidBodyDesc.dynamic().setTranslation(p.x, p.y, p.z)
+  );
+
+  // local collider layout: [halfExtents, offset]
+  const parts = [
+    [[0.55, 0.15, 0.30], [0.0, 0.0, 0.0]],   // base slab
+    [[0.15, 0.50, 0.30], [0.4, 0.65, 0.0]],  // vertical pillar
+    [[0.20, 0.15, 0.30], [-0.35, 0.30, 0.0]] // small step
+  ];
+  for (const [he, off] of parts) {
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(...he)
+        .setTranslation(...off)
+        .setRestitution(0.3)
+        .setFriction(0.7),
+      body
+    );
+  }
+  randomImpulse(body);
+
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: randomColor(), roughness: 0.55 });
+  for (const [he, off] of parts) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(he[0] * 2, he[1] * 2, he[2] * 2), mat);
+    m.position.set(...off); // same local offset as the collider
+    group.add(m);
+  }
+  registerDynamic(body, group);
+}
+
+// Drop one body per second, alternating between the two shapes.
+let spawnTimer = 0;
+let spawnFlip = false;
+function updateSpawner(delta) {
+  spawnTimer += delta;
+  if (spawnTimer >= 1.0) {
+    spawnTimer -= 1.0;
+    spawnFlip = !spawnFlip;
+    if (spawnFlip) spawnSphere(); else spawnCompound();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fixed-timestep simulation loop (decoupled from rAF)
+// ---------------------------------------------------------------------------
+const FIXED_DT = 1 / 60;
+const MAX_FRAME = 0.25;          // clamp huge frames (tab switch) to avoid spiral of death
+let accumulator = 0;
+
+function stepPhysics(frameDelta) {
+  accumulator += Math.min(frameDelta, MAX_FRAME);
+  while (accumulator >= FIXED_DT) {
+    world.step();                // world.timestep === FIXED_DT
+    accumulator -= FIXED_DT;
+  }
+}
+
+// Copy physics transforms into Three.js objects.
+function syncMeshes() {
+  for (const { body, object } of dynamics) {
+    object.position.copy(body.translation());
+    object.quaternion.copy(body.rotation());
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Resize + main loop
+// ---------------------------------------------------------------------------
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+
+  updateSpawner(delta);
+  stepPhysics(delta);   // 0..n fixed steps this frame
+  syncMeshes();
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+animate();
+</script>
+</body>
+</html>

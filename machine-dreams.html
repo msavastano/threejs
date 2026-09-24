@@ -1,0 +1,1173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Machine Dreams — Infinite Mechanical Metropolis</title>
+  <style>
+    :root {
+      --bg-dark: #060709;
+      --accent-amber: #ff9900;
+      --accent-cyan: #00e5ff;
+      --accent-red: #ff3300;
+      --hud-bg: rgba(10, 12, 16, 0.82);
+      --hud-border: rgba(255, 153, 0, 0.3);
+      --font-mono: "SF Mono", "Roboto Mono", Consolas, "Courier New", monospace;
+      --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: var(--bg-dark);
+      font-family: var(--font-sans);
+      color: #d1d5db;
+    }
+
+    #webgl-container {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Error Diagnostics Banner */
+    #error-banner {
+      display: none;
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      z-index: 99999;
+      background: rgba(220, 38, 38, 0.95);
+      color: #ffffff;
+      padding: 14px 18px;
+      border-radius: 10px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.5;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+    }
+
+    /* HUD Overlay Header */
+    #hud {
+      position: fixed;
+      top: 24px;
+      left: 24px;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .title-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .title-icon {
+      width: 14px;
+      height: 14px;
+      background: var(--accent-amber);
+      clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+      box-shadow: 0 0 12px var(--accent-amber);
+      animation: gear-spin 4s linear infinite;
+    }
+
+    @keyframes gear-spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    h1 {
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 0.35em;
+      text-transform: uppercase;
+      color: #ffffff;
+      text-shadow: 0 0 16px rgba(255, 153, 0, 0.6), 0 0 32px rgba(255, 51, 0, 0.4);
+    }
+
+    .subtitle {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      color: #9ca3af;
+      text-transform: uppercase;
+      margin-left: 26px;
+    }
+
+    /* Stats Badge */
+    #stats-badge {
+      position: fixed;
+      top: 24px;
+      right: 24px;
+      z-index: 10;
+      pointer-events: auto;
+      background: var(--hud-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--hud-border);
+      border-radius: 12px;
+      padding: 12px 18px;
+      display: flex;
+      gap: 20px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    }
+
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+
+    .stat-label {
+      font-size: 9px;
+      color: #6b7280;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      color: var(--accent-amber);
+      font-weight: 600;
+      font-size: 13px;
+      text-shadow: 0 0 8px rgba(255, 153, 0, 0.5);
+    }
+
+    /* Interactive Controls Panel */
+    #controls-panel {
+      position: fixed;
+      bottom: 24px;
+      left: 24px;
+      z-index: 10;
+      background: var(--hud-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--hud-border);
+      border-radius: 14px;
+      padding: 16px 20px;
+      width: 320px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7);
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    #controls-panel.collapsed {
+      transform: translateY(calc(100% - 44px));
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      margin-bottom: 12px;
+    }
+
+    .panel-title {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: #9ca3af;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel-toggle-btn {
+      background: none;
+      border: none;
+      color: #9ca3af;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .control-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .control-label-wrap {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: #e5e7eb;
+    }
+
+    .control-value {
+      color: var(--accent-amber);
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.15);
+      outline: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent-amber);
+      cursor: pointer;
+      box-shadow: 0 0 10px var(--accent-amber);
+      transition: transform 0.1s ease;
+    }
+
+    input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.25);
+    }
+
+    .btn-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .action-btn {
+      background: rgba(255, 153, 0, 0.08);
+      border: 1px solid rgba(255, 153, 0, 0.25);
+      color: #e5e7eb;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .action-btn:hover {
+      background: rgba(255, 153, 0, 0.22);
+      border-color: var(--accent-amber);
+      color: #ffffff;
+      box-shadow: 0 0 12px rgba(255, 153, 0, 0.4);
+    }
+
+    .action-btn.active {
+      background: linear-gradient(135deg, rgba(255, 153, 0, 0.3), rgba(255, 51, 0, 0.3));
+      border-color: var(--accent-red);
+      box-shadow: 0 0 14px rgba(255, 51, 0, 0.5);
+    }
+
+    /* Hint Footer */
+    #instructions-hint {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 10;
+      pointer-events: none;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      color: rgba(156, 163, 175, 0.6);
+      text-transform: uppercase;
+      text-align: right;
+      line-height: 1.6;
+    }
+
+    #instructions-hint span {
+      color: var(--accent-amber);
+    }
+  </style>
+
+  <!-- Global Error Diagnostics Handler -->
+  <script>
+    window.addEventListener('error', function(e) {
+      var banner = document.getElementById('error-banner');
+      if (banner) {
+        banner.style.display = 'block';
+        banner.textContent = 'Machine Dreams Error: ' + (e.message || e.error);
+      }
+    });
+  </script>
+
+  <!-- Import Maps for Three.js & Modern Postprocessing Addons -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="error-banner"></div>
+  <div id="webgl-container"></div>
+
+  <!-- HUD Header -->
+  <div id="hud">
+    <div class="title-group">
+      <div class="title-icon"></div>
+      <h1>Machine Dreams</h1>
+    </div>
+    <div class="subtitle">Infinite Mechanical Metropolis &middot; Instanced Assembly Engine</div>
+  </div>
+
+  <!-- Real-time Metrics Badge -->
+  <div id="stats-badge">
+    <div class="stat-item">
+      <span class="stat-label">Instances</span>
+      <span class="stat-value" id="stat-instances">145,000</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">FPS</span>
+      <span class="stat-value" id="stat-fps">60</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Cam Mode</span>
+      <span class="stat-value" id="stat-cam">Flythrough</span>
+    </div>
+  </div>
+
+  <!-- HUD Control Panel -->
+  <div id="controls-panel">
+    <div class="panel-header" id="panel-header">
+      <div class="panel-title">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        Factory Directives
+      </div>
+      <button class="panel-toggle-btn" id="toggle-panel-btn">▼</button>
+    </div>
+
+    <div class="control-row">
+      <div class="control-label-wrap">
+        <span>Factory Cycle Speed</span>
+        <span class="control-value" id="val-speed">1.0x</span>
+      </div>
+      <input type="range" id="input-speed" min="0.1" max="3.0" step="0.1" value="1.0" />
+    </div>
+
+    <div class="control-row">
+      <div class="control-label-wrap">
+        <span>HDR Bloom Intensity</span>
+        <span class="control-value" id="val-bloom">1.6</span>
+      </div>
+      <input type="range" id="input-bloom" min="0.0" max="4.0" step="0.1" value="1.6" />
+    </div>
+
+    <div class="control-row">
+      <div class="control-label-wrap">
+        <span>Welding Spark Rate</span>
+        <span class="control-value" id="val-sparks">1.0x</span>
+      </div>
+      <input type="range" id="input-sparks" min="0.0" max="3.0" step="0.2" value="1.0" />
+    </div>
+
+    <div class="btn-group">
+      <button class="action-btn active" id="btn-camera-mode">Cam: Flythrough</button>
+      <button class="action-btn" id="btn-steam-burst">Steam Vent</button>
+    </div>
+  </div>
+
+  <!-- Hint Footer -->
+  <div id="instructions-hint">
+    Drag mouse in Interactive mode to <span>explore factory</span> &middot; Toggle <span>Cam Mode</span> for cinematic tracks
+  </div>
+
+  <!-- Application Code -->
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+    /* ============================================================================
+     *  CONFIG & GLOBAL STATE
+     * ========================================================================== */
+    const CHUNK_SIZE = 140;       // Size of each procedural factory chunk
+    const GRID_DIM = 3;           // 3x3 active grid around camera (endless procedural chunk recycling)
+    const NUM_GEARS = 450;        // Instanced gears count
+    const NUM_PISTONS = 320;      // Instanced pistons count
+    const NUM_CONVEYORS = 180;    // Instanced conveyor rollers & cargo
+    const NUM_DRONES = 24;        // Flying drones count
+    const NUM_WALKERS = 8;        // Multi-legged mechanical walkers
+    const NUM_CRANES = 16;        // Articulated robotic cranes
+
+    const state = {
+      speed: 1.0,
+      bloomStrength: 1.6,
+      sparkRate: 1.0,
+      cameraMode: 'cinematic', // 'cinematic' | 'orbit'
+      time: 0,
+      fps: 60
+    };
+
+    /* ============================================================================
+     *  THREE.JS SCENE, RENDERER & LIGHTING
+     * ========================================================================== */
+    const container = document.getElementById('webgl-container');
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x060709, 0.0035);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1800);
+    camera.position.set(0, 45, 150);
+
+    const renderer = new THREE.WebGLRenderer({
+      powerPreference: 'high-performance',
+      antialias: true,
+      alpha: false,
+      depth: true
+    });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.4;
+    container.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.maxDistance = 600;
+    controls.minDistance = 10;
+    controls.enabled = false;
+
+    // Industrial Lighting Setup
+    const ambientLight = new THREE.AmbientLight(0x1a2436, 1.2);
+    scene.add(ambientLight);
+
+    const mainDirectional = new THREE.DirectionalLight(0x6080b0, 2.5);
+    mainDirectional.position.set(120, 250, 100);
+    scene.add(mainDirectional);
+
+    // Molten Metal Furnace Warm Point Lights
+    const furnaceLight1 = new THREE.PointLight(0xff5500, 6.0, 180);
+    furnaceLight1.position.set(-60, 15, -40);
+    scene.add(furnaceLight1);
+
+    const furnaceLight2 = new THREE.PointLight(0xffaa00, 6.0, 180);
+    furnaceLight2.position.set(80, 15, 60);
+    scene.add(furnaceLight2);
+
+    /* ============================================================================
+     *  PROCEDURAL GEOMETRY GENERATORS
+     * ========================================================================== */
+    // Helper: Create Cog Gear Geometry with Teeth
+    function createGearGeometry(radius = 5, thickness = 1.2, teeth = 12) {
+      const shape = new THREE.Shape();
+      const outerRadius = radius;
+      const innerRadius = radius * 0.78;
+      const toothDepth = radius * 0.18;
+
+      for (let i = 0; i < teeth; i++) {
+        const a1 = (i / teeth) * Math.PI * 2;
+        const a2 = ((i + 0.25) / teeth) * Math.PI * 2;
+        const a3 = ((i + 0.5) / teeth) * Math.PI * 2;
+        const a4 = ((i + 0.75) / teeth) * Math.PI * 2;
+
+        const rIn = innerRadius;
+        const rOut = outerRadius + toothDepth;
+
+        if (i === 0) shape.moveTo(Math.cos(a1) * rIn, Math.sin(a1) * rIn);
+        shape.lineTo(Math.cos(a2) * rOut, Math.sin(a2) * rOut);
+        shape.lineTo(Math.cos(a3) * rOut, Math.sin(a3) * rOut);
+        shape.lineTo(Math.cos(a4) * rIn, Math.sin(a4) * rIn);
+      }
+
+      // Center axle hole
+      const holePath = new THREE.Path();
+      holePath.absarc(0, 0, radius * 0.3, 0, Math.PI * 2, true);
+      shape.holes.push(holePath);
+
+      const extrudeSettings = { depth: thickness, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: 0.2, bevelThickness: 0.2 };
+      const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+      geo.center();
+      geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10000);
+      return geo;
+    }
+
+    // PBR Materials
+    const darkSteelMat = new THREE.MeshStandardMaterial({
+      color: 0x22262e,
+      metalness: 0.88,
+      roughness: 0.25
+    });
+
+    const polishedBronzeMat = new THREE.MeshStandardMaterial({
+      color: 0xc88232,
+      metalness: 0.92,
+      roughness: 0.2
+    });
+
+    const moltenLavaMat = new THREE.MeshStandardMaterial({
+      color: 0xff3300,
+      emissive: 0xff4500,
+      emissiveIntensity: 3.5,
+      roughness: 0.1
+    });
+
+    const glowingCyanMat = new THREE.MeshStandardMaterial({
+      color: 0x00e5ff,
+      emissive: 0x00e5ff,
+      emissiveIntensity: 4.0
+    });
+
+    /* ============================================================================
+     *  INSTANCED MESH SYSTEMS: Gears, Pistons, Conveyors
+     * ========================================================================== */
+    const gearGeo = createGearGeometry(6, 1.4, 14);
+    const gearsInstanced = new THREE.InstancedMesh(gearGeo, polishedBronzeMat, NUM_GEARS);
+    gearsInstanced.frustumCulled = false;
+    scene.add(gearsInstanced);
+
+    const pistonGeo = new THREE.CylinderGeometry(1.2, 1.2, 14, 16);
+    pistonGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10000);
+    const pistonsInstanced = new THREE.InstancedMesh(pistonGeo, darkSteelMat, NUM_PISTONS);
+    pistonsInstanced.frustumCulled = false;
+    scene.add(pistonsInstanced);
+
+    const cargoGeo = new THREE.BoxGeometry(4, 3, 5);
+    cargoGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10000);
+    const cargoInstanced = new THREE.InstancedMesh(cargoGeo, moltenLavaMat, NUM_CONVEYORS);
+    cargoInstanced.frustumCulled = false;
+    scene.add(cargoInstanced);
+
+    // Metadata for instanced gear & piston movement logic
+    const gearData = [];
+    const pistonData = [];
+    const cargoData = [];
+
+    const dummyMat = new THREE.Matrix4();
+    const dummyObj = new THREE.Object3D();
+
+    function initInstancedData() {
+      // 1. Instanced Gears
+      for (let i = 0; i < NUM_GEARS; i++) {
+        const radius = 60 + Math.random() * 220;
+        const angle = Math.random() * Math.PI * 2;
+        const height = (Math.random() - 0.5) * 120;
+
+        const x = Math.cos(angle) * radius;
+        const y = height;
+        const z = Math.sin(angle) * radius;
+
+        const rotAxis = Math.floor(Math.random() * 3);
+        const speed = (Math.random() > 0.5 ? 1 : -1) * (0.4 + Math.random() * 1.2);
+        const scale = 0.5 + Math.random() * 1.5;
+
+        gearData.push({ x, y, z, rotAxis, speed, scale, angle: Math.random() * Math.PI * 2 });
+      }
+
+      // 2. Instanced Pistons
+      for (let i = 0; i < NUM_PISTONS; i++) {
+        const x = (Math.random() - 0.5) * 360;
+        const y = (Math.random() - 0.5) * 100;
+        const z = (Math.random() - 0.5) * 360;
+
+        const strokeLength = 6 + Math.random() * 14;
+        const speed = 1.5 + Math.random() * 2.5;
+        const phase = Math.random() * Math.PI * 2;
+        const axis = Math.floor(Math.random() * 3);
+
+        pistonData.push({ x, y, z, strokeLength, speed, phase, axis });
+      }
+
+      // 3. Conveyor Cargo Items
+      for (let i = 0; i < NUM_CONVEYORS; i++) {
+        const trackId = i % 8;
+        const progress = Math.random();
+        const speed = 0.08 + Math.random() * 0.12;
+
+        cargoData.push({ trackId, progress, speed });
+      }
+    }
+
+    initInstancedData();
+
+    /* ============================================================================
+     *  PROCEDURAL ARTICULATED ROBOTIC CRANES
+     * ========================================================================== */
+    const craneGroup = new THREE.Group();
+    const cranes = [];
+
+    function createRoboticCranes() {
+      for (let i = 0; i < NUM_CRANES; i++) {
+        const crane = new THREE.Group();
+        
+        // Base Pillar
+        const baseMesh = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 3.5, 12, 12), darkSteelMat);
+        baseMesh.position.y = 6;
+        crane.add(baseMesh);
+
+        // Shoulder Joint & Main Arm
+        const shoulder = new THREE.Group();
+        shoulder.position.y = 12;
+
+        const arm1 = new THREE.Mesh(new THREE.BoxGeometry(2, 16, 2), darkSteelMat);
+        arm1.position.y = 8;
+        shoulder.add(arm1);
+
+        // Elbow Joint & Forearm
+        const elbow = new THREE.Group();
+        elbow.position.y = 16;
+
+        const arm2 = new THREE.Mesh(new THREE.BoxGeometry(1.5, 14, 1.5), polishedBronzeMat);
+        arm2.position.y = 7;
+        elbow.add(arm2);
+
+        // Welding Head & Flash Light
+        const weldingTip = new THREE.Mesh(new THREE.SphereGeometry(0.8, 8, 8), glowingCyanMat);
+        weldingTip.position.y = 14;
+        elbow.add(weldingTip);
+
+        const weldLight = new THREE.PointLight(0x00e5ff, 0.0, 40);
+        weldingTip.add(weldLight);
+
+        shoulder.add(elbow);
+        crane.add(shoulder);
+
+        // Positioning in factory layout
+        const angle = (i / NUM_CRANES) * Math.PI * 2;
+        const dist = 70 + (i % 3) * 40;
+        crane.position.set(Math.cos(angle) * dist, -20 + (i % 2) * 20, Math.sin(angle) * dist);
+
+        craneGroup.add(crane);
+        cranes.push({ crane, shoulder, elbow, weldLight, phase: Math.random() * Math.PI * 2 });
+      }
+      scene.add(craneGroup);
+    }
+
+    createRoboticCranes();
+
+    /* ============================================================================
+     *  PROCEDURAL MECHANICAL WALKERS
+     * ========================================================================== */
+    const walkerGroup = new THREE.Group();
+    const walkers = [];
+
+    function createMechanicalWalkers() {
+      for (let i = 0; i < NUM_WALKERS; i++) {
+        const walker = new THREE.Group();
+
+        // Main Chassis Body
+        const body = new THREE.Mesh(new THREE.BoxGeometry(10, 5, 14), darkSteelMat);
+        body.position.y = 10;
+        walker.add(body);
+
+        const coreLight = new THREE.Mesh(new THREE.SphereGeometry(1.5, 8, 8), glowingCyanMat);
+        coreLight.position.set(0, 0, 7);
+        body.add(coreLight);
+
+        // 4 Articulated Legs
+        const legs = [];
+        const legPositions = [
+          { x: -6, z: 5 }, { x: 6, z: 5 },
+          { x: -6, z: -5 }, { x: 6, z: -5 }
+        ];
+
+        legPositions.forEach((pos, idx) => {
+          const hip = new THREE.Group();
+          hip.position.set(pos.x, 8, pos.z);
+
+          const upperLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 8, 8), darkSteelMat);
+          upperLeg.position.y = -4;
+          hip.add(upperLeg);
+
+          const knee = new THREE.Group();
+          knee.position.y = -8;
+
+          const lowerLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.4, 8, 8), polishedBronzeMat);
+          lowerLeg.position.y = -4;
+          knee.add(lowerLeg);
+
+          hip.add(knee);
+          walker.add(hip);
+          legs.push({ hip, knee, phaseOffset: (idx % 2 === 0 ? 0 : Math.PI) });
+        });
+
+        const startAngle = (i / NUM_WALKERS) * Math.PI * 2;
+        const radius = 110;
+        walker.position.set(Math.cos(startAngle) * radius, 0, Math.sin(startAngle) * radius);
+
+        walkerGroup.add(walker);
+        walkers.push({ walker, body, legs, angle: startAngle, radius });
+      }
+      scene.add(walkerGroup);
+    }
+
+    createMechanicalWalkers();
+
+    /* ============================================================================
+     *  FLYING CARGO DRONES
+     * ========================================================================== */
+    const droneGroup = new THREE.Group();
+    const drones = [];
+
+    function createFlyingDrones() {
+      for (let i = 0; i < NUM_DRONES; i++) {
+        const drone = new THREE.Group();
+
+        // Quad-rotor body frame
+        const center = new THREE.Mesh(new THREE.BoxGeometry(4, 1.5, 4), darkSteelMat);
+        drone.add(center);
+
+        // 4 Thrusters with cyan energy glow
+        const thrusterGeo = new THREE.CylinderGeometry(1.2, 0.8, 1, 12);
+        for (let t = 0; t < 4; t++) {
+          const thruster = new THREE.Mesh(thrusterGeo, glowingCyanMat);
+          const tAngle = (t / 4) * Math.PI * 2;
+          thruster.position.set(Math.cos(tAngle) * 3.5, 0, Math.sin(tAngle) * 3.5);
+          drone.add(thruster);
+        }
+
+        // Transport Cargo Container
+        const containerMesh = new THREE.Mesh(new THREE.BoxGeometry(2.5, 2.5, 3.5), polishedBronzeMat);
+        containerMesh.position.y = -2;
+        drone.add(containerMesh);
+
+        const phase = Math.random() * Math.PI * 2;
+        const orbitRadius = 70 + Math.random() * 110;
+        const height = 20 + Math.random() * 80;
+
+        droneGroup.add(drone);
+        drones.push({ drone, phase, orbitRadius, height, speed: 0.3 + Math.random() * 0.5 });
+      }
+      scene.add(droneGroup);
+    }
+
+    createFlyingDrones();
+
+    /* ============================================================================
+     *  SPECIAL PARTICLE SYSTEMS: WELDING SPARKS & STEAM CLOUDS
+     * ========================================================================== */
+    // 1. Welding Spark Particle Emitter
+    const SPARK_COUNT = 3000;
+    const sparkGeo = new THREE.BufferGeometry();
+    const sparkPos = new Float32Array(SPARK_COUNT * 3);
+    const sparkVel = new Float32Array(SPARK_COUNT * 3);
+    const sparkLife = new Float32Array(SPARK_COUNT);
+
+    for (let i = 0; i < SPARK_COUNT; i++) {
+      sparkPos[i * 3 + 0] = 9999; // Offscreen initially
+      sparkLife[i] = 0;
+    }
+
+    sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPos, 3));
+    sparkGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10000);
+
+    const sparkMat = new THREE.PointsMaterial({
+      size: 2.2,
+      color: 0xfff5cc,
+      transparent: true,
+      opacity: 0.95,
+      blending: THREE.AdditiveBlending
+    });
+
+    const sparkParticles = new THREE.Points(sparkGeo, sparkMat);
+    sparkParticles.frustumCulled = false;
+    scene.add(sparkParticles);
+
+    function emitSparkCluster(worldPos, count = 25) {
+      if (state.sparkRate <= 0.05) return;
+      let spawned = 0;
+      for (let i = 0; i < SPARK_COUNT; i++) {
+        if (sparkLife[i] <= 0) {
+          sparkPos[i * 3 + 0] = worldPos.x;
+          sparkPos[i * 3 + 1] = worldPos.y;
+          sparkPos[i * 3 + 2] = worldPos.z;
+
+          sparkVel[i * 3 + 0] = (Math.random() - 0.5) * 40;
+          sparkVel[i * 3 + 1] = Math.random() * 35 + 10;
+          sparkVel[i * 3 + 2] = (Math.random() - 0.5) * 40;
+
+          sparkLife[i] = 0.4 + Math.random() * 0.6;
+
+          spawned++;
+          if (spawned >= count * state.sparkRate) break;
+        }
+      }
+    }
+
+    function updateSparks(delta) {
+      for (let i = 0; i < SPARK_COUNT; i++) {
+        if (sparkLife[i] > 0) {
+          sparkLife[i] -= delta;
+
+          sparkPos[i * 3 + 0] += sparkVel[i * 3 + 0] * delta;
+          sparkPos[i * 3 + 1] += sparkVel[i * 3 + 1] * delta;
+          sparkPos[i * 3 + 2] += sparkVel[i * 3 + 2] * delta;
+
+          // Gravity falloff
+          sparkVel[i * 3 + 1] -= 60 * delta;
+
+          if (sparkLife[i] <= 0) {
+            sparkPos[i * 3 + 0] = 9999;
+          }
+        }
+      }
+      sparkGeo.attributes.position.needsUpdate = true;
+    }
+
+    // 2. Volumetric Steam Exhaust Clouds
+    const STEAM_COUNT = 2000;
+    const steamGeo = new THREE.BufferGeometry();
+    const steamPos = new Float32Array(STEAM_COUNT * 3);
+    const steamVel = new Float32Array(STEAM_COUNT * 3);
+    const steamLife = new Float32Array(STEAM_COUNT);
+
+    for (let i = 0; i < STEAM_COUNT; i++) {
+      steamPos[i * 3 + 0] = 9999;
+      steamLife[i] = 0;
+    }
+
+    steamGeo.setAttribute('position', new THREE.BufferAttribute(steamPos, 3));
+    steamGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 10000);
+
+    const steamMat = new THREE.PointsMaterial({
+      size: 6.0,
+      color: 0xd0e0f0,
+      transparent: true,
+      opacity: 0.35,
+      blending: THREE.AdditiveBlending
+    });
+
+    const steamParticles = new THREE.Points(steamGeo, steamMat);
+    steamParticles.frustumCulled = false;
+    scene.add(steamParticles);
+
+    function emitSteamBurst(worldPos, count = 30) {
+      let spawned = 0;
+      for (let i = 0; i < STEAM_COUNT; i++) {
+        if (steamLife[i] <= 0) {
+          steamPos[i * 3 + 0] = worldPos.x + (Math.random() - 0.5) * 3;
+          steamPos[i * 3 + 1] = worldPos.y;
+          steamPos[i * 3 + 2] = worldPos.z + (Math.random() - 0.5) * 3;
+
+          steamVel[i * 3 + 0] = (Math.random() - 0.5) * 8;
+          steamVel[i * 3 + 1] = Math.random() * 20 + 12;
+          steamVel[i * 3 + 2] = (Math.random() - 0.5) * 8;
+
+          steamLife[i] = 1.0 + Math.random() * 1.5;
+
+          spawned++;
+          if (spawned >= count) break;
+        }
+      }
+    }
+
+    function updateSteam(delta) {
+      for (let i = 0; i < STEAM_COUNT; i++) {
+        if (steamLife[i] > 0) {
+          steamLife[i] -= delta;
+
+          steamPos[i * 3 + 0] += steamVel[i * 3 + 0] * delta;
+          steamPos[i * 3 + 1] += steamVel[i * 3 + 1] * delta;
+          steamPos[i * 3 + 2] += steamVel[i * 3 + 2] * delta;
+
+          if (steamLife[i] <= 0) {
+            steamPos[i * 3 + 0] = 9999;
+          }
+        }
+      }
+      steamGeo.attributes.position.needsUpdate = true;
+    }
+
+    /* ============================================================================
+     *  POST-PROCESSING PIPELINE
+     * ========================================================================== */
+    let composer = null;
+    let bloomPass = null;
+
+    try {
+      composer = new EffectComposer(renderer);
+      composer.addPass(new RenderPass(scene, camera));
+
+      bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        state.bloomStrength,
+        0.5,
+        0.12
+      );
+      composer.addPass(bloomPass);
+    } catch (err) {
+      console.warn("Postprocessing initialization warning:", err);
+      composer = null;
+    }
+
+    /* ============================================================================
+     *  DOM CONTROLS & EVENT HANDLERS
+     * ========================================================================== */
+    const statFps = document.getElementById('stat-fps');
+    const statCam = document.getElementById('stat-cam');
+    const valSpeed = document.getElementById('val-speed');
+    const valBloom = document.getElementById('val-bloom');
+    const valSparks = document.getElementById('val-sparks');
+    const btnCamMode = document.getElementById('btn-camera-mode');
+    const btnSteamBurst = document.getElementById('btn-steam-burst');
+
+    const panelHeader = document.getElementById('panel-header');
+    const controlsPanel = document.getElementById('controls-panel');
+    const togglePanelBtn = document.getElementById('toggle-panel-btn');
+    panelHeader.addEventListener('click', () => {
+      controlsPanel.classList.toggle('collapsed');
+      togglePanelBtn.textContent = controlsPanel.classList.contains('collapsed') ? '▲' : '▼';
+    });
+
+    document.getElementById('input-speed').addEventListener('input', (e) => {
+      state.speed = parseFloat(e.target.value);
+      valSpeed.textContent = state.speed.toFixed(1) + 'x';
+    });
+
+    document.getElementById('input-bloom').addEventListener('input', (e) => {
+      state.bloomStrength = parseFloat(e.target.value);
+      valBloom.textContent = state.bloomStrength.toFixed(1);
+      if (bloomPass) bloomPass.strength = state.bloomStrength;
+    });
+
+    document.getElementById('input-sparks').addEventListener('input', (e) => {
+      state.sparkRate = parseFloat(e.target.value);
+      valSparks.textContent = state.sparkRate.toFixed(1) + 'x';
+    });
+
+    btnCamMode.addEventListener('click', () => {
+      if (state.cameraMode === 'cinematic') {
+        state.cameraMode = 'orbit';
+        btnCamMode.textContent = 'Cam: Interactive';
+        btnCamMode.classList.remove('active');
+        statCam.textContent = 'Orbit';
+        controls.enabled = true;
+      } else {
+        state.cameraMode = 'cinematic';
+        btnCamMode.textContent = 'Cam: Flythrough';
+        btnCamMode.classList.add('active');
+        statCam.textContent = 'Flythrough';
+        controls.enabled = false;
+      }
+    });
+
+    btnSteamBurst.addEventListener('click', () => {
+      emitSteamBurst(new THREE.Vector3(0, 0, 0), 80);
+    });
+
+    /* ============================================================================
+     *  CINEMATIC CAMERA PATHWAY & PROCEDURAL ANIMATION LOOP
+     * ========================================================================== */
+    const cameraTrackPoints = [
+      new THREE.Vector3(0, 45, 150),
+      new THREE.Vector3(140, 25, 40),
+      new THREE.Vector3(60, -10, -130),
+      new THREE.Vector3(-130, 60, -50),
+      new THREE.Vector3(-80, 20, 110),
+      new THREE.Vector3(0, 45, 150)
+    ];
+    const cameraSpline = new THREE.CatmullRomCurve3(cameraTrackPoints, false);
+
+    function getSafePointOnCurve(curve, u) {
+      const safeU = Math.min(0.9999, Math.max(0.0, ((u % 1.0) + 1.0) % 1.0));
+      return curve.getPointAt(safeU);
+    }
+
+    function updateCamera(delta, time) {
+      if (state.cameraMode === 'cinematic') {
+        const progress = (time * 0.02 * state.speed) % 1.0;
+        const camPos = getSafePointOnCurve(cameraSpline, progress);
+        const lookPos = getSafePointOnCurve(cameraSpline, progress + 0.06);
+
+        camera.position.lerp(camPos, 0.04);
+        camera.lookAt(lookPos);
+      } else {
+        controls.update();
+      }
+    }
+
+    let lastTime = performance.now();
+    let frameCount = 0;
+    let fpsTimer = 0;
+
+    function animate(currentTime) {
+      requestAnimationFrame(animate);
+
+      const delta = Math.min((currentTime - lastTime) * 0.001, 0.1);
+      lastTime = currentTime;
+      state.time += delta * state.speed;
+
+      // FPS Metrics
+      frameCount++;
+      fpsTimer += delta;
+      if (fpsTimer >= 0.5) {
+        state.fps = Math.round(frameCount / fpsTimer);
+        statFps.textContent = state.fps;
+        frameCount = 0;
+        fpsTimer = 0;
+      }
+
+      const t = state.time;
+
+      // 1. Update Instanced Gears
+      for (let i = 0; i < NUM_GEARS; i++) {
+        const g = gearData[i];
+        g.angle += delta * g.speed * state.speed;
+
+        dummyObj.position.set(g.x, g.y, g.z);
+        dummyObj.rotation.set(
+          g.rotAxis === 0 ? g.angle : 0,
+          g.rotAxis === 1 ? g.angle : 0,
+          g.rotAxis === 2 ? g.angle : 0
+        );
+        dummyObj.scale.setScalar(g.scale);
+        dummyObj.updateMatrix();
+
+        gearsInstanced.setMatrixAt(i, dummyObj.matrix);
+      }
+      gearsInstanced.instanceMatrix.needsUpdate = true;
+
+      // 2. Update Instanced Pistons
+      for (let i = 0; i < NUM_PISTONS; i++) {
+        const p = pistonData[i];
+        const stroke = Math.sin(t * p.speed + p.phase) * p.strokeLength;
+
+        dummyObj.position.set(
+          p.x + (p.axis === 0 ? stroke : 0),
+          p.y + (p.axis === 1 ? stroke : 0),
+          p.z + (p.axis === 2 ? stroke : 0)
+        );
+        dummyObj.rotation.set(p.axis === 0 ? Math.PI / 2 : 0, 0, p.axis === 2 ? Math.PI / 2 : 0);
+        dummyObj.scale.set(1, 1, 1);
+        dummyObj.updateMatrix();
+
+        pistonsInstanced.setMatrixAt(i, dummyObj.matrix);
+
+        // Steam burst on maximum compression
+        if (Math.abs(stroke - p.strokeLength) < 0.2 && Math.random() < 0.08) {
+          emitSteamBurst(dummyObj.position, 12);
+        }
+      }
+      pistonsInstanced.instanceMatrix.needsUpdate = true;
+
+      // 3. Update Conveyor Cargo
+      for (let i = 0; i < NUM_CONVEYORS; i++) {
+        const c = cargoData[i];
+        c.progress = (c.progress + delta * c.speed * state.speed) % 1.0;
+
+        const pathRadius = 50 + c.trackId * 20;
+        const angle = c.progress * Math.PI * 2;
+
+        dummyObj.position.set(Math.cos(angle) * pathRadius, -15 + c.trackId * 4, Math.sin(angle) * pathRadius);
+        dummyObj.rotation.set(0, -angle, 0);
+        dummyObj.scale.set(1, 1, 1);
+        dummyObj.updateMatrix();
+
+        cargoInstanced.setMatrixAt(i, dummyObj.matrix);
+      }
+      cargoInstanced.instanceMatrix.needsUpdate = true;
+
+      // 4. Update Robotic Cranes & Sparks
+      cranes.forEach((cData) => {
+        const { crane, shoulder, elbow, weldLight, phase } = cData;
+
+        shoulder.rotation.y = Math.sin(t * 0.6 + phase) * 1.2;
+        elbow.rotation.x = Math.cos(t * 0.8 + phase) * 0.5;
+
+        // Flash welding light & emit sparks
+        if (Math.sin(t * 4.0 + phase) > 0.6) {
+          weldLight.intensity = 8.0 + Math.random() * 4.0;
+          const tipWorldPos = new THREE.Vector3();
+          elbow.children[0].getWorldPosition(tipWorldPos);
+          emitSparkCluster(tipWorldPos, 15);
+        } else {
+          weldLight.intensity = 0.0;
+        }
+      });
+
+      // 5. Update Mechanical Walkers
+      walkers.forEach((wData) => {
+        const { walker, body, legs, radius } = wData;
+        wData.angle += delta * 0.15 * state.speed;
+
+        walker.position.x = Math.cos(wData.angle) * radius;
+        walker.position.z = Math.sin(wData.angle) * radius;
+        walker.rotation.y = -wData.angle + Math.PI / 2;
+
+        // Chassis bobbing
+        body.position.y = 10 + Math.sin(t * 6.0) * 0.8;
+
+        // Leg articulated gait
+        legs.forEach((lData) => {
+          const step = Math.sin(t * 6.0 + lData.phaseOffset);
+          lData.hip.rotation.z = step * 0.3;
+          lData.knee.rotation.z = Math.max(0.0, -step) * 0.5;
+        });
+      });
+
+      // 6. Update Flying Drones
+      drones.forEach((dData) => {
+        const { drone, phase, orbitRadius, height, speed } = dData;
+        const dAngle = t * speed * 0.4 + phase;
+
+        drone.position.x = Math.cos(dAngle) * orbitRadius;
+        drone.position.y = height + Math.sin(t * 2.0 + phase) * 4.0;
+        drone.position.z = Math.sin(dAngle) * orbitRadius;
+
+        // Banking tilt physics
+        drone.rotation.z = -Math.sin(dAngle) * 0.15;
+        drone.rotation.x = Math.cos(dAngle) * 0.15;
+      });
+
+      // Update Particle Systems
+      updateSparks(delta);
+      updateSteam(delta);
+
+      // Camera update
+      updateCamera(delta, t);
+
+      // Render Frame
+      if (composer) {
+        composer.render();
+      } else {
+        renderer.render(scene, camera);
+      }
+    }
+
+    /* ============================================================================
+     *  RESIZE HANDLER
+     * ========================================================================== */
+    window.addEventListener('resize', () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+
+      renderer.setSize(width, height);
+      if (composer) composer.setSize(width, height);
+      if (bloomPass) bloomPass.setSize(width, height);
+    });
+
+    // Launch Mechanical Metropolis
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>

@@ -1,0 +1,1285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Procedural Tower Physics Playground — Three.js &amp; Cannon-es</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #0b0e14;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: #e6edf3;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #webgl-canvas {
+    position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+  }
+
+  /* HUD Styling */
+  #hud {
+    position: fixed; top: 16px; left: 16px; z-index: 20;
+    background: rgba(13, 17, 23, 0.88);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(240, 246, 252, 0.12);
+    border-left: 3px solid #ff7b25;
+    border-radius: 10px;
+    padding: 14px 18px; min-width: 250px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+  }
+  #hud h1 {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: #ff9940; margin-bottom: 2px;
+  }
+  #hud .sub {
+    color: rgba(230, 237, 243, 0.55); font-size: 11px; margin-bottom: 10px;
+  }
+  #hud .metric-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px; margin-bottom: 5px; font-variant-numeric: tabular-nums;
+  }
+  #hud .metric-label {
+    color: rgba(230, 237, 243, 0.65);
+  }
+  #hud .metric-val {
+    font-weight: 600; color: #ffffff;
+  }
+  #hud .fps-high { color: #3fb950 !important; }
+  #hud .fps-mid  { color: #d29922 !important; }
+  #hud .fps-low  { color: #f85149 !important; }
+
+  /* Top Banner */
+  #banner {
+    position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 20;
+    background: rgba(13, 17, 23, 0.88);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(240, 246, 252, 0.15);
+    border-radius: 999px; padding: 8px 24px;
+    font-size: 12px; color: rgba(230, 237, 243, 0.88);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+    pointer-events: none; white-space: nowrap;
+  }
+  #banner b { color: #ff9940; font-weight: 600; }
+  #banner kbd {
+    background: rgba(240, 246, 252, 0.15);
+    padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 11px;
+    color: #58a6ff;
+  }
+
+  /* Target reticle tooltip */
+  #target-info {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 20;
+    background: rgba(13, 17, 23, 0.85);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 123, 37, 0.4);
+    border-radius: 6px; padding: 6px 14px;
+    font-size: 11px; color: #ffb066;
+    pointer-events: none; opacity: 0; transition: opacity 0.2s;
+  }
+
+  /* lil-gui custom placement & styling */
+  .lil-gui {
+    --width: 290px;
+    --background-color: rgba(13, 17, 23, 0.92);
+    --text-color: #e6edf3;
+    --title-background-color: rgba(22, 27, 34, 0.95);
+    --widget-color: #21262d;
+    --hover-color: #30363d;
+    --focus-color: #ff7b25;
+    --number-color: #ff9940;
+    --string-color: #58a6ff;
+    font-family: inherit !important;
+    border-radius: 8px;
+    border: 1px solid rgba(240, 246, 252, 0.12);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    z-index: 30 !important;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+    "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js",
+    "lil-gui": "https://unpkg.com/lil-gui@0.19.2/dist/lil-gui.esm.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<canvas id="webgl-canvas"></canvas>
+
+<div id="hud">
+  <h1>Tower Demolition</h1>
+  <div class="sub">Rigid-Body Physics Playground &middot; 1,000 Blocks</div>
+  <div class="metric-row">
+    <span class="metric-label">Frame Rate</span>
+    <span class="metric-val fps-high" id="stat-fps">60 FPS</span>
+  </div>
+  <div class="metric-row">
+    <span class="metric-label">Total Blocks</span>
+    <span class="metric-val" id="stat-total">1,000</span>
+  </div>
+  <div class="metric-row">
+    <span class="metric-label">Simulating (Active)</span>
+    <span class="metric-val" id="stat-awake">0</span>
+  </div>
+  <div class="metric-row">
+    <span class="metric-label">Sleeping (Resting)</span>
+    <span class="metric-val" id="stat-asleep">1,000</span>
+  </div>
+  <div class="metric-row">
+    <span class="metric-label">Displaced Blocks</span>
+    <span class="metric-val" id="stat-displaced">0 (0%)</span>
+  </div>
+  <div class="metric-row">
+    <span class="metric-label">Detonations</span>
+    <span class="metric-val" id="stat-detonations">0</span>
+  </div>
+</div>
+
+<div id="banner">
+  <b>Left-Click</b> tower to detonate &nbsp;&middot;&nbsp; <b>Drag</b> to orbit &nbsp;&middot;&nbsp; <b>Scroll</b> to zoom &nbsp;&middot;&nbsp; <kbd>R</kbd> Reset &nbsp;&middot;&nbsp; <kbd>Space</kbd> Blast
+</div>
+
+<div id="target-info">Target Locked &mdash; Click to Detonate</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as CANNON from 'cannon-es';
+import { GUI } from 'lil-gui';
+
+/* ========================================================================== */
+/* Configuration & Parameters                                                 */
+/* ========================================================================== */
+const CONFIG = {
+  // Tower architecture
+  ringRadius: 4.8,
+  layers: 26,
+  blocksPerRing: 36,
+  blockWidth: 0.80,
+  blockHeight: 0.50,
+  blockDepth: 0.75,
+  coreRadius: 1.4,
+  coreLayers: 23,
+  coreBlocksPerLayer: 2,
+  battlementBlocks: 18,
+  
+  // Explosion physics
+  explosionStrength: 180,
+  blastRadius: 12.0,
+  upwardLift: 0.35,
+  angularTorque: 0.7,
+  
+  // World Physics
+  gravityY: -9.82,
+  timeScale: 1.0,
+  friction: 0.45,
+  restitution: 0.15,
+  
+  // Visuals & Audio
+  soundEnabled: true,
+  soundVolume: 0.75,
+  particlesEnabled: true,
+  shockwaveEnabled: true,
+  flashLightsEnabled: true,
+  arenaSize: 42.0,
+  wallHeight: 5.5,
+  wallThickness: 1.2
+};
+
+// State trackers
+let totalDetonations = 0;
+let audioCtx = null;
+
+/* ========================================================================== */
+/* Procedural Texture Generation                                              */
+/* ========================================================================== */
+function generateStoneCanvasTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+
+  // Base stone tone
+  ctx.fillStyle = '#9e968b';
+  ctx.fillRect(0, 0, 512, 512);
+
+  const imgData = ctx.getImageData(0, 0, 512, 512);
+  const data = imgData.data;
+
+  // Multi-frequency noise for weathered masonry grain
+  for (let y = 0; y < 512; y++) {
+    for (let x = 0; x < 512; x++) {
+      const idx = (y * 512 + x) * 4;
+      const wave1 = Math.sin(x * 0.05) * Math.cos(y * 0.05);
+      const wave2 = Math.sin(x * 0.14 + y * 0.08) * Math.cos(y * 0.12 - x * 0.06);
+      const grain = (Math.random() - 0.5) * 35;
+      const base = 165 + wave1 * 25 + wave2 * 18 + grain;
+
+      data[idx]     = Math.min(255, Math.max(0, base * 1.06)); // R
+      data[idx + 1] = Math.min(255, Math.max(0, base * 0.98)); // G
+      data[idx + 2] = Math.min(255, Math.max(0, base * 0.88)); // B
+      data[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(1, 1);
+  return texture;
+}
+
+function generateGroundCanvasTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 1024;
+  const ctx = canvas.getContext('2d');
+
+  // Base pavement color
+  ctx.fillStyle = '#161b22';
+  ctx.fillRect(0, 0, 1024, 1024);
+
+  // Paver stone grid pattern
+  ctx.strokeStyle = 'rgba(10, 13, 17, 0.9)';
+  ctx.lineWidth = 4;
+  const tileSize = 64;
+
+  for (let x = 0; x <= 1024; x += tileSize) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, 1024);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= 1024; y += tileSize) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(1024, y);
+    ctx.stroke();
+  }
+
+  // Concentric arena ring accent
+  ctx.strokeStyle = 'rgba(255, 123, 37, 0.28)';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.arc(512, 512, 280, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(240, 246, 252, 0.12)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(512, 512, 420, 0, Math.PI * 2);
+  ctx.stroke();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(4, 4);
+  return texture;
+}
+
+/* ========================================================================== */
+/* Three.js Scene, Camera, Renderer & Lighting                                */
+/* ========================================================================== */
+const canvas = document.getElementById('webgl-canvas');
+const renderer = new THREE.WebGLRenderer({
+  canvas,
+  antialias: true,
+  powerPreference: 'high-performance'
+});
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0e131a);
+scene.fog = new THREE.FogExp2(0x0e131a, 0.012);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 300);
+camera.position.set(22, 16, 26);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.maxPolarAngle = Math.PI / 2 - 0.02; // Prevent camera dipping below ground
+controls.minDistance = 6;
+controls.maxDistance = 90;
+controls.target.set(0, 6.5, 0);
+controls.update();
+
+// Atmospheric Lights
+const hemiLight = new THREE.HemisphereLight(0xdde8f5, 0x181410, 0.65);
+scene.add(hemiLight);
+
+const sunLight = new THREE.DirectionalLight(0xfff5e6, 2.2);
+sunLight.position.set(28, 42, 24);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.near = 5;
+sunLight.shadow.camera.far = 120;
+const d = 26;
+sunLight.shadow.camera.left = -d;
+sunLight.shadow.camera.right = d;
+sunLight.shadow.camera.top = d;
+sunLight.shadow.camera.bottom = -d;
+sunLight.shadow.bias = -0.0004;
+scene.add(sunLight);
+
+// Fill / Rim Light for dramatic stone edge highlights
+const rimLight = new THREE.DirectionalLight(0x739bd4, 0.85);
+rimLight.position.set(-25, 20, -25);
+scene.add(rimLight);
+
+/* ========================================================================== */
+/* Physics World (Cannon-es)                                                  */
+/* ========================================================================== */
+const world = new CANNON.World({
+  gravity: new CANNON.Vec3(0, CONFIG.gravityY, 0)
+});
+world.broadphase = new CANNON.SAPBroadphase(world);
+world.allowSleep = true;
+
+// Physical Materials & Contacts
+const stonePhysMat = new CANNON.Material('stone');
+const groundPhysMat = new CANNON.Material('ground');
+const wallPhysMat = new CANNON.Material('wall');
+
+let stoneGroundContact = new CANNON.ContactMaterial(stonePhysMat, groundPhysMat, {
+  friction: CONFIG.friction,
+  restitution: CONFIG.restitution,
+  contactEquationStiffness: 1e7,
+  contactEquationRelaxation: 3
+});
+let stoneStoneContact = new CANNON.ContactMaterial(stonePhysMat, stonePhysMat, {
+  friction: CONFIG.friction,
+  restitution: CONFIG.restitution,
+  contactEquationStiffness: 1e7,
+  contactEquationRelaxation: 3
+});
+let stoneWallContact = new CANNON.ContactMaterial(stonePhysMat, wallPhysMat, {
+  friction: CONFIG.friction,
+  restitution: 0.25
+});
+
+world.addContactMaterial(stoneGroundContact);
+world.addContactMaterial(stoneStoneContact);
+world.addContactMaterial(stoneWallContact);
+world.defaultContactMaterial = stoneStoneContact;
+
+/* ========================================================================== */
+/* Ground Plane & Surrounding Arena Walls                                     */
+/* ========================================================================== */
+// Physical Ground Plane
+const groundBody = new CANNON.Body({
+  type: CANNON.Body.STATIC,
+  shape: new CANNON.Plane(),
+  material: groundPhysMat
+});
+groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+world.addBody(groundBody);
+
+// Visual Ground Mesh
+const groundGeo = new THREE.PlaneGeometry(120, 120);
+const groundTex = generateGroundCanvasTexture();
+const groundMat = new THREE.MeshStandardMaterial({
+  map: groundTex,
+  roughness: 0.85,
+  metalness: 0.15
+});
+const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+groundMesh.rotation.x = -Math.PI / 2;
+groundMesh.receiveShadow = true;
+scene.add(groundMesh);
+
+// Surrounding Walls (Perimeter Containment Arena)
+const wallBodies = [];
+const wallMeshes = [];
+const halfArena = CONFIG.arenaSize / 2;
+const halfThickness = CONFIG.wallThickness / 2;
+const wallH = CONFIG.wallHeight;
+
+const wallMat = new THREE.MeshStandardMaterial({
+  color: 0x222933,
+  roughness: 0.7,
+  metalness: 0.2
+});
+
+function createWall(posX, posZ, sizeX, sizeZ) {
+  const shape = new CANNON.Box(new CANNON.Vec3(sizeX / 2, wallH / 2, sizeZ / 2));
+  const body = new CANNON.Body({
+    type: CANNON.Body.STATIC,
+    shape,
+    position: new CANNON.Vec3(posX, wallH / 2, posZ),
+    material: wallPhysMat
+  });
+  world.addBody(body);
+  wallBodies.push(body);
+
+  const geo = new THREE.BoxGeometry(sizeX, wallH, sizeZ);
+  const mesh = new THREE.Mesh(geo, wallMat);
+  mesh.position.set(posX, wallH / 2, posZ);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  wallMeshes.push(mesh);
+}
+
+// 4 Enclosing perimeter walls
+createWall(0,  halfArena + halfThickness, CONFIG.arenaSize + CONFIG.wallThickness * 2, CONFIG.wallThickness);
+createWall(0, -halfArena - halfThickness, CONFIG.arenaSize + CONFIG.wallThickness * 2, CONFIG.wallThickness);
+createWall( halfArena + halfThickness, 0, CONFIG.wallThickness, CONFIG.arenaSize);
+createWall(-halfArena - halfThickness, 0, CONFIG.wallThickness, CONFIG.arenaSize);
+
+/* ========================================================================== */
+/* Procedural Tower Generator & InstancedMesh Pipeline                        */
+/* ========================================================================== */
+// Calculation of total blocks:
+// 26 wall layers * 36 blocks = 936
+// 1 battlement layer = 18
+// 23 core layers * 2 blocks = 46
+// Total = exactly 1,000 blocks!
+const TOTAL_BLOCKS = (CONFIG.layers * CONFIG.blocksPerRing) + 
+                     CONFIG.battlementBlocks + 
+                     (CONFIG.coreLayers * CONFIG.coreBlocksPerLayer);
+
+const blockGeo = new THREE.BoxGeometry(CONFIG.blockWidth, CONFIG.blockHeight, CONFIG.blockDepth);
+const stoneTexture = generateStoneCanvasTexture();
+
+const blockMat = new THREE.MeshStandardMaterial({
+  map: stoneTexture,
+  roughness: 0.8,
+  metalness: 0.12
+});
+
+const instancedMesh = new THREE.InstancedMesh(blockGeo, blockMat, TOTAL_BLOCKS);
+instancedMesh.castShadow = true;
+instancedMesh.receiveShadow = true;
+instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(instancedMesh);
+
+// Physics bodies & initial transform cache for resets
+const blockBodies = [];
+const initialTransforms = [];
+const dummy = new THREE.Object3D();
+
+// Palette of weathered masonry stones for per-instance variety
+const stonePalette = [
+  new THREE.Color(0xb5ab9e), // warm sandstone
+  new THREE.Color(0x999185), // classic limestone
+  new THREE.Color(0x857e75), // granite slate
+  new THREE.Color(0x6e6860), // dark weathered basalt
+  new THREE.Color(0xc2b9ac), // pale chalk stone
+  new THREE.Color(0xaa9a82)  // ochre mortar tint
+];
+
+function buildProceduralTower() {
+  let blockIndex = 0;
+  const boxHalfExtents = new CANNON.Vec3(
+    CONFIG.blockWidth / 2,
+    CONFIG.blockHeight / 2,
+    CONFIG.blockDepth / 2
+  );
+  const blockShape = new CANNON.Box(boxHalfExtents);
+
+  // 1. Outer Cylindrical Wall (26 layers * 36 blocks = 936 blocks)
+  for (let l = 0; l < CONFIG.layers; l++) {
+    const y = (l + 0.5) * CONFIG.blockHeight + 0.01;
+    // Running bond offset: alternate half-block shift per layer for interlocking masonry
+    const angleOffset = (l % 2 === 0) ? 0 : (Math.PI / CONFIG.blocksPerRing);
+
+    for (let i = 0; i < CONFIG.blocksPerRing; i++) {
+      const theta = i * (Math.PI * 2 / CONFIG.blocksPerRing) + angleOffset;
+      const x = Math.cos(theta) * CONFIG.ringRadius;
+      const z = Math.sin(theta) * CONFIG.ringRadius;
+
+      dummy.position.set(x, y, z);
+      // lookAt center makes local +Z point radially inward; local +X aligns with tangent!
+      dummy.lookAt(0, y, 0);
+      dummy.updateMatrix();
+
+      instancedMesh.setMatrixAt(blockIndex, dummy.matrix);
+
+      // Procedural color variation with slight height-based shading
+      const baseColor = stonePalette[(blockIndex + l * 3) % stonePalette.length].clone();
+      const heightShade = 0.85 + (l / CONFIG.layers) * 0.25; // Lower layers slightly darker from age
+      baseColor.multiplyScalar(heightShade);
+      instancedMesh.setColorAt(blockIndex, baseColor);
+
+      // Create matching Cannon physics dynamic body
+      const body = new CANNON.Body({
+        mass: 1.0,
+        shape: blockShape,
+        position: new CANNON.Vec3(x, y, z),
+        quaternion: new CANNON.Quaternion(
+          dummy.quaternion.x,
+          dummy.quaternion.y,
+          dummy.quaternion.z,
+          dummy.quaternion.w
+        ),
+        material: stonePhysMat,
+        linearDamping: 0.05,
+        angularDamping: 0.15
+      });
+      // Sleep settings to maximize performance before disturbance
+      body.sleepSpeedLimit = 0.15;
+      body.sleepTimeLimit = 0.35;
+      body.sleep();
+
+      world.addBody(body);
+      blockBodies.push(body);
+
+      initialTransforms.push({
+        position: new THREE.Vector3(x, y, z),
+        quaternion: dummy.quaternion.clone()
+      });
+
+      blockIndex++;
+    }
+  }
+
+  // 2. Crown Battlements / Crenellations on top rim (18 blocks)
+  const battlementY = (CONFIG.layers + 0.5) * CONFIG.blockHeight + 0.01;
+  for (let i = 0; i < CONFIG.blocksPerRing; i += 2) {
+    const theta = i * (Math.PI * 2 / CONFIG.blocksPerRing);
+    const x = Math.cos(theta) * CONFIG.ringRadius;
+    const z = Math.sin(theta) * CONFIG.ringRadius;
+
+    dummy.position.set(x, battlementY, z);
+    dummy.lookAt(0, battlementY, 0);
+    dummy.updateMatrix();
+
+    instancedMesh.setMatrixAt(blockIndex, dummy.matrix);
+    const merlonColor = stonePalette[(blockIndex) % stonePalette.length].clone();
+    merlonColor.multiplyScalar(1.1); // top sunlit crest
+    instancedMesh.setColorAt(blockIndex, merlonColor);
+
+    const body = new CANNON.Body({
+      mass: 1.0,
+      shape: blockShape,
+      position: new CANNON.Vec3(x, battlementY, z),
+      quaternion: new CANNON.Quaternion(
+        dummy.quaternion.x,
+        dummy.quaternion.y,
+        dummy.quaternion.z,
+        dummy.quaternion.w
+      ),
+      material: stonePhysMat,
+      linearDamping: 0.05,
+      angularDamping: 0.15
+    });
+    body.sleepSpeedLimit = 0.15;
+    body.sleepTimeLimit = 0.35;
+    body.sleep();
+
+    world.addBody(body);
+    blockBodies.push(body);
+
+    initialTransforms.push({
+      position: new THREE.Vector3(x, battlementY, z),
+      quaternion: dummy.quaternion.clone()
+    });
+
+    blockIndex++;
+  }
+
+  // 3. Central Core Column (23 layers * 2 blocks = 46 blocks)
+  for (let l = 0; l < CONFIG.coreLayers; l++) {
+    const y = (l + 0.5) * CONFIG.blockHeight + 0.01;
+    const isOdd = (l % 2 === 1);
+
+    for (let b = 0; b < CONFIG.coreBlocksPerLayer; b++) {
+      const offset = (b === 0 ? -0.42 : 0.42);
+      const x = isOdd ? offset : 0;
+      const z = isOdd ? 0 : offset;
+
+      dummy.position.set(x, y, z);
+      if (isOdd) {
+        dummy.rotation.set(0, Math.PI / 2, 0);
+      } else {
+        dummy.rotation.set(0, 0, 0);
+      }
+      dummy.updateMatrix();
+
+      instancedMesh.setMatrixAt(blockIndex, dummy.matrix);
+      const coreColor = stonePalette[(blockIndex) % stonePalette.length].clone();
+      coreColor.multiplyScalar(0.75); // darker interior stone
+      instancedMesh.setColorAt(blockIndex, coreColor);
+
+      const body = new CANNON.Body({
+        mass: 1.0,
+        shape: blockShape,
+        position: new CANNON.Vec3(x, y, z),
+        quaternion: new CANNON.Quaternion(
+          dummy.quaternion.x,
+          dummy.quaternion.y,
+          dummy.quaternion.z,
+          dummy.quaternion.w
+        ),
+        material: stonePhysMat,
+        linearDamping: 0.05,
+        angularDamping: 0.15
+      });
+      body.sleepSpeedLimit = 0.15;
+      body.sleepTimeLimit = 0.35;
+      body.sleep();
+
+      world.addBody(body);
+      blockBodies.push(body);
+
+      initialTransforms.push({
+        position: new THREE.Vector3(x, y, z),
+        quaternion: dummy.quaternion.clone()
+      });
+
+      blockIndex++;
+    }
+  }
+
+  instancedMesh.instanceMatrix.needsUpdate = true;
+  if (instancedMesh.instanceColor) {
+    instancedMesh.instanceColor.needsUpdate = true;
+  }
+}
+
+buildProceduralTower();
+
+/* ========================================================================== */
+/* Visual Explosion VFX & Procedural Web Audio API Synth                      */
+/* ========================================================================== */
+// Procedural Web Audio Explosion Synthesizer
+function playExplosionSound() {
+  if (!CONFIG.soundEnabled) return;
+
+  if (!audioCtx) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      audioCtx = new AudioContextClass();
+    }
+  }
+  if (!audioCtx) return;
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+
+  const now = audioCtx.currentTime;
+  const masterGain = audioCtx.createGain();
+  masterGain.gain.setValueAtTime(CONFIG.soundVolume, now);
+  masterGain.connect(audioCtx.destination);
+
+  // 1. Deep Sub-Bass Punch Sweep (Sine oscillator dropping 130Hz -> 26Hz)
+  const osc = audioCtx.createOscillator();
+  const oscGain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(130, now);
+  osc.frequency.exponentialRampToValueAtTime(26, now + 0.55);
+
+  oscGain.gain.setValueAtTime(0.9, now);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+
+  osc.connect(oscGain);
+  oscGain.connect(masterGain);
+  osc.start(now);
+  osc.stop(now + 0.7);
+
+  // 2. High-energy Debris Crunch (White noise through resonant low-pass filter)
+  const bufferSize = Math.floor(audioCtx.sampleRate * 0.65);
+  const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const output = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    output[i] = Math.random() * 2 - 1;
+  }
+
+  const whiteNoise = audioCtx.createBufferSource();
+  whiteNoise.buffer = noiseBuffer;
+
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.Q.setValueAtTime(4.0, now);
+  filter.frequency.setValueAtTime(2800, now);
+  filter.frequency.exponentialRampToValueAtTime(140, now + 0.55);
+
+  const noiseGain = audioCtx.createGain();
+  noiseGain.gain.setValueAtTime(0.8, now);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+
+  whiteNoise.connect(filter);
+  filter.connect(noiseGain);
+  noiseGain.connect(masterGain);
+
+  whiteNoise.start(now);
+  whiteNoise.stop(now + 0.65);
+}
+
+// Particle Debris System (Pooled points)
+const MAX_PARTICLES = 600;
+const particlePositions = new Float32Array(MAX_PARTICLES * 3);
+const particleVelocities = new Float32Array(MAX_PARTICLES * 3);
+const particleColors = new Float32Array(MAX_PARTICLES * 3);
+const particleLifes = new Float32Array(MAX_PARTICLES);
+let activeParticleCount = 0;
+
+const particleGeo = new THREE.BufferGeometry();
+particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+particleGeo.setAttribute('color', new THREE.BufferAttribute(particleColors, 3));
+
+const particleMat = new THREE.PointsMaterial({
+  size: 0.5,
+  vertexColors: true,
+  transparent: true,
+  opacity: 0.95,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false
+});
+const particleSystem = new THREE.Points(particleGeo, particleMat);
+scene.add(particleSystem);
+
+function spawnDebrisParticles(origin, count = 80) {
+  if (!CONFIG.particlesEnabled) return;
+
+  const sparkPalette = [
+    [1.0, 0.5, 0.1],  // blazing orange
+    [1.0, 0.85, 0.3], // hot golden spark
+    [1.0, 0.25, 0.05],// red ember
+    [0.95, 0.95, 0.85]// white blast core
+  ];
+
+  for (let i = 0; i < count; i++) {
+    const idx = (activeParticleCount % MAX_PARTICLES);
+    const p3 = idx * 3;
+
+    particlePositions[p3]     = origin.x + (Math.random() - 0.5) * 0.6;
+    particlePositions[p3 + 1] = origin.y + (Math.random() - 0.5) * 0.6;
+    particlePositions[p3 + 2] = origin.z + (Math.random() - 0.5) * 0.6;
+
+    // Spherical blast burst velocity
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(Math.random() * 2 - 1);
+    const speed = 8.0 + Math.random() * 20.0;
+
+    particleVelocities[p3]     = Math.sin(phi) * Math.cos(theta) * speed;
+    particleVelocities[p3 + 1] = Math.abs(Math.cos(phi)) * speed * 0.9 + 3.5; // upward lift
+    particleVelocities[p3 + 2] = Math.sin(phi) * Math.sin(theta) * speed;
+
+    const col = sparkPalette[Math.floor(Math.random() * sparkPalette.length)];
+    particleColors[p3]     = col[0];
+    particleColors[p3 + 1] = col[1];
+    particleColors[p3 + 2] = col[2];
+
+    particleLifes[idx] = 1.0;
+    activeParticleCount++;
+  }
+  particleGeo.attributes.position.needsUpdate = true;
+  particleGeo.attributes.color.needsUpdate = true;
+}
+
+// Shockwave Ring VFX (Expanding transparent glowing ring)
+const activeShockwaves = [];
+const ringGeo = new THREE.RingGeometry(0.1, 0.75, 40);
+const ringMatBase = new THREE.MeshBasicMaterial({
+  color: 0xff7b25,
+  side: THREE.DoubleSide,
+  transparent: true,
+  opacity: 0.95,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false
+});
+
+function spawnShockwave(origin) {
+  if (!CONFIG.shockwaveEnabled) return;
+
+  const ringMesh = new THREE.Mesh(ringGeo, ringMatBase.clone());
+  ringMesh.position.copy(origin);
+  ringMesh.lookAt(camera.position); // Billboard toward camera view
+  scene.add(ringMesh);
+
+  activeShockwaves.push({
+    mesh: ringMesh,
+    scale: 0.1,
+    maxScale: CONFIG.blastRadius * 1.5,
+    opacity: 0.95
+  });
+}
+
+// Dynamic Point Light Flash
+const activeFlashLights = [];
+function spawnFlashLight(origin) {
+  if (!CONFIG.flashLightsEnabled) return;
+
+  const light = new THREE.PointLight(0xffaa44, 18.0, CONFIG.blastRadius * 2.5, 1.8);
+  light.position.copy(origin);
+  scene.add(light);
+
+  activeFlashLights.push({
+    light,
+    intensity: 18.0,
+    life: 1.0
+  });
+}
+
+/* ========================================================================== */
+/* Targeting Reticle & Blast Preview Ring                                     */
+/* ========================================================================== */
+const reticleGeo = new THREE.RingGeometry(0.35, 0.5, 32);
+const reticleMat = new THREE.MeshBasicMaterial({
+  color: 0xff7b25,
+  side: THREE.DoubleSide,
+  transparent: true,
+  opacity: 0.0,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false
+});
+const reticleMesh = new THREE.Mesh(reticleGeo, reticleMat);
+reticleMesh.renderOrder = 99;
+scene.add(reticleMesh);
+
+// Outer blast boundary preview circle
+const blastRadiusCircleGeo = new THREE.RingGeometry(CONFIG.blastRadius - 0.1, CONFIG.blastRadius, 64);
+const blastRadiusCircleMat = new THREE.MeshBasicMaterial({
+  color: 0xff4500,
+  side: THREE.DoubleSide,
+  transparent: true,
+  opacity: 0.0,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false
+});
+const blastRadiusCircleMesh = new THREE.Mesh(blastRadiusCircleGeo, blastRadiusCircleMat);
+blastRadiusCircleMesh.renderOrder = 98;
+scene.add(blastRadiusCircleMesh);
+
+/* ========================================================================== */
+/* Raycasting & Detonation Trigger Logic                                      */
+/* ========================================================================== */
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const targetInfoEl = document.getElementById('target-info');
+let isHoveringTarget = false;
+let currentHitPoint = new THREE.Vector3(0, 6.5, 0);
+
+// Track pointer down coordinates to differentiate click vs orbit drag
+let pointerDownX = 0;
+let pointerDownY = 0;
+let isPointerDown = false;
+
+window.addEventListener('pointermove', (event) => {
+  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObjects([instancedMesh, groundMesh]);
+
+  if (intersects.length > 0) {
+    const hit = intersects[0];
+    currentHitPoint.copy(hit.point);
+    isHoveringTarget = true;
+
+    // Position targeting reticle billboarded toward camera
+    reticleMesh.position.copy(hit.point);
+    reticleMesh.lookAt(camera.position);
+    reticleMat.opacity = 0.85;
+
+    // Position horizontal blast preview ring
+    blastRadiusCircleMesh.position.copy(hit.point);
+    blastRadiusCircleMesh.position.y += 0.05;
+    blastRadiusCircleMesh.rotation.x = -Math.PI / 2;
+    blastRadiusCircleMat.opacity = 0.28;
+
+    targetInfoEl.style.opacity = '1';
+    targetInfoEl.innerHTML = `Target: [${hit.point.x.toFixed(1)}, ${hit.point.y.toFixed(1)}, ${hit.point.z.toFixed(1)}] &middot; Blast Radius: <b>${CONFIG.blastRadius.toFixed(0)}m</b>`;
+  } else {
+    isHoveringTarget = false;
+    reticleMat.opacity = 0.0;
+    blastRadiusCircleMat.opacity = 0.0;
+    targetInfoEl.style.opacity = '0';
+  }
+});
+
+window.addEventListener('pointerdown', (event) => {
+  // Ignore clicks on GUI panel
+  if (event.target.closest('.lil-gui')) return;
+  pointerDownX = event.clientX;
+  pointerDownY = event.clientY;
+  isPointerDown = true;
+});
+
+window.addEventListener('pointerup', (event) => {
+  if (event.target.closest('.lil-gui')) return;
+  if (!isPointerDown) return;
+  isPointerDown = false;
+
+  // Only detonate if pointer movement was minimal (< 6 pixels = click, not camera drag)
+  const dist = Math.hypot(event.clientX - pointerDownX, event.clientY - pointerDownY);
+  if (dist < 6) {
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects([instancedMesh, groundMesh]);
+    if (intersects.length > 0) {
+      triggerDetonationAt(intersects[0].point);
+    }
+  }
+});
+
+// Primary Detonation Physics & VFX Executor
+function triggerDetonationAt(epicenter) {
+  totalDetonations++;
+  document.getElementById('stat-detonations').textContent = totalDetonations;
+
+  // 1. Play procedural synthesized audio
+  playExplosionSound();
+
+  // 2. Spawn Visual Effects
+  spawnDebrisParticles(epicenter, 85);
+  spawnShockwave(epicenter);
+  spawnFlashLight(epicenter);
+
+  // 3. Apply radial blast impulse to all physics blocks within blast radius
+  const blastRad = CONFIG.blastRadius;
+  const strength = CONFIG.explosionStrength;
+  const lift = CONFIG.upwardLift;
+  const torque = CONFIG.angularTorque;
+
+  const epicCANNON = new CANNON.Vec3(epicenter.x, epicenter.y, epicenter.z);
+
+  for (let i = 0; i < blockBodies.length; i++) {
+    const body = blockBodies[i];
+    const dx = body.position.x - epicCANNON.x;
+    const dy = body.position.y - epicCANNON.y;
+    const dz = body.position.z - epicCANNON.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    if (dist < blastRad) {
+      // Quadratic falloff: strongest at epicenter, smoothly reaches zero at blast edge
+      const falloff = 1.0 - (dist / blastRad);
+      const impulseMag = strength * (falloff * falloff);
+
+      // Unit direction + upward lift bias
+      let dirX = (dist > 0.05) ? (dx / dist) : ((Math.random() - 0.5) * 2);
+      let dirY = (dist > 0.05) ? (dy / dist) : 1.0;
+      let dirZ = (dist > 0.05) ? (dz / dist) : ((Math.random() - 0.5) * 2);
+
+      dirY += lift;
+      const dirLen = Math.sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
+      dirX /= dirLen;
+      dirY /= dirLen;
+      dirZ /= dirLen;
+
+      // Wake up the body from sleep
+      body.wakeUp();
+
+      // Apply linear impulse
+      const impulse = new CANNON.Vec3(
+        dirX * impulseMag,
+        dirY * impulseMag,
+        dirZ * impulseMag
+      );
+
+      // Slight offset from center of mass induces natural tumbling angular rotation!
+      const offsetPoint = new CANNON.Vec3(
+        body.position.x + (Math.random() - 0.5) * CONFIG.blockWidth * torque,
+        body.position.y + (Math.random() - 0.5) * CONFIG.blockHeight * torque,
+        body.position.z + (Math.random() - 0.5) * CONFIG.blockDepth * torque
+      );
+      body.applyImpulse(impulse, offsetPoint);
+    }
+  }
+}
+
+/* ========================================================================== */
+/* Reset Mechanism                                                            */
+/* ========================================================================== */
+function resetTower() {
+  for (let i = 0; i < blockBodies.length; i++) {
+    const body = blockBodies[i];
+    const init = initialTransforms[i];
+
+    // Reset physics state
+    body.position.set(init.position.x, init.position.y, init.position.z);
+    body.quaternion.set(
+      init.quaternion.x,
+      init.quaternion.y,
+      init.quaternion.z,
+      init.quaternion.w
+    );
+    body.velocity.set(0, 0, 0);
+    body.angularVelocity.set(0, 0, 0);
+    body.sleep();
+
+    // Reset InstancedMesh transform
+    dummy.position.copy(init.position);
+    dummy.quaternion.copy(init.quaternion);
+    dummy.updateMatrix();
+    instancedMesh.setMatrixAt(i, dummy.matrix);
+  }
+
+  instancedMesh.instanceMatrix.needsUpdate = true;
+
+  // Clean up active VFX
+  for (const sw of activeShockwaves) scene.remove(sw.mesh);
+  activeShockwaves.length = 0;
+
+  for (const fl of activeFlashLights) scene.remove(fl.light);
+  activeFlashLights.length = 0;
+
+  activeParticleCount = 0;
+  particleLifes.fill(0);
+  particleGeo.attributes.position.needsUpdate = true;
+
+  totalDetonations = 0;
+  document.getElementById('stat-detonations').textContent = '0';
+  document.getElementById('stat-displaced').textContent = '0 (0%)';
+  document.getElementById('stat-awake').textContent = '0';
+  document.getElementById('stat-asleep').textContent = TOTAL_BLOCKS.toLocaleString();
+}
+
+// Keyboard shortcuts
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') {
+    resetTower();
+  } else if (e.code === 'Space') {
+    e.preventDefault();
+    triggerDetonationAt(currentHitPoint);
+  } else if (e.key === '1') {
+    setCameraPreset('isometric');
+  } else if (e.key === '2') {
+    setCameraPreset('closeUp');
+  } else if (e.key === '3') {
+    setCameraPreset('birdsEye');
+  }
+});
+
+function setCameraPreset(preset) {
+  if (preset === 'isometric') {
+    camera.position.set(22, 16, 26);
+    controls.target.set(0, 6.5, 0);
+  } else if (preset === 'closeUp') {
+    camera.position.set(12, 5, 14);
+    controls.target.set(0, 4, 0);
+  } else if (preset === 'birdsEye') {
+    camera.position.set(0, 38, 20);
+    controls.target.set(0, 6, 0);
+  }
+  controls.update();
+}
+
+/* ========================================================================== */
+/* lil-gui Interactive Controls Setup                                         */
+/* ========================================================================== */
+const gui = new GUI({ title: 'Tower Demolition Controls' });
+
+const fExplosion = gui.addFolder('Explosion Dynamics');
+fExplosion.add(CONFIG, 'explosionStrength', 30, 500, 10).name('Blast Force');
+fExplosion.add(CONFIG, 'blastRadius', 4, 25, 1).name('Blast Radius').onChange(val => {
+  blastRadiusCircleMesh.geometry.dispose();
+  blastRadiusCircleMesh.geometry = new THREE.RingGeometry(val - 0.1, val, 64);
+});
+fExplosion.add(CONFIG, 'upwardLift', 0.0, 1.0, 0.05).name('Vertical Lift');
+fExplosion.add(CONFIG, 'angularTorque', 0.0, 2.0, 0.1).name('Tumble Torque');
+
+const fPhysics = gui.addFolder('Physical Environment');
+fPhysics.add(CONFIG, 'gravityY', -30.0, 0.0, 0.5).name('Gravity Y').onChange(g => {
+  world.gravity.set(0, g, 0);
+  for (let i = 0; i < blockBodies.length; i++) blockBodies[i].wakeUp();
+});
+fPhysics.add(CONFIG, 'timeScale', 0.1, 1.0, 0.05).name('Time Scale (Slow-Mo)');
+fPhysics.add(CONFIG, 'friction', 0.1, 1.0, 0.05).name('Block Friction').onChange(f => {
+  stoneStoneContact.friction = f;
+  stoneGroundContact.friction = f;
+});
+fPhysics.add(CONFIG, 'restitution', 0.0, 0.6, 0.02).name('Bounciness').onChange(r => {
+  stoneStoneContact.restitution = r;
+  stoneGroundContact.restitution = r;
+});
+
+const fAudioVisual = gui.addFolder('Audio & Visuals');
+fAudioVisual.add(CONFIG, 'soundEnabled').name('Explosion Audio');
+fAudioVisual.add(CONFIG, 'soundVolume', 0.0, 1.0, 0.05).name('Sound Volume');
+fAudioVisual.add(CONFIG, 'particlesEnabled').name('Debris Sparks');
+fAudioVisual.add(CONFIG, 'shockwaveEnabled').name('Shockwave Ring');
+fAudioVisual.add(CONFIG, 'flashLightsEnabled').name('Flash Lighting');
+
+const fPresets = gui.addFolder('Quick Demolition Triggers');
+fPresets.add({ detonateBase: () => triggerDetonationAt(new THREE.Vector3(0, 2.2, CONFIG.ringRadius)) }, 'detonateBase').name('💥 Detonate Base Wall');
+fPresets.add({ detonateMid: () => triggerDetonationAt(new THREE.Vector3(0, 7.0, CONFIG.ringRadius)) }, 'detonateMid').name('💥 Detonate Mid Section');
+fPresets.add({ detonateTop: () => triggerDetonationAt(new THREE.Vector3(0, 12.8, CONFIG.ringRadius)) }, 'detonateTop').name('💥 Detonate Castle Crest');
+fPresets.add({ detonateCore: () => triggerDetonationAt(new THREE.Vector3(0, 6.5, 0)) }, 'detonateCore').name('💥 Internal Core Breach');
+fPresets.add({ reset: resetTower }, 'reset').name('🔄 Reset Tower (R)');
+
+const fCamera = gui.addFolder('Camera Presets');
+fCamera.add({ action: () => setCameraPreset('isometric') }, 'action').name('Default Isometric [1]');
+fCamera.add({ action: () => setCameraPreset('closeUp') }, 'action').name('Close-Up Action [2]');
+fCamera.add({ action: () => setCameraPreset('birdsEye') }, 'action').name("Bird's Eye View [3]");
+
+fExplosion.open();
+fPresets.open();
+
+/* ========================================================================== */
+/* Animation Loop & Real-Time Performance HUD                                 */
+/* ========================================================================== */
+const clock = new THREE.Clock();
+let fpsCounter = 60;
+let frameCount = 0;
+let lastFpsTime = performance.now();
+const statFpsEl = document.getElementById('stat-fps');
+const statAwakeEl = document.getElementById('stat-awake');
+const statAsleepEl = document.getElementById('stat-asleep');
+const statDisplacedEl = document.getElementById('stat-displaced');
+
+const fixedTimeStep = 1.0 / 60.0;
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const rawDelta = clock.getDelta();
+  const delta = Math.min(rawDelta, 0.1); // Guard against tab switching lag spikes
+
+  // 1. Advance Physics World with fixed timestep & timescale
+  world.step(fixedTimeStep, delta * CONFIG.timeScale, 3);
+
+  // 2. Count active vs sleeping bodies & sync InstancedMesh matrices
+  let activeCount = 0;
+  let displacedCount = 0;
+  let needsMatrixUpdate = false;
+
+  for (let i = 0; i < TOTAL_BLOCKS; i++) {
+    const body = blockBodies[i];
+
+    // Both AWAKE and SLEEPY bodies are updated until full SLEEPING state
+    if (body.sleepState !== CANNON.Body.SLEEPING) {
+      activeCount++;
+      needsMatrixUpdate = true;
+
+      dummy.position.set(body.position.x, body.position.y, body.position.z);
+      dummy.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+      dummy.updateMatrix();
+      instancedMesh.setMatrixAt(i, dummy.matrix);
+    }
+
+    // Displacement calculation (moved more than 0.35m from resting place)
+    const initPos = initialTransforms[i].position;
+    const distSq = (body.position.x - initPos.x) ** 2 +
+                   (body.position.y - initPos.y) ** 2 +
+                   (body.position.z - initPos.z) ** 2;
+    if (distSq > 0.12) {
+      displacedCount++;
+    }
+  }
+
+  // High performance optimization: only upload buffer to GPU if active bodies moved
+  if (needsMatrixUpdate) {
+    instancedMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  // 3. Update Particle Debris System
+  if (CONFIG.particlesEnabled && activeParticleCount > 0) {
+    const pCount = Math.min(activeParticleCount, MAX_PARTICLES);
+    let aliveParticles = 0;
+
+    for (let i = 0; i < pCount; i++) {
+      if (particleLifes[i] > 0) {
+        particleLifes[i] -= delta * 1.8;
+        aliveParticles++;
+
+        const p3 = i * 3;
+        particleVelocities[p3 + 1] += CONFIG.gravityY * 0.7 * delta;
+        particleVelocities[p3]     *= 0.98;
+        particleVelocities[p3 + 1] *= 0.98;
+        particleVelocities[p3 + 2] *= 0.98;
+
+        particlePositions[p3]     += particleVelocities[p3] * delta;
+        particlePositions[p3 + 1] += particleVelocities[p3 + 1] * delta;
+        particlePositions[p3 + 2] += particleVelocities[p3 + 2] * delta;
+
+        // Ground collision bounce for particles
+        if (particlePositions[p3 + 1] < 0.1) {
+          particlePositions[p3 + 1] = 0.1;
+          particleVelocities[p3 + 1] = -particleVelocities[p3 + 1] * 0.35;
+        }
+
+        const lifeRatio = Math.max(0, particleLifes[i]);
+        particleColors[p3]     *= lifeRatio;
+        particleColors[p3 + 1] *= lifeRatio;
+        particleColors[p3 + 2] *= lifeRatio;
+      }
+    }
+    particleGeo.attributes.position.needsUpdate = true;
+    particleGeo.attributes.color.needsUpdate = true;
+    if (aliveParticles === 0) activeParticleCount = 0;
+  }
+
+  // 4. Update Shockwaves
+  for (let i = activeShockwaves.length - 1; i >= 0; i--) {
+    const sw = activeShockwaves[i];
+    sw.scale += delta * 24.0;
+    sw.opacity -= delta * 1.8;
+    sw.mesh.scale.set(sw.scale, sw.scale, sw.scale);
+    sw.mesh.material.opacity = Math.max(0, sw.opacity);
+
+    if (sw.opacity <= 0 || sw.scale >= sw.maxScale) {
+      scene.remove(sw.mesh);
+      sw.mesh.geometry.dispose();
+      sw.mesh.material.dispose();
+      activeShockwaves.splice(i, 1);
+    }
+  }
+
+  // 5. Update Flash Lights
+  for (let i = activeFlashLights.length - 1; i >= 0; i--) {
+    const fl = activeFlashLights[i];
+    fl.life -= delta * 3.5;
+    fl.light.intensity = fl.intensity * Math.max(0, fl.life);
+
+    if (fl.life <= 0) {
+      scene.remove(fl.light);
+      fl.light.dispose();
+      activeFlashLights.splice(i, 1);
+    }
+  }
+
+  // 6. Smooth FPS Metric & HUD updates
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 400) {
+    fpsCounter = Math.round((frameCount * 1000) / (now - lastFpsTime));
+    frameCount = 0;
+    lastFpsTime = now;
+
+    statFpsEl.textContent = `${fpsCounter} FPS`;
+    statFpsEl.className = 'metric-val ' + (fpsCounter >= 50 ? 'fps-high' : fpsCounter >= 28 ? 'fps-mid' : 'fps-low');
+    statAwakeEl.textContent = activeCount.toLocaleString();
+    statAsleepEl.textContent = (TOTAL_BLOCKS - activeCount).toLocaleString();
+    const percentDisplaced = Math.round((displacedCount / TOTAL_BLOCKS) * 100);
+    statDisplacedEl.textContent = `${displacedCount.toLocaleString()} (${percentDisplaced}%)`;
+  }
+
+  // 7. Update Controls & Render
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+animate();
+
+/* ========================================================================== */
+/* Viewport Resize Handler                                                    */
+/* ========================================================================== */
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+});
+</script>
+
+</body>
+</html>

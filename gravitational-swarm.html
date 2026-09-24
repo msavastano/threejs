@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gravitational Particle Swarm — 50k</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; }
+</style>
+<!-- Modern ES-module build of Three.js (r150+) loaded via import map -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ============================================================
+   1. SCENE SETUP
+   ============================================================ */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000); // deep space black
+
+const camera = new THREE.PerspectiveCamera(
+  60, window.innerWidth / window.innerHeight, 0.1, 2000
+);
+camera.position.set(0, 120, 320); // slightly elevated vantage
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// Smooth orbit controls with gentle damping
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.rotateSpeed = 0.6;
+
+// Handle window resizes cleanly
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* ============================================================
+   2. PARTICLE ENGINE — 50,000 particles in one Points object
+   ============================================================ */
+const COUNT = 50000;
+const positions = new Float32Array(COUNT * 3);
+const velocities = new Float32Array(COUNT * 3);
+const colors = new Float32Array(COUNT * 3);
+
+// Distribution parameters
+const RADIUS = 140;      // outer radius of the spherical volume
+const CORE = 8;          // inner hollow so particles don't sit exactly at origin
+
+// Precomputed random directions (uniform-ish inside sphere)
+for (let i = 0; i < COUNT; i++) {
+  const i3 = i * 3;
+
+  // Random point inside a sphere (rejection-free: cube-root radius trick)
+  const r = CORE + Math.cbrt(Math.random()) * (RADIUS - CORE);
+  const theta = Math.random() * Math.PI * 2;
+  const phi = Math.acos(2 * Math.random() - 1);
+  const sinPhi = Math.sin(phi);
+
+  positions[i3]     = r * sinPhi * Math.cos(theta);
+  positions[i3 + 1] = r * sinPhi * Math.sin(theta);
+  positions[i3 + 2] = r * Math.cos(phi);
+}
+
+/* ============================================================
+   4. COLOR GRADIENT — neon cyan core → deep indigo fringes
+   ============================================================ */
+const cCore = new THREE.Color(0x00fff7); // bright neon cyan
+const cMid  = new THREE.Color(0x2b6bff); // electric blue
+const cEdge = new THREE.Color(0x3a0ca3); // deep indigo/violet
+const tmpColor = new THREE.Color();
+
+for (let i = 0; i < COUNT; i++) {
+  const i3 = i * 3;
+  const x = positions[i3], y = positions[i3 + 1], z = positions[i3 + 2];
+  const d = Math.sqrt(x * x + y * y + z * z);
+  const t = Math.min(d / RADIUS, 1); // normalized radial distance 0..1
+
+  if (t < 0.5) {
+    tmpColor.copy(cCore).lerp(cMid, t / 0.5);
+  } else {
+    tmpColor.copy(cMid).lerp(cEdge, (t - 0.5) / 0.5);
+  }
+
+  colors[i3]     = tmpColor.r;
+  colors[i3 + 1] = tmpColor.g;
+  colors[i3 + 2] = tmpColor.b;
+}
+
+/* ============================================================
+   3. GEOMETRY + custom "velocity" attribute (orbital tangents)
+   ============================================================ */
+// Subtle orbital tangent around Y axis: v = ω × r (cross of up-axis with position)
+const OMEGA = 0.35; // orbital speed factor
+for (let i = 0; i < COUNT; i++) {
+  const i3 = i * 3;
+  const x = positions[i3], y = positions[i3 + 1], z = positions[i3 + 2];
+
+  // Tangent to circular orbit in the XZ plane: up × pos = (-z, 0, x)
+  velocities[i3]     = -z * OMEGA;
+  velocities[i3 + 1] =  (Math.random() - 0.5) * 0.4;  // slight vertical jitter
+  velocities[i3 + 2] =  x * OMEGA;
+}
+
+const geometry = new THREE.BufferGeometry();
+geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute('velocity', new THREE.BufferAttribute(velocities, 3)); // custom attribute
+geometry.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+
+// Soft glowing round sprites
+const sprite = makeGlowSprite();
+const material = new THREE.PointsMaterial({
+  size: 1.6,
+  map: sprite,
+  vertexColors: true,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  transparent: true
+});
+
+const points = new THREE.Points(geometry, material);
+scene.add(points);
+
+/* ============================================================
+   6. MOUSE INTERACTION — raycast onto a plane through origin
+   ============================================================ */
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2(-10, -10);   // start off-screen
+const interactPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0); // z = 0 plane
+const mousePoint = new THREE.Vector3();           // world-space hit
+let mouseActive = false;
+
+window.addEventListener('pointermove', (e) => {
+  pointerNDC.x = (e.clientX / window.innerWidth) * 2 - 1;
+  pointerNDC.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  mouseActive = true;
+});
+window.addEventListener('pointerleave', () => { mouseActive = false; });
+
+function updateMouseWorldPoint() {
+  if (!mouseActive) return;
+  raycaster.setFromCamera(pointerNDC, camera);
+  raycaster.ray.intersectPlane(interactPlane, mousePoint);
+}
+
+/* ============================================================
+   5. PHYSICS — central 1/r² gravity + damping + mouse field
+   ============================================================ */
+const G = 900;            // gravitational strength constant
+const DAMPING = 0.995;    // per-frame velocity damping (prevents escape)
+const MOUSE_RADIUS = 45;  // influence radius of the mouse field
+const MOUSE_FORCE = 220;  // repulsion strength (negative → attraction)
+const MAX_SPEED = 12;     // hard speed clamp for stability
+
+function simulate() {
+  updateMouseWorldPoint();
+  const hasMouse = mouseActive && !Number.isNaN(mousePoint.x);
+
+  for (let i = 0; i < COUNT; i++) {
+    const i3 = i * 3;
+    let px = positions[i3], py = positions[i3 + 1], pz = positions[i3 + 2];
+
+    // --- Central gravity: F ∝ 1/r² toward origin ---
+    let dx = -px, dy = -py, dz = -pz;
+    const dSq = dx * dx + dy * dy + dz * dz + 100; // +softening avoids singularity
+    const invD = 1 / Math.sqrt(dSq);
+    const f = G / dSq;                 // magnitude ∝ 1/r²
+    const fx = dx * invD * f;          // normalized direction × magnitude
+    const fy = dy * invD * f;
+    const fz = dz * invD * f;
+
+    let vx = velocities[i3]     + fx;
+    let vy = velocities[i3 + 1] + fy;
+    let vz = velocities[i3 + 2] + fz;
+
+    // --- Mouse repulsion field (localized ripple) ---
+    if (hasMouse) {
+      const mx = px - mousePoint.x;
+      const my = py - mousePoint.y;
+      const mz = pz - mousePoint.z;
+      const mSq = mx * mx + my * my + mz * mz;
+      if (mSq < MOUSE_RADIUS * MOUSE_RADIUS) {
+        const mInvD = 1 / (Math.sqrt(mSq) + 0.001);
+        // Falloff smooths the boundary of the influence sphere
+        const fall = 1 - mSq / (MOUSE_RADIUS * MOUSE_RADIUS);
+        const mf = MOUSE_FORCE * fall * fall * mInvD;
+        vx += mx * mInvD * mf;
+        vy += my * mInvD * mf;
+        vz += mz * mInvD * mf;
+      }
+    }
+
+    // --- Damping + speed clamp ---
+    vx *= DAMPING; vy *= DAMPING; vz *= DAMPING;
+    const spSq = vx * vx + vy * vy + vz * vz;
+    if (spSq > MAX_SPEED * MAX_SPEED) {
+      const s = MAX_SPEED / Math.sqrt(spSq);
+      vx *= s; vy *= s; vz *= s;
+    }
+
+    // --- Integrate positions ---
+    px += vx; py += vy; pz += vz;
+    positions[i3] = px; positions[i3 + 1] = py; positions[i3 + 2] = pz;
+    velocities[i3] = vx; velocities[i3 + 1] = vy; velocities[i3 + 2] = vz;
+  }
+
+  // Single upload per frame — GPU sees the whole updated buffer
+  geometry.attributes.position.needsUpdate = true;
+}
+
+/* ============================================================
+   RENDER LOOP
+   ============================================================ */
+renderer.setAnimationLoop(() => {
+  simulate();
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+/* ============================================================
+   HELPERS
+   ============================================================ */
+// Radial-gradient canvas texture for soft round glow sprites
+function makeGlowSprite() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.35, 'rgba(255,255,255,0.55)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+</script>
+</body>
+</html>

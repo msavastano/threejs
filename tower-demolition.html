@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tower Demolition — Physics Playground</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #0b0e12;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+    color: #e8e4d8;
+  }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; top: 16px; left: 16px; z-index: 20;
+    background: rgba(13, 17, 23, 0.9);
+    border: 1px solid rgba(232, 228, 216, 0.14);
+    border-left: 3px solid #e8b64c;
+    border-radius: 8px;
+    padding: 12px 16px; min-width: 232px;
+    font-size: 12px; line-height: 1.8;
+    pointer-events: none; user-select: none;
+  }
+  #hud h1 { font-size: 13px; font-weight: 600; letter-spacing: 0.12em; }
+  #hud .sub { color: rgba(232, 228, 216, 0.55); font-size: 11px; margin-bottom: 2px; }
+  #hud .row { display: flex; justify-content: space-between; gap: 16px; font-variant-numeric: tabular-nums; }
+  #hud .row span:last-child { color: #fff; }
+  #banner {
+    position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 20;
+    background: rgba(13, 17, 23, 0.85);
+    border: 1px solid rgba(232, 228, 216, 0.12);
+    border-radius: 999px; padding: 7px 20px;
+    font-size: 12px; color: rgba(232, 228, 216, 0.8);
+    pointer-events: none; user-select: none; white-space: nowrap;
+  }
+  #banner b { color: #e8b64c; }
+  .lil-gui { --width: 280px; z-index: 30 !important; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+    "lil-gui": "https://unpkg.com/lil-gui@0.19.2/dist/lil-gui.esm.js",
+    "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud">
+  <h1>TOWER DEMOLITION</h1>
+  <div class="sub">rigid-body playground &middot; ~1,000 blocks</div>
+  <div class="row"><span>fps</span><span id="stat-fps">—</span></div>
+  <div class="row"><span>objects</span><span id="stat-objects">—</span></div>
+  <div class="row"><span>awake</span><span id="stat-awake">—</span></div>
+  <div class="row"><span>state</span><span id="stat-state">standing</span></div>
+</div>
+<div id="banner"><b>Click</b> the tower to detonate &nbsp;&middot;&nbsp; drag to orbit &middot; wheel to zoom</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GUI } from 'lil-gui';
+import * as CANNON from 'cannon-es';
+
+/* ============================== config ============================== */
+const params = {
+  explosionStrength: 28,
+  explosionRadius: 9,
+  gravity: -9.82,
+  pause: false,
+  reset: () => resetTower(),
+};
+const BLOCK = { x: 1.0, y: 0.5, z: 1.0, gap: 0.02 };
+const TOWER = { nx: 7, nz: 7, layers: 20 };   // 7*7*20 = 980 blocks (~1,000)
+const ARENA = 20;                              // half-size; walls at ±ARENA
+
+/* ====================== renderer / scene / camera =================== */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0e12);
+scene.fog = new THREE.Fog(0x0b0e12, 70, 220);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 600);
+camera.position.set(20, 15, 27);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 4.2, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.maxDistance = 120;
+controls.maxPolarAngle = Math.PI * 0.495;
+
+scene.add(new THREE.HemisphereLight(0xcfd8e6, 0x20180f, 0.75));
+const sun = new THREE.DirectionalLight(0xfff0d8, 2.2);
+sun.position.set(28, 42, 20);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -30; sun.shadow.camera.right = 30;
+sun.shadow.camera.top = 35; sun.shadow.camera.bottom = -10;
+sun.shadow.camera.near = 5; sun.shadow.camera.far = 120;
+sun.shadow.bias = -0.0005;
+scene.add(sun);
+const rim = new THREE.DirectionalLight(0x6a86b8, 0.5);
+rim.position.set(-24, 12, -26);
+scene.add(rim);
+
+/* ============================== physics ============================= */
+const world = new CANNON.World({ gravity: new CANNON.Vec3(0, params.gravity, 0) });
+world.broadphase = new CANNON.SAPBroadphase(world);
+world.allowSleep = true;                 // settled blocks stop costing solver time
+world.solver.iterations = 8;
+world.defaultContactMaterial.friction = 0.45;
+world.defaultContactMaterial.restitution = 0.05;
+
+const blockPhysMat = new CANNON.Material('block');
+world.addContactMaterial(new CANNON.ContactMaterial(blockPhysMat, blockPhysMat, {
+  friction: 0.5, restitution: 0.02, contactEquationStiffness: 1e7,
+}));
+
+/* ==================== ground plane + surrounding walls ============== */
+function addStaticBox(hx, hy, hz, x, y, z, mesh) {
+  const body = new CANNON.Body({
+    type: CANNON.Body.STATIC,
+    shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)),
+    position: new CANNON.Vec3(x, y, z),
+  });
+  world.addBody(body);
+  if (mesh) {
+    mesh.position.set(x, y, z);
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+  }
+  return body;
+}
+
+const groundMesh = new THREE.Mesh(
+  new THREE.BoxGeometry(ARENA * 2 + 8, 1, ARENA * 2 + 8),
+  new THREE.MeshStandardMaterial({ color: 0x232a33, roughness: 0.95, metalness: 0.05 })
+);
+// Physics slab is much thicker than the visual mesh so fast debris can never
+// tunnel through the floor in a single step.
+addStaticBox(ARENA + 4, 2.5, ARENA + 4, 0, -2.5, 0, groundMesh);
+groundMesh.position.y = -0.5; // visual slab keeps its top surface at y = 0
+
+const grid = new THREE.GridHelper(ARENA * 2 + 8, 28, 0x3a4552, 0x1b2129);
+grid.position.y = 0.01;
+scene.add(grid);
+
+const wallMat = new THREE.MeshStandardMaterial({
+  color: 0xd99a3d, roughness: 0.6, metalness: 0.2,
+  transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false,
+});
+const wallGeoX = new THREE.BoxGeometry(0.6, 7, ARENA * 2 + 1.2);
+const wallGeoZ = new THREE.BoxGeometry(ARENA * 2 + 1.2, 7, 0.6);
+addStaticBox(0.3, 3.5, ARENA + 0.6, -ARENA - 0.3, 3.5, 0, new THREE.Mesh(wallGeoX, wallMat));
+addStaticBox(0.3, 3.5, ARENA + 0.6, ARENA + 0.3, 3.5, 0, new THREE.Mesh(wallGeoX, wallMat));
+addStaticBox(ARENA + 0.6, 3.5, 0.3, 0, 3.5, -ARENA - 0.3, new THREE.Mesh(wallGeoZ, wallMat));
+addStaticBox(ARENA + 0.6, 3.5, 0.3, 0, 3.5, ARENA + 0.3, new THREE.Mesh(wallGeoZ, wallMat));
+
+/* ==================== procedural tower: 1 instanced mesh ============ */
+const COUNT = TOWER.nx * TOWER.nz * TOWER.layers;
+const blockGeo = new THREE.BoxGeometry(BLOCK.x, BLOCK.y, BLOCK.z);
+const blockMat = new THREE.MeshStandardMaterial({ roughness: 0.62, metalness: 0.08 });
+const tower = new THREE.InstancedMesh(blockGeo, blockMat, COUNT);
+tower.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+tower.castShadow = tower.receiveShadow = true;
+tower.frustumCulled = false;
+scene.add(tower);
+
+const bodies = new Array(COUNT);
+const home = new Float32Array(COUNT * 7); // x,y,z + quaternion xyzw per block
+{
+  const shape = new CANNON.Box(new CANNON.Vec3(BLOCK.x / 2, BLOCK.y / 2, BLOCK.z / 2));
+  const tint = new THREE.Color();
+  let i = 0;
+  for (let layer = 0; layer < TOWER.layers; layer++) {
+    for (let ix = 0; ix < TOWER.nx; ix++) {
+      for (let iz = 0; iz < TOWER.nz; iz++) {
+        const x = (ix - (TOWER.nx - 1) / 2) * (BLOCK.x + BLOCK.gap);
+        const z = (iz - (TOWER.nz - 1) / 2) * (BLOCK.z + BLOCK.gap);
+        const y = BLOCK.y / 2 + layer * (BLOCK.y + BLOCK.gap);
+        const body = new CANNON.Body({
+          mass: 1, material: blockPhysMat, shape,
+          position: new CANNON.Vec3(x, y, z),
+          allowSleep: true, sleepSpeedLimit: 0.18, sleepTimeLimit: 0.9,
+        });
+        world.addBody(body);
+        bodies[i] = body;
+        home.set([x, y, z, 0, 0, 0, 1], i * 7);
+        // Warm sandstone gradient rising with height + slight jitter
+        const f = layer / (TOWER.layers - 1);
+        tint.setHSL(0.09 - f * 0.035, 0.52, 0.38 + f * 0.22 + (Math.random() - 0.5) * 0.04);
+        tower.setColorAt(i, tint);
+        i++;
+      }
+    }
+  }
+  tower.instanceColor.needsUpdate = true;
+}
+// Park the whole tower asleep: a tall block stack is only marginally stable
+// under sequential-impulse solving, so sleep-until-disturbed keeps it standing
+// rock-solid until the first blast (falling rubble wakes the rest on contact).
+for (const b of bodies) b.sleep();
+document.getElementById('stat-objects').textContent = `${COUNT} blocks + 5 statics`;
+
+/* ==================== click-to-detonate (with orbit-friendly click detection) === */
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const epicenter = new THREE.Vector3();
+const _imp = new CANNON.Vec3();
+const statState = document.getElementById('stat-state');
+
+// Shockwave FX pool: expanding ring + flash light, no per-blast allocation
+const shocks = [];
+for (let s = 0; s < 4; s++) {
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.9, 1.0, 48),
+    new THREE.MeshBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false })
+  );
+  ring.visible = false;
+  scene.add(ring);
+  const flash = new THREE.PointLight(0xffb054, 0, 30, 2);
+  scene.add(flash);
+  shocks.push({ ring, flash, t: 1e9 });
+}
+let shockCursor = 0;
+function spawnShockwave(p) {
+  const s = shocks[shockCursor++ % shocks.length];
+  s.t = 0;
+  s.ring.position.copy(p);
+  s.ring.visible = true;
+  s.flash.position.copy(p).y += 1;
+}
+
+function detonate(point) {
+  const R = params.explosionRadius;
+  const S = params.explosionStrength;
+  epicenter.copy(point);
+  let hit = 0;
+  for (let i = 0; i < COUNT; i++) {
+    const b = bodies[i];
+    const dx = b.position.x - point.x;
+    const dy = b.position.y - point.y;
+    const dz = b.position.z - point.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    // Wake a generous zone so upper floors join the collapse instead of
+    // hovering asleep; only the inner radius takes the impulse itself.
+    if (dist > R * 2.5) continue;
+    b.wakeUp();
+    if (dist < 1e-4 || dist > R) continue;
+    const fall = 1 - dist / R;
+    const inv = 1 / dist;
+    // Radial push scaled by falloff + mass, with an upward bias for drama.
+    // Hard cap on per-block delta-v: in a dense stack, a single fast block
+    // buries itself in its neighbors and the solver answers with teleporting
+    // correction velocities. The tower's own height supplies the spectacle.
+    _imp.set(
+      dx * inv * S * fall * b.mass,
+      (dy * inv * S * 0.6 + S * 0.55) * fall * b.mass,
+      dz * inv * S * fall * b.mass
+    );
+    const impLen = _imp.length();
+    const impCap = 12 * b.mass;
+    if (impLen > impCap) _imp.scale(impCap / impLen, _imp);
+    b.applyImpulse(_imp);
+    hit++;
+  }
+  if (hit > 0) {
+    spawnShockwave(point);
+    statState.textContent = 'demolished';
+  }
+}
+
+let downX = 0, downY = 0, downT = 0;
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  downX = e.clientX; downY = e.clientY; downT = performance.now();
+});
+renderer.domElement.addEventListener('pointerup', (e) => {
+  // Only detonate on a true click — orbiting drags must not trigger blasts
+  if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6 || performance.now() - downT > 450) return;
+  ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObjects([tower, groundMesh], false);
+  if (hits.length) detonate(hits[0].point);
+});
+
+/* ============================== reset =============================== */
+function resetTower() {
+  for (let i = 0; i < COUNT; i++) {
+    const b = bodies[i];
+    const o = i * 7;
+    b.position.set(home[o], home[o + 1], home[o + 2]);
+    b.quaternion.set(home[o + 3], home[o + 4], home[o + 5], home[o + 6]);
+    b.velocity.setZero();
+    b.angularVelocity.setZero();
+    b.sleep();
+  }
+  statState.textContent = 'standing';
+}
+
+/* Blast debris can momentarily reach unphysical speeds (deep-penetration
+   pops in a tall stack); capping keeps motion dramatic but prevents
+   tunneling and blocks sailing clean over the walls. */
+const MAX_SPEED = 30;
+const MAX_SPIN = 40;
+function clampSpeeds() {
+  for (let i = 0; i < COUNT; i++) {
+    const b = bodies[i];
+    const s2 = b.velocity.lengthSquared();
+    if (s2 > MAX_SPEED * MAX_SPEED) b.velocity.scale(MAX_SPEED / Math.sqrt(s2), b.velocity);
+    const w2 = b.angularVelocity.lengthSquared();
+    if (w2 > MAX_SPIN * MAX_SPIN) b.angularVelocity.scale(MAX_SPIN / Math.sqrt(w2), b.angularVelocity);
+  }
+}
+
+/* ==================== per-frame instance sync ======================= */
+const _m = new THREE.Matrix4();
+const _p = new THREE.Vector3();
+const _q = new THREE.Quaternion();
+const _s = new THREE.Vector3(1, 1, 1);
+function syncInstances() {
+  for (let i = 0; i < COUNT; i++) {
+    const b = bodies[i];
+    _p.set(b.position.x, b.position.y, b.position.z);
+    _q.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+    _m.compose(_p, _q, _s);
+    tower.setMatrixAt(i, _m);
+  }
+  tower.instanceMatrix.needsUpdate = true;
+}
+syncInstances();
+
+/* ============================== controls ============================ */
+const gui = new GUI({ title: 'Demolition Controls' });
+gui.add(params, 'explosionStrength', 5, 80, 1).name('Explosion strength');
+gui.add(params, 'explosionRadius', 3, 16, 0.5).name('Blast radius');
+gui.add(params, 'gravity', -25, -1, 0.01).name('Gravity').onChange((v) => {
+  world.gravity.set(0, v, 0);
+  for (const b of bodies) b.wakeUp(); // sleeping bodies must feel the change
+});
+gui.add(params, 'pause').name('Pause physics');
+gui.add(params, 'reset').name('Reset tower');
+
+/* ============================== main loop =========================== */
+const clock = new THREE.Clock();
+const statFps = document.getElementById('stat-fps');
+const statAwake = document.getElementById('stat-awake');
+let fpsAcc = 0, fpsN = 0;
+
+function updateShocks(dt) {
+  for (const s of shocks) {
+    if (s.t > 0.6) {
+      s.ring.visible = false;
+      s.flash.intensity = 0;
+      continue;
+    }
+    s.t += dt;
+    const k = Math.min(s.t / 0.6, 1);
+    const r = 1 + k * params.explosionRadius * 1.4;
+    s.ring.scale.set(r, r, r);
+    s.ring.lookAt(camera.position);
+    s.ring.material.opacity = 0.85 * (1 - k);
+    s.flash.intensity = 260 * (1 - k);
+  }
+}
+
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (!params.pause) {
+    world.step(1 / 60, dt, 3);   // fixed-step physics, capped catch-up
+    clampSpeeds();
+    syncInstances();
+  }
+  updateShocks(dt);
+  controls.update();
+  renderer.render(scene, camera);
+
+  fpsAcc += dt; fpsN++;
+  if (fpsAcc >= 0.5) {
+    statFps.textContent = Math.round(fpsN / fpsAcc);
+    let awake = 0;
+    for (const b of bodies) if (b.sleepState !== CANNON.Body.SLEEPING) awake++;
+    statAwake.textContent = awake;
+    fpsAcc = 0; fpsN = 0;
+  }
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Möbius Strip &mdash; Procedural BufferGeometry</title>
+<style>
+  :root {
+    --accent: #ffd23f;
+    --accent2: #ff9e6d;
+    --bg: #0f1117;
+    --panel: rgba(15, 17, 23, 0.72);
+    --border: rgba(255, 210, 63, 0.18);
+    --text: #e8e8f0;
+    --muted: #a0a0b0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); font-family: 'Segoe UI', system-ui, sans-serif; color: var(--text); }
+  #app { position: fixed; inset: 0; z-index: 1; }
+  canvas { display: block; }
+
+  #vignette {
+    position: fixed; inset: 0; pointer-events: none; z-index: 10;
+    background: radial-gradient(ellipse at center, rgba(15,17,23,0) 40%, rgba(15,17,23,0.45) 75%, rgba(15,17,23,0.75) 100%);
+  }
+
+  .panel {
+    background: var(--panel);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 18px;
+    pointer-events: auto;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.35), inset 0 0 40px rgba(255,210,63,0.04);
+  }
+
+  #title-panel { position: fixed; top: 20px; left: 20px; z-index: 20; max-width: 340px; }
+  #title-panel h1 { font-size: 20px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
+  #title-panel p { font-size: 13px; line-height: 1.6; color: var(--muted); }
+  #title-panel code { color: var(--accent2); font-weight: 600; }
+
+  #controls { position: fixed; bottom: 20px; left: 20px; z-index: 20; width: 310px; }
+  #controls h2 { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  .ctrl-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .ctrl-row label { flex: 0 0 100px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .ctrl-row input[type=range] { flex: 1; appearance: none; height: 3px; background: rgba(255,210,63,0.25); border-radius: 2px; outline: none; }
+  .ctrl-row input[type=range]::-webkit-slider-thumb { appearance: none; width: 11px; height: 11px; border-radius: 50%; background: var(--accent); border: 1px solid var(--accent2); cursor: pointer; }
+  .ctrl-row span { flex: 0 0 50px; font-size: 11px; color: var(--text); font-family: monospace; text-align: right; }
+
+  #hint { position: fixed; bottom: 20px; right: 20px; z-index: 20; font-size: 12px; color: var(--muted); pointer-events: none; }
+
+  @media (max-width: 720px) { #title-panel { max-width: calc(100vw - 40px); } #controls { width: auto; right: 20px; left: auto; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="vignette"></div>
+
+<div id="title-panel" class="panel">
+  <h1>Möbius Strip</h1>
+  <p>A one-sided surface with a single edge, generated procedurally via <code>THREE.BufferGeometry</code>. Vertices are placed by the parametric equations and triangles are indexed manually.</p>
+</div>
+
+<div id="controls" class="panel">
+  <h2>Parameters</h2>
+  <div class="ctrl-row">
+    <label>Twists</label>
+    <input type="range" id="twists" min="0.5" max="5" step="0.5" value="0.5" />
+    <span id="twists-val">0.5</span>
+  </div>
+  <div class="ctrl-row">
+    <label>Width</label>
+    <input type="range" id="width" min="0.2" max="2.2" step="0.1" value="0.8" />
+    <span id="width-val">0.8</span>
+  </div>
+  <div class="ctrl-row">
+    <label>Segments U</label>
+    <input type="range" id="seg-u" min="12" max="120" step="4" value="64" />
+    <span id="seg-u-val">64</span>
+  </div>
+  <div class="ctrl-row">
+    <label>Segments V</label>
+    <input type="range" id="seg-v" min="4" max="40" step="2" value="12" />
+    <span id="seg-v-val">12</span>
+  </div>
+  <div class="ctrl-row">
+    <label>Wireframe</label>
+    <input type="range" id="wireframe" min="0" max="100" step="1" value="0" />
+    <span id="wireframe-val">0%</span>
+  </div>
+</div>
+
+<div id="hint">Drag to orbit &middot; Scroll to zoom &middot; Right-drag to pan</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f1117);
+scene.fog = new THREE.Fog(0x0f1117, 40, 120);
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 400);
+camera.position.set(0, 0, 4.5);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.minDistance = 2;
+controls.maxDistance = 12;
+
+// Lighting
+const hemi = new THREE.HemisphereLight(0xffffff, 0x3a3a4a, 0.8);
+scene.add(hemi);
+
+const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+sun.position.set(5, 8, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.left = -6; sun.shadow.camera.right = 6;
+sun.shadow.camera.top = 6; sun.shadow.camera.bottom = -6;
+sun.shadow.camera.far = 20;
+scene.add(sun);
+
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(60, 48),
+  new THREE.MeshStandardMaterial({ color: 0x0c0e14, roughness: 0.95, metalness: 0 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Ambient colored glow
+const glow = new THREE.SpotLight(0xffd23f, 0.6, 0, Math.PI / 6, 0.3);
+glow.position.set(-3, 5, 5);
+scene.add(glow);
+
+/* ------------------------------------------------------------------ */
+/*  Möbius strip — procedural BufferGeometry from scratch              */
+/* ------------------------------------------------------------------ */
+/*
+   Parametric equations for a generalized Möbius strip:
+
+       x(u, v) = (R + v·cos(n·u/2)) · cos(u)
+       y(u, v) = (R + v·cos(n·u/2)) · sin(u)
+       z(u, v) = v · sin(n·u/2)
+
+   where:
+     u ∈ [0, 2π]      — parameter around the loop (longitude)
+     v ∈ [-w, w]      — parameter across the width (local "latitude")
+     R                — major radius (center-of-strip radius)
+     w                — half-width of the strip
+     n                — number of half-twists (0.5 gives the classic Möbius)
+
+   u controls how far around the circle we are.  The factor n·u/2 in the
+   trigonometric terms creates the twist: after one full revolution (u: 0→2π)
+   the local frame has rotated by n·π, which for n=0.5 is π (180°) — exactly
+   one half-twist, giving the surface its signature single-sided topology.
+*/
+function createMobiusStrip(R, w, n, uSegments, vSegments) {
+  const geometry = new THREE.BufferGeometry();
+
+  const uCount = uSegments + 1;   // vertices along the loop
+  const vCount = vSegments + 1;   // vertices across the width
+  const vertexCount = uCount * vCount;
+
+  // --- Attribute arrays ------------------------------------------------
+  const positions = new Float32Array(vertexCount * 3);
+  const uvs = new Float32Array(vertexCount * 2);
+  const indices = new Uint32Array(uSegments * vSegments * 6);
+
+  const du = (Math.PI * 2) / uSegments;   // step in u
+  const dv = (w * 2) / vSegments;          // step in v
+
+  // --- Populate position + uv ------------------------------------------
+  let vi = 0;           // vertex index (flat)
+  for (let ui = 0; ui < uCount; ui++) {
+    const u = ui * du;
+    const cosU = Math.cos(u);
+    const sinU = Math.sin(u);
+    const twist = (n * u) / 2;            // half-twist angle
+    const ct = Math.cos(twist);
+    const st = Math.sin(twist);
+
+    for (let vj = 0; vj < vCount; vj++) {
+      const v = -w + vj * dv;             // v ∈ [-w, w]
+
+      // Parametric surface evaluation
+      const x = (R + v * ct) * cosU;
+      const y = (R + v * ct) * sinU;
+      const z = v * st;
+
+      positions[vi * 3 + 0] = x;
+      positions[vi * 3 + 1] = y;
+      positions[vi * 3 + 2] = z;
+
+      // UV: u wraps [0,1], v spans [-w,w] → [0,1]
+      uvs[vi * 2 + 0] = ui / uSegments;
+      uvs[vi * 2 + 1] = vj / vSegments;
+
+      vi++;
+    }
+  }
+
+  // --- Build index buffer (two triangles per quad) ---------------------
+  let ii = 0;
+  for (let ui = 0; ui < uSegments; ui++) {
+    for (let vj = 0; vj < vSegments; vj++) {
+      const a = ui * vCount + vj;
+      const b = (ui + 1) * vCount + vj;
+      const c = (ui + 1) * vCount + (vj + 1);
+      const d = ui * vCount + (vj + 1);
+
+      // Triangle 1: a, b, c
+      indices[ii++] = a; indices[ii++] = b; indices[ii++] = c;
+      // Triangle 2: a, c, d
+      indices[ii++] = a; indices[ii++] = c; indices[ii++] = d;
+    }
+  }
+
+  // --- Attach attributes ------------------------------------------------
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+
+  // Compute vertex normals from the indexed geometry
+  geometry.computeVertexNormals();
+
+  return geometry;
+}
+
+// --- Material + mesh --------------------------------------------------
+const mat = new THREE.MeshStandardMaterial({
+  color: 0xe0aa70,
+  metalness: 0.1,
+  roughness: 0.45,
+  side: THREE.DoubleSide,
+  emissive: 0x1a1200,
+  emissiveIntensity: 0.15,
+  toneMapped: true,
+});
+
+const params = {
+  twists: 0.5,
+  width: 0.8,
+  segU: 64,
+  segV: 12,
+  wireframe: 0,
+};
+
+let mesh;
+function build() {
+  if (mesh) {
+    mesh.geometry.dispose();
+    scene.remove(mesh);
+  }
+  const geo = createMobiusStrip(2.2, params.width, params.twists, params.segU, params.segV);
+  mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = mesh.receiveShadow = true;
+  scene.add(mesh);
+
+  // Wireframe overlay
+  if (params.wireframe > 0) {
+    const wire = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geo),
+      new THREE.LineBasicMaterial({ color: 0x000000, opacity: params.wireframe / 100, transparent: true })
+    );
+    mesh.add(wire);
+  }
+}
+build();
+
+// --- UI ----------------------------------------------------------------
+function syncLabel(valId, val) {
+  document.getElementById(valId).textContent = val;
+}
+document.getElementById('twists').addEventListener('input', e => {
+  params.twists = parseFloat(e.target.value);
+  syncLabel('twists-val', params.twists);
+  build();
+});
+document.getElementById('width').addEventListener('input', e => {
+  params.width = parseFloat(e.target.value);
+  syncLabel('width-val', params.width);
+  build();
+});
+document.getElementById('seg-u').addEventListener('input', e => {
+  params.segU = parseInt(e.target.value);
+  syncLabel('seg-u-val', params.segU);
+  build();
+});
+document.getElementById('seg-v').addEventListener('input', e => {
+  params.segV = parseInt(e.target.value);
+  syncLabel('seg-v-val', params.segV);
+  build();
+});
+document.getElementById('wireframe').addEventListener('input', e => {
+  params.wireframe = parseInt(e.target.value);
+  syncLabel('wireframe', 'wireframe-val', params.wireframe + '%');
+  build();
+});
+
+// --- Animation ---------------------------------------------------------
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  if (mesh) {
+    mesh.rotation.y = t * 0.4;
+    mesh.rotation.x = t * 0.2;
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

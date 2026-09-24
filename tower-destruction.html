@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tower Destruction — Three.js Physics Playground</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0f17; font-family: 'Segoe UI', system-ui, sans-serif; }
+  #app { width: 100%; height: 100%; }
+  canvas { display: block; }
+
+  .panel {
+    position: absolute;
+    background: rgba(13, 18, 30, 0.82);
+    border: 1px solid rgba(120, 160, 255, 0.18);
+    border-radius: 10px;
+    color: #cdd8ee;
+    backdrop-filter: blur(8px);
+    user-select: none;
+  }
+
+  #hud {
+    top: 14px; left: 14px;
+    padding: 12px 16px;
+    font-size: 13px;
+    line-height: 1.7;
+    min-width: 190px;
+  }
+  #hud .stat { display: flex; justify-content: space-between; gap: 18px; }
+  #hud .val { color: #7fd4ff; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #hud .good { color: #7dffa8; }
+  #hud .warn { color: #ffd47f; }
+  #hud .bad  { color: #ff7f7f; }
+
+  #controls {
+    top: 14px; right: 14px;
+    padding: 16px 18px;
+    width: 260px;
+    font-size: 13px;
+  }
+  #controls h1 {
+    font-size: 14px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9db8ff;
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+  .ctl { margin-bottom: 14px; }
+  .ctl label {
+    display: flex; justify-content: space-between;
+    margin-bottom: 5px; color: #aebbd4;
+  }
+  .ctl label .num { color: #7fd4ff; font-variant-numeric: tabular-nums; }
+  input[type=range] {
+    width: 100%; height: 4px; appearance: none;
+    background: rgba(120, 160, 255, 0.25); border-radius: 2px; outline: none; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    appearance: none; width: 14px; height: 14px; border-radius: 50%;
+    background: #7fd4ff; border: 2px solid #0d1220; cursor: grab;
+    box-shadow: 0 0 8px rgba(127, 212, 255, 0.6);
+  }
+  .btn-row { display: flex; gap: 8px; margin-top: 4px; }
+  button {
+    flex: 1; padding: 9px 0;
+    background: rgba(127, 212, 255, 0.12);
+    border: 1px solid rgba(127, 212, 255, 0.35);
+    border-radius: 6px; color: #cfe9ff;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: background 0.15s, transform 0.05s;
+  }
+  button:hover { background: rgba(127, 212, 255, 0.25); }
+  button:active { transform: scale(0.97); }
+  button.danger {
+    background: rgba(255, 120, 90, 0.12);
+    border-color: rgba(255, 120, 90, 0.4);
+    color: #ffd9cc;
+  }
+  button.danger:hover { background: rgba(255, 120, 90, 0.25); }
+
+  #hint {
+    bottom: 16px; left: 50%; transform: translateX(-50%);
+    padding: 9px 20px; font-size: 13px; color: #8fa3c8;
+    white-space: nowrap;
+  }
+  #hint b { color: #cdd8ee; }
+
+  #loading {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 14px;
+    background: #0b0f17; color: #9db8ff;
+    font-size: 15px; letter-spacing: 0.1em; z-index: 10;
+    transition: opacity 0.4s;
+  }
+  .spinner {
+    width: 34px; height: 34px;
+    border: 3px solid rgba(127, 212, 255, 0.2);
+    border-top-color: #7fd4ff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud" class="panel">
+  <div class="stat"><span>FPS</span><span class="val" id="fps">--</span></div>
+  <div class="stat"><span>Blocks</span><span class="val" id="blocks">0</span></div>
+  <div class="stat"><span>Rigid bodies</span><span class="val" id="bodies">0</span></div>
+  <div class="stat"><span>Awake</span><span class="val" id="awake">0</span></div>
+  <div class="stat"><span>Draw calls</span><span class="val" id="calls">0</span></div>
+</div>
+
+<div id="controls" class="panel">
+  <h1>Demolition Control</h1>
+  <div class="ctl">
+    <label>Explosion strength <span class="num" id="strengthVal">45</span></label>
+    <input type="range" id="strength" min="5" max="120" step="1" value="45">
+  </div>
+  <div class="ctl">
+    <label>Explosion radius <span class="num" id="radiusVal">9</span></label>
+    <input type="range" id="radius" min="3" max="20" step="0.5" value="9">
+  </div>
+  <div class="ctl">
+    <label>Gravity <span class="num" id="gravityVal">-22</span></label>
+    <input type="range" id="gravity" min="-40" max="0" step="0.5" value="-22">
+  </div>
+  <div class="btn-row">
+    <button id="demolish" class="danger">Detonate Base</button>
+    <button id="reset">Reset Tower</button>
+  </div>
+</div>
+
+<div id="hint" class="panel"><b>Click</b> the tower to explode &nbsp;·&nbsp; <b>Drag</b> to orbit &nbsp;·&nbsp; <b>Scroll</b> to zoom</div>
+
+<div id="loading"><div class="spinner"></div>LOADING PHYSICS ENGINE…</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.12.0/rapier.es.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import RAPIER from '@dimforge/rapier3d-compat';
+
+// ---------------------------------------------------------------- config
+const CFG = {
+  layers: 40,
+  segments: 24,          // 40 * 24 = 960 blocks (~1000)
+  towerRadius: 6,
+  blockH: 0.5,
+  blockDepth: 2.2,       // radial thickness
+  arenaHalf: 29,
+  wallH: 8,
+};
+const BLOCK_W = (2 * Math.PI * CFG.towerRadius) / CFG.segments; // tangential width
+const BLOCK_COUNT = CFG.layers * CFG.segments;
+
+const params = { strength: 45, radius: 9, gravity: -22 };
+
+// ---------------------------------------------------------------- renderer / scene
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b101c);
+scene.fog = new THREE.Fog(0x0b101c, 70, 190);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 500);
+camera.position.set(30, 20, 32);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 9, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.maxPolarAngle = Math.PI * 0.495;
+controls.minDistance = 8;
+controls.maxDistance = 120;
+
+// ---------------------------------------------------------------- lights
+scene.add(new THREE.HemisphereLight(0x6a86c8, 0x1a1410, 0.85));
+
+const sun = new THREE.DirectionalLight(0xfff2dd, 2.4);
+sun.position.set(28, 42, 18);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -35;
+sun.shadow.camera.right = 35;
+sun.shadow.camera.top = 40;
+sun.shadow.camera.bottom = -10;
+sun.shadow.camera.far = 130;
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.02;
+scene.add(sun);
+
+const rim = new THREE.DirectionalLight(0x5a7dff, 0.7);
+rim.position.set(-25, 18, -25);
+scene.add(rim);
+
+// ---------------------------------------------------------------- arena (ground + walls)
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x232b3d, roughness: 0.92, metalness: 0.05 });
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(CFG.arenaHalf * 2 + 40, CFG.arenaHalf * 2 + 40), groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const grid = new THREE.GridHelper(CFG.arenaHalf * 2, 29, 0x3a4a70, 0x2a3550);
+grid.position.y = 0.015;
+grid.material.transparent = true;
+grid.material.opacity = 0.45;
+scene.add(grid);
+
+const wallMat = new THREE.MeshStandardMaterial({
+  color: 0x6f96ff, roughness: 0.15, metalness: 0.1,
+  transparent: true, opacity: 0.07, side: THREE.DoubleSide, depthWrite: false,
+});
+const wallEdgeMat = new THREE.LineBasicMaterial({ color: 0x4a6db8, transparent: true, opacity: 0.5 });
+const wallGeo = new THREE.BoxGeometry(CFG.arenaHalf * 2 + 2, CFG.wallH, 1);
+const wallEdgeGeo = new THREE.EdgesGeometry(wallGeo);
+for (let i = 0; i < 4; i++) {
+  const wall = new THREE.Mesh(wallGeo, wallMat);
+  const a = (i * Math.PI) / 2;
+  wall.position.set(Math.sin(a) * (CFG.arenaHalf + 0.5), CFG.wallH / 2, Math.cos(a) * (CFG.arenaHalf + 0.5));
+  wall.rotation.y = a;
+  scene.add(wall);
+  const edge = new THREE.LineSegments(wallEdgeGeo, wallEdgeMat);
+  edge.position.copy(wall.position);
+  edge.rotation.copy(wall.rotation);
+  scene.add(edge);
+}
+
+// ---------------------------------------------------------------- tower (instanced)
+const blockGeo = new THREE.BoxGeometry(BLOCK_W * 0.96, CFG.blockH * 0.96, CFG.blockDepth * 0.97);
+// bevel-ish look via slight vertex normal smoothing is unnecessary; keep flat shading crisp
+const blockMat = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.15 });
+const instanced = new THREE.InstancedMesh(blockGeo, blockMat, BLOCK_COUNT);
+instanced.castShadow = true;
+instanced.receiveShadow = true;
+instanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+instanced.frustumCulled = false;
+scene.add(instanced);
+
+// per-block rest transforms (local tower pose)
+const blockPos = new Float32Array(BLOCK_COUNT * 3);
+const blockQuat = new Float32Array(BLOCK_COUNT * 4);
+
+const dummy = new THREE.Object3D();
+const color = new THREE.Color();
+
+function generateTower() {
+  let i = 0;
+  for (let layer = 0; layer < CFG.layers; layer++) {
+    const y = CFG.blockH * 0.5 + layer * CFG.blockH;
+    const offset = (layer % 2) * (Math.PI / CFG.segments); // running-bond rotation
+    const t = layer / (CFG.layers - 1);
+    for (let s = 0; s < CFG.segments; s++, i++) {
+      const ang = offset + (s / CFG.segments) * Math.PI * 2 + (Math.random() - 0.5) * 0.012;
+      const r = CFG.towerRadius + (Math.random() - 0.5) * 0.04;
+      const x = Math.cos(ang) * r;
+      const z = Math.sin(ang) * r;
+
+      dummy.position.set(x, y, z);
+      dummy.rotation.set(0, -ang + (Math.random() - 0.5) * 0.015, 0);
+      dummy.scale.setScalar(1);
+      dummy.updateMatrix();
+      instanced.setMatrixAt(i, dummy.matrix);
+
+      blockPos[i * 3] = x; blockPos[i * 3 + 1] = y; blockPos[i * 3 + 2] = z;
+      dummy.quaternion.toArray(blockQuat, i * 4);
+
+      // warm sandstone gradient up the tower, slight per-block variance
+      const hue = 0.075 + t * 0.045 + (Math.random() - 0.5) * 0.012;
+      const light = 0.42 + (Math.random() - 0.5) * 0.1 + t * 0.12;
+      color.setHSL(hue, 0.55, light);
+      instanced.setColorAt(i, color);
+    }
+  }
+  instanced.instanceMatrix.needsUpdate = true;
+  instanced.instanceColor.needsUpdate = true;
+}
+generateTower();
+
+// ---------------------------------------------------------------- physics
+await RAPIER.init();
+document.getElementById('loading').style.opacity = '0';
+setTimeout(() => document.getElementById('loading').remove(), 450);
+
+const world = new RAPIER.World({ x: 0, y: params.gravity, z: 0 });
+world.timestep = 1 / 60;
+
+// static arena colliders
+world.createCollider(RAPIER.ColliderDesc.cuboid(CFG.arenaHalf + 20, 0.5, CFG.arenaHalf + 20).setTranslation(0, -0.5, 0).setFriction(0.9));
+for (let i = 0; i < 4; i++) {
+  const a = (i * Math.PI) / 2;
+  const d = RAPIER.ColliderDesc.cuboid(CFG.arenaHalf + 1, CFG.wallH / 2, 0.5)
+    .setTranslation(Math.sin(a) * (CFG.arenaHalf + 0.5), CFG.wallH / 2, Math.cos(a) * (CFG.arenaHalf + 0.5))
+    .setRotation(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, a, 0)))
+    .setFriction(0.4);
+  world.createCollider(d);
+}
+
+let bodies = [];        // Rapier RigidBody per block, null until activated
+let simActive = false;
+
+const hw = BLOCK_W * 0.96 / 2, hh = CFG.blockH * 0.96 / 2, hd = CFG.blockDepth * 0.97 / 2;
+
+function activatePhysics() {
+  if (simActive) return;
+  simActive = true;
+  const q = new THREE.Quaternion();
+  for (let i = 0; i < BLOCK_COUNT; i++) {
+    q.fromArray(blockQuat, i * 4);
+    const desc = RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(blockPos[i * 3], blockPos[i * 3 + 1], blockPos[i * 3 + 2])
+      .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
+      .setLinearDamping(0.04)
+      .setAngularDamping(0.08)
+      .setCanSleep(true);
+    const body = world.createRigidBody(desc);
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(hw, hh, hd)
+        .setFriction(0.75)
+        .setRestitution(0.04)
+        .setDensity(1.4),
+      body
+    );
+    bodies[i] = body;
+  }
+}
+
+// ---------------------------------------------------------------- explosions
+const effects = []; // visual explosion effects
+const flashGeo = new THREE.SphereGeometry(1, 24, 16);
+
+function explode(point) {
+  activatePhysics();
+
+  const R = params.radius;
+  const S = params.strength;
+  const dir = new THREE.Vector3();
+  for (let i = 0; i < BLOCK_COUNT; i++) {
+    const b = bodies[i];
+    const t = b.translation();
+    dir.set(t.x - point.x, t.y - point.y, t.z - point.z);
+    const d = dir.length();
+    if (d < R) {
+      b.wakeUp();
+      const falloff = 1 - d / R;
+      const mag = S * falloff * falloff * b.mass();
+      dir.normalize();
+      dir.y += 0.55 * falloff + 0.15; // upward throw
+      dir.normalize();
+      b.applyImpulse({ x: dir.x * mag, y: dir.y * mag, z: dir.z * mag }, true);
+      b.applyTorqueImpulse({
+        x: (Math.random() - 0.5) * mag * 0.4,
+        y: (Math.random() - 0.5) * mag * 0.4,
+        z: (Math.random() - 0.5) * mag * 0.4,
+      }, true);
+    }
+  }
+
+  // visual: expanding additive fireball + light flash
+  const flashMat = new THREE.MeshBasicMaterial({
+    color: 0xffb347, transparent: true, opacity: 0.95,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const ball = new THREE.Mesh(flashGeo, flashMat);
+  ball.position.copy(point);
+  scene.add(ball);
+
+  const light = new THREE.PointLight(0xffa040, 900, 60, 2);
+  light.position.copy(point);
+  scene.add(light);
+
+  effects.push({ ball, light, t: 0, maxR: R * 0.85 });
+}
+
+function updateEffects(dt) {
+  for (let i = effects.length - 1; i >= 0; i--) {
+    const e = effects[i];
+    e.t += dt;
+    const k = e.t / 0.55; // 0.55s lifetime
+    if (k >= 1) {
+      scene.remove(e.ball, e.light);
+      e.ball.material.dispose();
+      effects.splice(i, 1);
+      continue;
+    }
+    const s = 0.6 + e.maxR * (1 - Math.pow(1 - k, 3)); // fast ease-out expansion
+    e.ball.scale.setScalar(s);
+    e.ball.material.opacity = 0.95 * (1 - k) * (1 - k);
+    e.light.intensity = 900 * (1 - k) * (1 - k);
+  }
+}
+
+// ---------------------------------------------------------------- interaction (click vs drag)
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let downX = 0, downY = 0, downT = 0;
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  downX = e.clientX; downY = e.clientY; downT = performance.now();
+});
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (e.button !== 0) return;
+  const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
+  if (moved > 6 || performance.now() - downT > 500) return; // was an orbit drag
+
+  pointer.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects([instanced, ground], false);
+  if (hits.length) explode(hits[0].point);
+});
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ---------------------------------------------------------------- UI
+const $ = (id) => document.getElementById(id);
+
+function bindSlider(id, key, fmt = (v) => v) {
+  $(id).addEventListener('input', (e) => {
+    params[key] = parseFloat(e.target.value);
+    $(id + 'Val').textContent = fmt(params[key]);
+    if (key === 'gravity') world.gravity.y = params.gravity;
+  });
+}
+bindSlider('strength', 'strength');
+bindSlider('radius', 'radius');
+bindSlider('gravity', 'gravity');
+
+$('reset').addEventListener('click', resetTower);
+$('demolish').addEventListener('click', () => {
+  activatePhysics();
+  // blow out the bottom layer from the center
+  explode(new THREE.Vector3(0, 1.0, 0));
+});
+
+function resetTower() {
+  for (const b of bodies) world.removeRigidBody(b);
+  bodies = [];
+  simActive = false;
+  for (const e of effects) { scene.remove(e.ball, e.light); e.ball.material.dispose(); }
+  effects.length = 0;
+  generateTower();
+}
+
+// ---------------------------------------------------------------- main loop
+const m = new THREE.Matrix4();
+const p = new THREE.Vector3();
+const q = new THREE.Quaternion();
+const one = new THREE.Vector3(1, 1, 1);
+
+let acc = 0, last = performance.now();
+let frames = 0, fpsTimer = 0;
+const fpsEl = $('fps'), blocksEl = $('blocks'), bodiesEl = $('bodies'), awakeEl = $('awake'), callsEl = $('calls');
+blocksEl.textContent = BLOCK_COUNT;
+
+function tick(now) {
+  requestAnimationFrame(tick);
+  const dt = Math.min((now - last) / 1000, 0.1);
+  last = now;
+
+  // fixed-step physics with accumulator
+  if (simActive) {
+    acc += dt;
+    let steps = 0;
+    while (acc >= world.timestep && steps < 4) {
+      world.step();
+      acc -= world.timestep;
+      steps++;
+    }
+    if (steps === 4) acc = 0; // avoid spiral of death
+
+    // sync instance matrices from bodies
+    let awake = 0;
+    for (let i = 0; i < BLOCK_COUNT; i++) {
+      const b = bodies[i];
+      const t = b.translation();
+      const r = b.rotation();
+      p.set(t.x, t.y, t.z);
+      q.set(r.x, r.y, r.z, r.w);
+      m.compose(p, q, one);
+      instanced.setMatrixAt(i, m);
+      if (!b.isSleeping()) awake++;
+    }
+    instanced.instanceMatrix.needsUpdate = true;
+    awakeEl.textContent = awake;
+  } else {
+    awakeEl.textContent = '0';
+  }
+
+  bodiesEl.textContent = simActive ? bodies.length : 0;
+
+  updateEffects(dt);
+  controls.update();
+  renderer.render(scene, camera);
+
+  // fps counter (2 Hz refresh)
+  frames++;
+  fpsTimer += dt;
+  if (fpsTimer >= 0.5) {
+    const fps = Math.round(frames / fpsTimer);
+    fpsEl.textContent = fps;
+    fpsEl.className = 'val ' + (fps >= 50 ? 'good' : fps >= 30 ? 'warn' : 'bad');
+    callsEl.textContent = renderer.info.render.calls;
+    frames = 0; fpsTimer = 0;
+  }
+}
+requestAnimationFrame(tick);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

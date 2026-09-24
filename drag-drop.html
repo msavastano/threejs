@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drag &amp; Drop on Ground Plane — Raycaster + THREE.Plane</title>
+<style>
+  body { margin: 0; overflow: hidden; background: #000; }
+  #info {
+    position: absolute; top: 10px; left: 10px; color: #ccc;
+    font: 13px monospace; pointer-events: none;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="info">Drag the shapes across the ground. Left-drag empty space to orbit, wheel to zoom.</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ---------------------------------------------------------------------------
+// Renderer / scene / camera / lights
+// ---------------------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14181f);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(0, 10, 14);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.5, 0);
+controls.maxPolarAngle = Math.PI * 0.49; // keep camera above the ground
+
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x30281e, 0.8));
+const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+sun.position.set(8, 14, 6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+scene.add(sun);
+
+// ---------------------------------------------------------------------------
+// Ground + draggable objects
+// ---------------------------------------------------------------------------
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(80, 80),
+  new THREE.MeshStandardMaterial({ color: 0x2a2f38, roughness: 1.0 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+scene.add(new THREE.GridHelper(80, 80, 0x3d4452, 0x232833));
+
+const draggables = [];
+const palette = [0xd94848, 0x48a3d9, 0x53c95e, 0xd9b548, 0x9b59d0, 0xd9793a];
+
+function addDraggable(geometry, i) {
+  // One material per mesh so highlights don't leak between objects.
+  const material = new THREE.MeshStandardMaterial({
+    color: palette[i % palette.length],
+    roughness: 0.55,
+    metalness: 0.1,
+    emissive: 0x000000
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  geometry.computeBoundingBox();
+  const y = -geometry.boundingBox.min.y; // rest exactly on the plane
+  const a = (i / palette.length) * Math.PI * 2;
+  mesh.position.set(Math.cos(a) * 5, y, Math.sin(a) * 5);
+  mesh.castShadow = mesh.receiveShadow = true;
+  mesh.userData.baseEmissive = material.emissive.getHex();
+  scene.add(mesh);
+  draggables.push(mesh);
+}
+
+addDraggable(new THREE.BoxGeometry(1.2, 1.2, 1.2), 0);
+addDraggable(new THREE.SphereGeometry(0.7, 32, 32), 1);
+addDraggable(new THREE.CylinderGeometry(0.6, 0.6, 1.4, 32), 2);
+addDraggable(new THREE.ConeGeometry(0.7, 1.4, 32), 3);
+addDraggable(new THREE.TorusKnotGeometry(0.45, 0.15, 96, 16), 4);
+addDraggable(new THREE.BoxGeometry(1.6, 0.5, 1.0), 5);
+
+// ---------------------------------------------------------------------------
+// Drag & drop state: raycaster, math plane at y = 0, grab offset
+// ---------------------------------------------------------------------------
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();                 // NDC in [-1, 1]
+const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // y = 0
+const planeHit = new THREE.Vector3();                // ray ∩ plane
+const grabOffset = new THREE.Vector3();              // object.position - planeHit at grab time
+
+let hovered = null;
+let dragged = null;
+
+const HIGHLIGHT = { none: 0, hover: 1, drag: 2 };
+
+function setHighlight(mesh, state) {
+  if (!mesh) return;
+  if (state === HIGHLIGHT.hover) mesh.material.emissive.setHex(0x333333);
+  else if (state === HIGHLIGHT.drag) mesh.material.emissive.setHex(0x0e6b46);
+  else mesh.material.emissive.setHex(mesh.userData.baseEmissive);
+}
+
+function updatePointer(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+function pickDraggable() {
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(draggables, false);
+  return hits.length > 0 ? hits[0].object : null;
+}
+
+// ---------------------------------------------------------------------------
+// Pointer events
+// ---------------------------------------------------------------------------
+window.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;                    // left button only
+  updatePointer(event);
+
+  const picked = pickDraggable();
+  if (!picked) return;
+
+  dragged = picked;
+  controls.enabled = false;                          // don't orbit while dragging
+  document.body.style.cursor = 'grabbing';
+
+  // Grab offset: where on the y=0 plane the click landed vs. the object's
+  // center — so the object keeps its relative position under the cursor
+  // instead of snapping its center to the hit point.
+  raycaster.setFromCamera(pointer, camera);
+  if (raycaster.ray.intersectPlane(dragPlane, planeHit)) {
+    grabOffset.copy(dragged.position).sub(planeHit);
+    // offset.y == dragged.position.y, so the object keeps its height.
+  }
+
+  if (hovered && hovered !== dragged) setHighlight(hovered, HIGHLIGHT.none);
+  hovered = null;
+  setHighlight(dragged, HIGHLIGHT.drag);
+});
+
+window.addEventListener('pointermove', (event) => {
+  updatePointer(event);
+  raycaster.setFromCamera(pointer, camera);
+
+  if (dragged) {
+    // Slide along the ground plane, re-applying the grab offset.
+    if (raycaster.ray.intersectPlane(dragPlane, planeHit)) {
+      dragged.position.copy(planeHit).add(grabOffset);
+    }
+    // If the ray is parallel to the plane (no intersection), keep last pose.
+    return;
+  }
+
+  // Hover highlighting when not dragging.
+  const picked = pickDraggable();
+  if (picked !== hovered) {
+    setHighlight(hovered, HIGHLIGHT.none);
+    hovered = picked;
+    setHighlight(hovered, HIGHLIGHT.hover);
+    document.body.style.cursor = hovered ? 'grab' : 'default';
+  }
+});
+
+window.addEventListener('pointerup', (event) => {
+  if (!dragged) return;
+  updatePointer(event);
+
+  setHighlight(dragged, HIGHLIGHT.none);
+  dragged = null;
+  controls.enabled = true;
+
+  // Re-evaluate what's under the cursor after the drop.
+  hovered = pickDraggable();
+  setHighlight(hovered, HIGHLIGHT.hover);
+  document.body.style.cursor = hovered ? 'grab' : 'default';
+});
+
+// ---------------------------------------------------------------------------
+// Resize + render loop
+// ---------------------------------------------------------------------------
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+animate();
+</script>
+</body>
+</html>

@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fire &amp; Smoke Emitter — 10,000 GPU Particles</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #05060a; overflow: hidden; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; left: 16px; top: 14px; z-index: 10;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: #d9c8a8; letter-spacing: .02em; pointer-events: none;
+    text-shadow: 0 1px 2px rgba(0,0,0,.8);
+  }
+  #hud b { color: #ffe9b0; font-weight: 600; }
+  #hud .dim { color: #8a7758; }
+  #fps { color: #ffb45e; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud">
+  <div><b>Fire &amp; Smoke Emitter</b></div>
+  <div><span class="dim">particles</span> <b>10,000</b> &middot; THREE.Points + custom ShaderMaterial</div>
+  <div><span class="dim">stateless GPU loop</span> — positions computed in the vertex shader, buffers never re-uploaded</div>
+  <div><span class="dim">fps</span> <span id="fps">—</span> &middot; <span class="dim">drag to orbit, scroll to zoom</span></div>
+</div>
+
+<!-- Modern ES6 modules via import map -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+/* ============================================================================
+ *  CONFIG — every tunable in one place
+ * ========================================================================== */
+const COUNT          = 10000;  // particle budget (one draw call, one object)
+const EMITTER_RADIUS = 0.38;   // spawn disc radius (world units)
+const LIFE_MIN       = 1.8;    // per-particle lifetime range (s) — each particle
+const LIFE_MAX       = 3.4;    //   gets its own, so the plume never syncs up
+const BASE_SIZE      = 0.60;   // particle diameter scale (world units)
+const DPR_CAP        = 1.5;    // bound fragment cost of the bloom stack
+
+/* ============================================================================
+ *  RENDERER / SCENE / CAMERA / CONTROLS
+ * ========================================================================== */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, DPR_CAP));
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x05060a, 0.03);   // ground recedes; particles ignore fog
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(7.0, 3.0, 8.0);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 2.4, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.minDistance = 3.5;
+controls.maxDistance = 30;
+controls.maxPolarAngle = 1.52;   // keep the camera above the ground
+controls.update();
+
+/* ============================================================================
+ *  ENVIRONMENT — dark ground, burner bowl, glowing coals, flickering firelight
+ * ========================================================================== */
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(40, 64),
+  new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.95, metalness: 0.0 })
+);
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+
+// Burner bowl (slightly flared) + emissive rim ring marking the emitter mouth
+const bowl = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.72, 0.55, 0.5, 28, 1, true),
+  new THREE.MeshStandardMaterial({ color: 0x1c1d24, roughness: 0.55, metalness: 0.7, side: THREE.DoubleSide })
+);
+bowl.position.y = 0.25;
+scene.add(bowl);
+
+const rimMaterial = new THREE.MeshStandardMaterial({
+  color: 0x0c0c10, roughness: 0.6, metalness: 0.4,
+  emissive: 0xff5a1e, emissiveIntensity: 1.6
+});
+const rim = new THREE.Mesh(new THREE.TorusGeometry(0.71, 0.035, 10, 48), rimMaterial);
+rim.rotation.x = -Math.PI / 2;
+rim.position.y = 0.5;
+scene.add(rim);
+
+// A handful of glowing coals — one InstancedMesh, matrices set once
+const coalMaterial = new THREE.MeshStandardMaterial({
+  color: 0x180b05, roughness: 0.9, emissive: 0xff3c00, emissiveIntensity: 1.8
+});
+const coals = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.10, 0), coalMaterial, 14);
+{
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const p = new THREE.Vector3();
+  const s = new THREE.Vector3();
+  for (let i = 0; i < coals.count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.sqrt(Math.random()) * 0.42;
+    p.set(Math.cos(a) * r, 0.42 + Math.random() * 0.06, Math.sin(a) * r);
+    q.setFromEuler(new THREE.Euler(Math.random() * 3, Math.random() * 3, Math.random() * 3));
+    const k = 0.7 + Math.random() * 0.6;
+    s.set(k, k * 0.7, k);
+    coals.setMatrixAt(i, m.compose(p, q, s));
+  }
+}
+scene.add(coals);
+
+// Firelight: a flickering point light (physical decay) + faint sky fill
+const fireLight = new THREE.PointLight(0xff7a26, 60, 20, 2);
+fireLight.position.set(0, 1.1, 0);
+scene.add(fireLight);
+scene.add(new THREE.HemisphereLight(0x232a38, 0x0a0a10, 0.5));
+
+/* ============================================================================
+ *  PARTICLE SYSTEM — 10,000 particles, THREE.Points + custom ShaderMaterial
+ *
+ *  All state lives in static vertex attributes; the vertex shader computes
+ *  each particle's position analytically from uTime. Nothing is re-uploaded,
+ *  nothing is allocated per frame — the same 10,000 GPU particles recycle
+ *  forever via  age = mod(uTime - aSpawn, aLifetime)  (seamless loop).
+ * ========================================================================== */
+
+// ---- Static attributes, allocated exactly once ----------------------------
+const positions  = new Float32Array(COUNT * 3);  // spawn point on emitter disc
+const velocities = new Float32Array(COUNT * 3);  // random initial velocity
+const lifetimes  = new Float32Array(COUNT);      // distinct per-particle lifetime
+const spawns     = new Float32Array(COUNT);      // spawn-time offsets
+const rands      = new Float32Array(COUNT * 2);  // per-particle random seeds
+
+for (let i = 0; i < COUNT; i++) {
+  const i3 = i * 3, i2 = i * 2;
+
+  // Spawn point: uniform density on a disc at the burner mouth
+  const a = Math.random() * Math.PI * 2;
+  const r = Math.sqrt(Math.random()) * EMITTER_RADIUS;
+  positions[i3]     = Math.cos(a) * r;
+  positions[i3 + 1] = 0.40 + Math.random() * 0.15;
+  positions[i3 + 2] = Math.sin(a) * r;
+
+  // Random initial velocity: outward radial drift + tangential swirl + rise
+  const radial  = 0.15 + 0.65 * Math.pow(Math.random(), 2);
+  const tangent = (Math.random() * 2 - 1) * 0.18;
+  velocities[i3]     = Math.cos(a) * radial - Math.sin(a) * tangent;
+  velocities[i3 + 1] = 1.00 + 1.20 * Math.pow(Math.random(), 1.3);
+  velocities[i3 + 2] = Math.sin(a) * radial + Math.cos(a) * tangent;
+
+  // Distinct lifetime + spawn offset spread over the longest lifetime, so the
+  // plume is fully developed at t = 0 and never synchronizes
+  lifetimes[i] = LIFE_MIN + Math.random() * (LIFE_MAX - LIFE_MIN);
+  spawns[i]    = Math.random() * LIFE_MAX;
+
+  rands[i2]     = Math.random();   // turbulence phase seed
+  rands[i2 + 1] = Math.random();   // flicker + size variation seed
+}
+
+const geometry = new THREE.BufferGeometry();
+geometry.setAttribute('position',  new THREE.BufferAttribute(positions, 3).setUsage(THREE.StaticDrawUsage));
+geometry.setAttribute('aVelocity', new THREE.BufferAttribute(velocities, 3).setUsage(THREE.StaticDrawUsage));
+geometry.setAttribute('aLifetime', new THREE.BufferAttribute(lifetimes, 1).setUsage(THREE.StaticDrawUsage));
+geometry.setAttribute('aSpawn',    new THREE.BufferAttribute(spawns, 1).setUsage(THREE.StaticDrawUsage));
+geometry.setAttribute('aRand',     new THREE.BufferAttribute(rands, 2).setUsage(THREE.StaticDrawUsage));
+
+// Particles fly far above their spawn disc, so compute honest CPU-side bounds
+geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 3.5, 0), 9.0);
+
+// ---- Shaders ---------------------------------------------------------------
+
+// Vertex shader: time-driven position, turbulence, lifetime-scaled point size.
+const vertexShader = /* glsl */`
+  uniform float uTime;    // elapsed seconds
+  uniform float uScale;   // drawingBufferHeight / (2 * tan(fov/2)) -> sizeAttenuation
+  uniform float uSize;    // base particle diameter in world units
+
+  attribute vec3  aVelocity;  // random initial velocity (world units / s)
+  attribute float aLifetime;  // distinct per-particle lifetime (s)
+  attribute float aSpawn;     // spawn-time offset (s)
+  attribute vec2  aRand;      // per-particle random seeds
+
+  varying float vLife;     // normalized age, 0 (birth) .. 1 (death)
+  varying float vFlicker;  // per-particle brightness shimmer
+  varying float vSeed;     // fragment-side variation
+
+  const float DRAG     = 1.7;         // lateral aerodynamic drag (1/s)
+  const float BUOYANCY = 0.08;        // hot gas rise acceleration (units/s^2)
+  const float TWO_PI   = 6.2831853;
+
+  void main() {
+    // ---- seamless loop: recycle each particle on its own clock ----------
+    // age wraps to 0 exactly when the lifetime expires; the particle is
+    // fully transparent at that instant, so the reset is invisible and no
+    // new object is ever created.
+    float age  = mod(uTime - aSpawn, aLifetime);
+    float life = age / aLifetime;
+    vLife      = life;
+    vSeed      = aRand.y;
+
+    // ---- ballistic base motion ------------------------------------------
+    // Lateral velocity decays with drag (integral of v*exp(-k*t));
+    // vertical motion = initial rise + buoyant acceleration.
+    float dragInt = (1.0 - exp(-DRAG * age)) / DRAG;
+    vec3  p       = position;
+    p.xz += aVelocity.xz * dragInt;
+    p.y  += aVelocity.y * age + 0.5 * BUOYANCY * age * age;
+
+    // ---- turbulence: multi-frequency sway, dispersion grows with age ----
+    // Two stacked sines per axis, phase-shifted per particle; amplitude
+    // ramps up as the particle ages, so the flame is tight at the base and
+    // the smoke billows wide near the top of the plume.
+    float s     = aRand.x * TWO_PI;
+    float amp   = 0.06 + 1.60 * pow(life, 1.7);
+    float swayX = sin(p.y * 1.35 + age * 1.9 + s)       + 0.45 * sin(p.y * 3.10 - age * 2.6 + s * 2.7);
+    float swayZ = cos(p.y * 1.15 - age * 1.6 + s * 1.3) + 0.45 * cos(p.y * 3.40 + age * 2.2 + s * 3.1);
+    p.xz += vec2(swayX, swayZ) * (amp * 0.42);
+    p.y  += sin(age * 1.3 + s * 5.0) * amp * 0.18;
+
+    // ---- per-particle flicker --------------------------------------------
+    vFlicker = 0.72 + 0.28 * sin(age * (5.0 + 9.0 * aRand.y) + aRand.y * 40.0);
+
+    // ---- point size from REMAINING lifetime ------------------------------
+    // Fresh sparks are tiny; puffs expand as their remaining lifetime runs
+    // out (flame -> smoke). sizeAttenuation happens at the projection below.
+    float remaining = 1.0 - life;
+    float grow      = 1.0 - pow(remaining, 0.75);
+    float sizeWorld = uSize * (0.24 + 3.16 * grow) * (0.75 + 0.5 * aRand.y);
+
+    vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
+    gl_Position  = projectionMatrix * mvPosition;
+    // sizeAttenuation: world-space size -> pixels, shrinking with distance
+    gl_PointSize = clamp(sizeWorld * uScale / max(0.1, -mvPosition.z), 0.0, 256.0);
+  }
+`;
+
+// Fragment shader: circular gradient alpha mask + yellow -> smoky gray ramp.
+const fragmentShader = /* glsl */`
+  varying float vLife;
+  varying float vFlicker;
+  varying float vSeed;
+
+  const vec3 C_CORE  = vec3(2.60, 1.90, 0.90);  // white-hot yellow (HDR, feeds bloom)
+  const vec3 C_FLAME = vec3(2.10, 0.90, 0.18);  // yellow-orange flame
+  const vec3 C_SMOKE = vec3(0.34, 0.32, 0.30);  // smoky gray
+
+  void main() {
+    // ---- circular gradient alpha mask ------------------------------------
+    // Distance from the sprite center: 0 at the core, 1 at the edge of the
+    // point quad. Squared smoothstep falloff -> soft round sprites, never a
+    // hard square edge.
+    vec2  q    = gl_PointCoord - 0.5;
+    float r    = length(q) * 2.0;
+    float mask = 1.0 - smoothstep(0.0, 1.0, r);
+    mask *= mask;
+    if (mask <= 0.0) discard;
+
+    // ---- color ramp: yellow flame -> smoky gray --------------------------
+    vec3 col = mix(C_CORE, C_FLAME, smoothstep(0.00, 0.16, vLife));
+    col      = mix(col,     C_SMOKE, smoothstep(0.34, 0.66, vLife));
+    col     *= vFlicker;
+    // subtle per-particle variation so the smoke is not a flat gray column
+    col     *= 1.0 + (vSeed - 0.5) * 0.25 * smoothstep(0.4, 0.7, vLife);
+
+    // ---- alpha: dense flame, thinning smoke, fade in/out -----------------
+    // Dense overlapping particles integrate into a volumetric plume, so the
+    // per-particle alpha is intentionally small (calibrated against a
+    // coverage simulation of all 10,000 particles).
+    float body    = mix(0.032, 0.013, smoothstep(0.28, 0.58, vLife));
+    float fadeIn  = smoothstep(0.00, 0.06, vLife);
+    float fadeOut = 1.0 - smoothstep(0.50, 1.00, vLife);
+    float alpha   = body * fadeIn * fadeOut * mask * vFlicker;
+
+    if (alpha < 0.002) discard;   // fully expired particles cost nothing
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+const uniforms = {
+  uTime:  { value: 0 },
+  uScale: { value: 1 },
+  uSize:  { value: BASE_SIZE }
+};
+
+const material = new THREE.ShaderMaterial({
+  uniforms,
+  vertexShader,
+  fragmentShader,
+  transparent: true,
+  depthWrite: false,          // additive particles never occlude each other
+  depthTest: true,            // ...but are still occluded by the burner bowl
+  blending: THREE.AdditiveBlending
+});
+
+const points = new THREE.Points(geometry, material);
+scene.add(points);
+
+/* ============================================================================
+ *  POST-PROCESSING — HDR render target -> bloom -> ACES/vignette/dither
+ *  (EffectComposer defaults to a half-float target, so additive particles can
+ *  accumulate above 1.0 and the tone mapper rolls the hot core off to white.)
+ * ========================================================================== */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.65,   // strength — subtle halo around the hot core only
+  0.45,   // radius
+  0.85    // threshold (linear HDR): flame blooms, smoke does not
+);
+composer.addPass(bloomPass);
+
+// Final pass: ACES tone map + sRGB encode + vignette + ordered dither.
+const FinalShader = {
+  uniforms: {
+    tDiffuse:    { value: null },
+    uExposure:   { value: 1.1 }
+  },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */`
+    uniform sampler2D tDiffuse;
+    uniform float uExposure;
+    varying vec2 vUv;
+
+    vec3 aces(vec3 x) {
+      return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+    }
+
+    void main() {
+      vec3 col = texture2D(tDiffuse, vUv).rgb;
+
+      // filmic tone map in linear space, then sRGB encode
+      col = aces(col * uExposure);
+      col = mix(col * 12.92, 1.055 * pow(col, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), col));
+
+      // gentle vignette (display space)
+      vec2 q = vUv - 0.5;
+      col *= 1.0 - 0.55 * dot(q, q);
+
+      // hash dither kills 8-bit banding in the soft smoke gradients
+      float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+      col += (n - 0.5) / 255.0;
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `
+};
+const finalPass = new ShaderPass(FinalShader);
+finalPass.renderToScreen = true;
+composer.addPass(finalPass);
+
+/* ============================================================================
+ *  RESIZE — camera, renderer, composer, and the sizeAttenuation scale factor
+ * ========================================================================== */
+function onResize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  // gl_PointSize is in device pixels: scale = drawing-buffer height / (2*tan)
+  uniforms.uScale.value =
+    renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)));
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+/* ============================================================================
+ *  ANIMATION LOOP — zero allocation: only uniforms and pre-created objects
+ *  are touched. Particle positions are never computed on the CPU.
+ * ========================================================================== */
+const clock = new THREE.Clock();
+const fpsEl = document.getElementById('fps');
+let frames = 0, fpsTimer = 0;
+
+// Shared low-frequency flicker drives light + coals + rim glow coherently
+function flicker(t) {
+  return 0.78 + 0.22 * (0.6 * Math.sin(t * 3.1) + 0.4 * Math.sin(t * 7.7 + 1.7));
+}
+
+renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  const t  = clock.elapsedTime;
+
+  // the ONLY per-frame particle update: advance time
+  uniforms.uTime.value = t;
+
+  // firelight + ember glow flicker
+  const f = flicker(t);
+  fireLight.intensity  = 60 * f;
+  coalMaterial.emissiveIntensity = 1.8 * f;
+  rimMaterial.emissiveIntensity  = 1.6 * f;
+
+  controls.update();
+  composer.render();
+
+  // fps HUD (updated twice a second)
+  frames += 1;
+  fpsTimer += dt;
+  if (fpsTimer >= 0.5) {
+    fpsEl.textContent = Math.round(frames / fpsTimer);
+    frames = 0;
+    fpsTimer = 0;
+  }
+});
+</script>
+</body>
+</html>

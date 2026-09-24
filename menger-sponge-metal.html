@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Metallic Menger Sponge — GLSL Raymarching</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #err { position: fixed; inset: 0; display: none; padding: 24px; overflow: auto;
+         color: #f66; font: 13px/1.5 monospace; white-space: pre-wrap; background: #000; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<pre id="err"></pre>
+
+<!-- ============================================================
+     Vertex shader: fullscreen triangle, no buffers required
+     ============================================================ -->
+<script id="vs" type="x-shader/x-vertex">#version 300 es
+void main() {
+    // generate a single oversized triangle covering the viewport
+    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+</script>
+
+<!-- ============================================================
+     Fragment shader: SDF raymarcher
+       - Menger sponge fractal (bounding-box accelerated DE)
+       - Fresnel-weighted metallic reflections (one bounce)
+       - SDF soft shadows (smoothstep penumbra kernel)
+       - 5-sample ambient occlusion
+       - time-driven orbiting camera
+     ============================================================ -->
+<script id="fs" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+
+uniform vec2  uRes;
+uniform float uTime;
+
+out vec4 outColor;
+
+// ------------------------------------------------------------
+// tunables / performance budgets
+// ------------------------------------------------------------
+#define PI            3.14159265359
+#define MAX_DIST      30.0           // far clip for scene rays
+#define PRIMARY_STEPS 180            // primary ray step budget
+#define REFLECT_STEPS 90             // reflection ray step budget
+#define SHADOW_STEPS  48             // shadow ray step budget
+#define MENGER_ITER   4              // fractal recursion depth
+#define STEP_FACTOR   0.75           // <1 = safer around thin struts
+#define FOCAL         1.6            // camera focal length (~fov)
+
+// ------------------------------------------------------------
+// utilities
+// ------------------------------------------------------------
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+// filmic tone curve (ACES approximation, Narkowicz)
+vec3 aces(vec3 x) {
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+// ------------------------------------------------------------
+// primitives
+// ------------------------------------------------------------
+float sdBox(vec3 p, vec3 b) {
+    vec3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+// ------------------------------------------------------------
+// Menger sponge distance estimator.
+// Classic cross-subtraction scheme: carve each cube face's
+// center cross out at every scale, shrinking the feature size
+// by 3 each iteration. A bounding sphere short-circuits the
+// iteration loop for the majority of empty-space samples.
+// ------------------------------------------------------------
+float mengerSponge(vec3 p) {
+    // bounding sphere: valid conservative DE outside radius sqrt(3)
+    float bl = length(p);
+    if (bl > 1.75) return bl - 1.733;
+
+    float d = sdBox(p, vec3(1.0));   // outer solid cube, half-extent 1
+    float s = 1.0;
+    for (int m = 0; m < MENGER_ITER; m++) {
+        vec3 a = mod(p * s, 2.0) - 1.0;      // fold into [-1,1] cell space
+        s *= 3.0;
+        vec3 r = abs(1.0 - 3.0 * abs(a));
+        float da = max(r.x, r.y);
+        float db = max(r.y, r.z);
+        float dc = max(r.z, r.x);
+        float c  = (min(da, min(db, dc)) - 1.0) / s;
+        d = max(d, c);                        // intersect away the cross
+    }
+    return d;
+}
+
+// ------------------------------------------------------------
+// scene map: y component encodes material id
+//   0 = chrome metal (sponge)
+//   1 = dark polished floor with etched grid
+// ------------------------------------------------------------
+vec2 mapScene(vec3 p) {
+    vec3 sp = p;
+    sp.y -= 0.15;                                  // sponge floats slightly
+    float d = mengerSponge(sp) - 0.003;            // inflation: thickens thin struts
+    float g = p.y + 1.35;                          // plane y = -1.35
+    return (d < g) ? vec2(d, 0.0) : vec2(g, 1.0);
+}
+
+// convenience: distance only
+float mapDist(vec3 p) { return mapScene(p).x; }
+
+// ------------------------------------------------------------
+// normal via tetrahedron technique (4 taps instead of 6)
+// ------------------------------------------------------------
+vec3 calcNormal(vec3 p) {
+    const float h = 0.0006;
+    const vec2 k = vec2(1.0, -1.0);
+    return normalize(k.xyy * mapDist(p + k.xyy * h) +
+                     k.yyx * mapDist(p + k.yyx * h) +
+                     k.yxy * mapDist(p + k.yxy * h) +
+                     k.xxx * mapDist(p + k.xxx * h));
+}
+
+// ------------------------------------------------------------
+// soft shadows: track the ratio of clearance to distance traveled
+// so the penumbra widens with occluder distance; the smoothstep
+// resampling gives a smoothly-varying, noise-free umbra edge.
+// ------------------------------------------------------------
+float softShadow(vec3 ro, vec3 rd, float tmax) {
+    float res = 1.0;
+    float t = 0.02;
+    for (int i = 0; i < SHADOW_STEPS; i++) {
+        float h = mapDist(ro + rd * t);
+        res = min(res, smoothstep(0.0, 1.0, 10.0 * h / t));
+        t += clamp(h, 0.006, 0.25);          // adaptive step, clamped for stability
+        if (res < 0.005 || t > tmax) break;
+    }
+    return clamp(res, 0.0, 1.0);
+}
+
+// ------------------------------------------------------------
+// ambient occlusion: 5 samples marching along the normal,
+// comparing free clearance against the ideal
+// ------------------------------------------------------------
+float calcAO(vec3 pos, vec3 nor) {
+    float occ = 0.0;
+    float sca = 1.0;
+    for (int i = 1; i <= 5; i++) {
+        float h = 0.01 + 0.13 * float(i) / 5.0;          // probe heights
+        float d = mapDist(pos + h * nor);
+        occ += (h - d) * sca;                            // deficit => occlusion
+        sca *= 0.72;
+    }
+    return clamp(1.0 - 2.2 * occ, 0.0, 1.0);
+}
+
+// ------------------------------------------------------------
+// procedural sky: vertical gradient + warm sun disc/glow.
+// Used both as the environment backdrop and as the reflection
+// source for rays that escape the scene.
+// ------------------------------------------------------------
+const vec3 SUN_DIR = normalize(vec3(0.62, 0.50, -0.42));
+const vec3 SUN_COL = vec3(1.00, 0.88, 0.72) * 2.4;
+
+vec3 skyColor(vec3 rd) {
+    float horiz = 1.0 - clamp(abs(rd.y) * 1.6, 0.0, 1.0);
+    vec3 col = mix(vec3(0.020, 0.031, 0.052),      // zenith deep blue
+                   vec3(0.075, 0.088, 0.115),      // horizon haze
+                   horiz);
+    float sun = max(dot(rd, SUN_DIR), 0.0);
+    col += SUN_COL * 0.16 * pow(sun, 24.0);         // tight glow ...
+    col += SUN_COL * 0.05 * pow(sun, 4.0);          // ... wide halo
+    return col;
+}
+
+// ------------------------------------------------------------
+// sphere tracing
+// ------------------------------------------------------------
+// returns vec2(t, matId); t < 0.0 means miss
+vec2 marchScene(vec3 ro, vec3 rd, int maxSteps) {
+    float t = 0.0;
+    float mat = -1.0;
+    for (int i = 0; i < 256; i++) {
+        if (i >= maxSteps) break;
+        vec3 p = ro + rd * t;
+        vec2 h = mapScene(p);
+        if (h.x < 0.0007 * t + 0.0004) {            // relative epsilon: crisp far, stable near
+            mat = h.y;
+            break;
+        }
+        t += h.x * STEP_FACTOR;                     // undershoot avoids overshooting thin struts
+        if (t > MAX_DIST) break;
+    }
+    if (mat < 0.0 || t > MAX_DIST) return vec2(-1.0);
+    return vec2(t, mat);
+}
+
+// ------------------------------------------------------------
+// material helpers
+// ------------------------------------------------------------
+vec3 metalAlbedo() {                                // brushed gold F0
+    return vec3(0.94, 0.76, 0.38);
+}
+
+vec3 floorAlbedo(vec3 p) {
+    vec3 base = mix(vec3(0.045, 0.050, 0.058),
+                    vec3(0.028, 0.030, 0.036),
+                    step(0.0, sin(p.x * PI) * sin(p.z * PI)));  // 2-unit checker
+    // etched grid lines, screen-space derivative filtered for anti-aliasing
+    vec2 g  = abs(fract(p.xz * 0.5) - 0.5) / max(fwidth(p.xz * 0.5), vec2(1e-4));
+    float line = 1.0 - min(min(g.x, g.y), 1.0);
+    return mix(base, vec3(0.10, 0.26, 0.30), line * 0.55);
+}
+
+// ------------------------------------------------------------
+// shading for SECONDARY (reflected) hits — cheap version:
+// direct + ambient with AO, but no nested shadows/reflections
+// ------------------------------------------------------------
+vec3 shadeCheap(vec3 pos, vec3 nor, float mat, float ao) {
+    float dif = clamp(dot(nor, SUN_DIR), 0.0, 1.0);
+    if (mat > 0.5) {
+        return floorAlbedo(pos) *
+               (SUN_COL * dif * 0.55 + skyColor(nor) * ao * 0.6 + vec3(0.02));
+    }
+    // metal seen in reflection keeps its tinted look
+    return metalAlbedo() *
+           (SUN_COL * dif * 0.70 + skyColor(nor) * ao + vec3(0.10) * ao);
+}
+
+// ------------------------------------------------------------
+// main surface shading: direct light + soft shadow + AO + one
+// reflection bounce weighted by Fresnel (Schlick)
+// ------------------------------------------------------------
+vec3 shadeSurface(vec3 pos, vec3 nor, vec3 rd, float mat, float ao) {
+    bool  isMetal = (mat < 0.5);
+    vec3  alb     = isMetal ? metalAlbedo() : floorAlbedo(pos);
+
+    // ---- direct key light with soft shadow -------------------
+    float dif = clamp(dot(nor, SUN_DIR), 0.0, 1.0);
+    float sha = softShadow(pos + nor * 0.02, SUN_DIR, 8.0);
+
+    // ---- Fresnel (Schlick) + Blinn specular ------------------
+    float cosT = clamp(dot(nor, -rd), 0.0, 1.0);
+    float fre  = pow(1.0 - cosT, 5.0);
+    vec3  hv   = normalize(SUN_DIR - rd);
+    float spe  = pow(clamp(dot(nor, hv), 0.0, 1.0), isMetal ? 90.0 : 60.0);
+
+    // ---- ambient: hemispheric sky * AO + faint floor bounce --
+    vec3 amb = skyColor(nor) * ao
+             + vec3(0.05, 0.06, 0.07) * clamp(-nor.y, 0.0, 1.0);
+
+    // ---- one reflection bounce -------------------------------
+    vec3 rrd = reflect(rd, nor);
+    vec3 rc;
+    vec2 hit = marchScene(pos + nor * 0.03, rrd, REFLECT_STEPS);
+    if (hit.x < 0.0) {
+        rc = skyColor(rrd);                                 // escaped: pure environment
+    } else {
+        vec3 rpos = pos + nor * 0.03 + rrd * hit.x;
+        vec3 rn   = calcNormal(rpos);
+        rc = shadeCheap(rpos, rn, hit.y, calcAO(rpos, rn));
+    }
+
+    // ---- combine: direct term stays dominant, reflections ----
+    // ---- fade in toward grazing angles (Fresnel)          ----
+    vec3 col;
+    if (isMetal) {
+        col  = alb * (SUN_COL * dif * sha + amb);
+        col += SUN_COL * spe * sha * (0.04 + 0.96 * fre);
+        col  = mix(col, rc, clamp(0.10 + 0.55 * fre, 0.0, 0.75));
+    } else {
+        col  = alb * (SUN_COL * dif * sha * 0.9 + amb);
+        col += SUN_COL * spe * sha * 0.35;
+        col  = mix(col, rc, clamp(0.10 + 0.45 * fre, 0.0, 0.65));
+    }
+    return col;
+}
+
+// ------------------------------------------------------------
+// render: camera, trace, composite with distance fog
+// ------------------------------------------------------------
+vec3 render(vec2 uv) {
+    // --- dynamic camera: continuous orbit + gentle vertical bob ---
+    float ang = uTime * 0.22;
+    float rad = 3.1 + 0.25 * sin(uTime * 0.11);              // breathing dolly
+    vec3 ro = vec3(cos(ang) * rad,
+                   1.15 + 0.45 * sin(uTime * 0.17),
+                   sin(ang) * rad);
+    vec3 ta = vec3(0.0, 0.05 + 0.05 * sin(uTime * 0.09), 0.0);
+
+    // look-at basis
+    vec3 ww = normalize(ta - ro);
+    vec3 uu = normalize(cross(ww, vec3(0.0, 1.0, 0.0)));
+    vec3 vv = cross(uu, ww);
+    vec3 rd = normalize(uv.x * uu + uv.y * vv + FOCAL * ww);
+
+    // --- primary ray ---
+    vec3 col;
+    vec2 hit = marchScene(ro, rd, PRIMARY_STEPS);
+    if (hit.x < 0.0) {
+        col = skyColor(rd);                                   // escaped: pure sky
+    } else {
+        vec3 pos = ro + rd * hit.x;
+        vec3 nor = calcNormal(pos);
+        float ao  = calcAO(pos, nor);
+        col = shadeSurface(pos, nor, rd, hit.y, ao);
+
+        // exponential distance fog toward the horizon sky
+        col = mix(col, skyColor(rd), 1.0 - exp(-0.028 * hit.x * hit.x));
+    }
+    return col;
+}
+
+void main() {
+    // normalized pixel coords, aspect-corrected on x
+    vec2 uv = (2.0 * gl_FragCoord.xy - uRes) / uRes.y;
+
+    vec3 col = render(uv);
+
+    // ---- post: exposure -> tonemap -> gamma ----
+    col = aces(col * 1.15);
+    col = pow(col, vec3(1.0 / 2.2));
+
+    // subtle vignette
+    vec2 q = gl_FragCoord.xy / uRes;
+    col *= 0.55 + 0.45 * pow(16.0 * q.x * q.y * (1.0 - q.x) * (1.0 - q.y), 0.18);
+
+    // blue-noise-ish dither kills gradient banding
+    col += (hash21(gl_FragCoord.xy + fract(uTime)) - 0.5) / 255.0;
+
+    outColor = vec4(col, 1.0);
+}
+</script>
+
+<!-- ============================================================
+     Host: WebGL2 boilerplate — compile, resize (DPR capped),
+     animate
+     ============================================================ -->
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const errBox = document.getElementById('err');
+  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+  if (!gl) { fail('WebGL2 is not available in this browser.'); return; }
+
+  function fail(msg) {
+    errBox.textContent = msg;
+    errBox.style.display = 'block';
+    throw new Error(msg);
+  }
+
+  function compile(type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      fail('Shader compile error:\n' + gl.getShaderInfoLog(sh));
+    }
+    return sh;
+  }
+
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, document.getElementById('vs').textContent));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, document.getElementById('fs').textContent));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    fail('Program link error:\n' + gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  const uRes  = gl.getUniformLocation(prog, 'uRes');
+  const uTime = gl.getUniformLocation(prog, 'uTime');
+
+  function resize() {
+    // cap devicePixelRatio to bound fragment cost on high-DPI displays
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const w = Math.floor(canvas.clientWidth * dpr);
+    const h = Math.floor(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  const t0 = performance.now();
+  function frame() {
+    resize();
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uTime, (performance.now() - t0) / 1000);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

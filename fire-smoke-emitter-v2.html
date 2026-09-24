@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fire &amp; Smoke Emitter v2 — 10,000 GPU Particles</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #030307; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  canvas { display: block; }
+  #info {
+    position: fixed; left: 18px; bottom: 16px; z-index: 5;
+    font: 11px/1.6 ui-monospace, Menlo, Consolas, monospace;
+    color: #b8a98c; letter-spacing: .03em; pointer-events: none;
+  }
+  #info b { color: #ffd98a; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="info">
+  <div><b>Fire &amp; Smoke Emitter v2</b></div>
+  <div>10,000 particles &middot; stateless GPU loop &middot; no re-uploads</div>
+  <div>drag to orbit &middot; scroll to zoom</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ---------------- tunables ---------------- */
+const COUNT      = 10000;
+const BASE_RADIUS = 0.5;   // spawn disc radius
+const LIFE_MIN    = 2.0;   // seconds
+const LIFE_MAX    = 4.0;   // seconds
+const SIZE        = 0.8;   // world-space diameter scale
+const PIXEL_CAP   = 1.75;  // cap devicePixelRatio for cheap fills
+
+/* ---------------- renderer / scene / camera ---------------- */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, PIXEL_CAP));
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.getElementById('stage').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x030307);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 120);
+camera.position.set(6, 3.5, 9);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 2.6, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 4;
+controls.maxDistance = 28;
+controls.maxPolarAngle = 1.55;
+controls.update();
+
+/* ---------------- ground + emitter mouth ---------------- */
+const floor = new THREE.Mesh(
+  new THREE.CircleGeometry(45, 64),
+  new THREE.MeshBasicMaterial({ color: 0x0a0a10 })
+);
+floor.rotation.x = -Math.PI / 2;
+scene.add(floor);
+
+const vent = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.6, 0.5, 0.4, 24, 1, true),
+  new THREE.MeshBasicMaterial({ color: 0x14141c, side: THREE.DoubleSide })
+);
+vent.position.y = 0.2;
+scene.add(vent);
+
+/* ---------------- particle attributes ---------------- */
+// Each particle is fully described by data baked once at startup. The vertex
+// shader turns that static data into motion each frame, so we never touch the
+// buffers again and the plume loops forever with a single Points object.
+const pos  = new Float32Array(COUNT * 3);  // spawn position (disc)
+const vel  = new Float32Array(COUNT * 3);  // initial velocity (units/s)
+const life = new Float32Array(COUNT);      // distinct lifetime (s)
+const born = new Float32Array(COUNT);      // spawn-time offset (s)
+const seed = new Float32Array(COUNT * 2);  // random phase / variation
+
+for (let i = 0; i < COUNT; i++) {
+  const i3 = i * 3;
+  const i2 = i * 2;
+
+  const angle = Math.random() * Math.PI * 2;
+  const radius = Math.sqrt(Math.random()) * BASE_RADIUS;   // uniform disc
+
+  pos[i3]     = Math.cos(angle) * radius;
+  pos[i3 + 1] = 0.5 + Math.random() * 0.1;
+  pos[i3 + 2] = Math.sin(angle) * radius;
+
+  // outward radial burst + a touch of swirl, and a strong vertical rise
+  const radial  = 0.2 + 0.7 * Math.pow(Math.random(), 2);
+  const swirl   = (Math.random() * 2 - 1) * 0.25;
+  vel[i3]     = Math.cos(angle) * radial - Math.sin(angle) * swirl;
+  vel[i3 + 1] = 1.2 + 1.4 * Math.pow(Math.random(), 1.4);
+  vel[i3 + 2] = Math.sin(angle) * radial + Math.cos(angle) * swirl;
+
+  life[i] = LIFE_MIN + Math.random() * (LIFE_MAX - LIFE_MIN);
+  born[i] = Math.random() * LIFE_MAX;   // stagger so plume is full at t=0
+
+  seed[i2]     = Math.random() * Math.PI * 2;
+  seed[i2 + 1] = Math.random();
+}
+
+const geometry = new THREE.BufferGeometry();
+geometry.setAttribute('position',  new THREE.BufferAttribute(pos, 3).setUsage(THREE.StaticDrawUsage));
+geometry.setAttribute('aVelocity',  new THREE.BufferAttribute(vel, 3).setUsage(THREE.StaticDrawUsage));
+geometry.setAttribute('aLifetime',  new THREE.BufferAttribute(life, 1).setUsage(THREE.StaticDrawUsage));
+geometry.setAttribute('aSpawn',     new THREE.BufferAttribute(born, 1).setUsage(THREE.StaticDrawUsage));
+geometry.setAttribute('aSeed',      new THREE.BufferAttribute(seed, 2).setUsage(THREE.StaticDrawUsage));
+
+// Keep frustum culling honest: particles rise well above their spawn points.
+geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 4, 0), 11);
+
+/* ---------------- shaders ---------------- */
+const vertexShader = /* glsl */`
+  uniform float uTime;
+  uniform float uPixelScale;   // viewport height / (2*tan(fov/2)), for sizeAttenuation
+  uniform float uSize;
+
+  attribute vec3  aVelocity;
+  attribute float aLifetime;
+  attribute float aSpawn;
+  attribute vec2  aSeed;
+
+  varying float vLife;    // 0..1, birth to death
+  varying float vTwinkle;
+  varying float vVariation;
+
+  const float PI = 3.14159265;
+  const float DRAG = 2.0;       // lateral drag coefficient
+  const float BUOY = 0.10;      // upward acceleration
+  const float TAU = 6.28318530;
+
+  void main() {
+    // Seamless recycle: age wraps cleanly when lifetime runs out, and the
+    // fragment is transparent at that instant, so the reset is invisible.
+    float age  = mod(uTime - aSpawn, aLifetime);
+    float life = age / aLifetime;
+    vLife = life;
+    vVariation = aSeed.y;
+
+    // --- motion: exponential lateral decay + buoyant vertical rise -------
+    float drag = (1.0 - exp(-DRAG * age)) / DRAG;
+    vec3 p = position;
+    p.xz += aVelocity.xz * drag;
+    p.y  += aVelocity.y * age + 0.5 * BUOY * age * age;
+
+    // --- turbulence: dispersion widens as the particle ages ---------------
+    float growth = pow(life, 1.6);
+    float amp    = 0.05 + 1.3 * growth;
+    float ph     = aSeed.x;
+    p.x += amp * sin(p.y * 1.4 + age * 2.0 + ph);
+    p.z += amp * cos(p.y * 1.1 - age * 1.7 + ph * 1.7);
+    p.y += amp * 0.15 * sin(age * 1.4 + ph * 3.0);
+
+    // --- twinkle: fast shimmer modulated by the particle's own phase -----
+    vTwinkle = 0.7 + 0.3 * sin(age * (6.0 + 8.0 * aSeed.y) + aSeed.y * 30.0);
+
+    // --- point size from REMAINING lifetime ------------------------------
+    // Young particles start small and hot; as remaining life shrinks the
+    // sprite grows into a smoke puff. The projection makes it attenuate.
+    float remaining = 1.0 - life;
+    float expand    = 1.0 - pow(remaining, 0.6);
+    float worldSize = uSize * (0.3 + 3.0 * expand) * (0.7 + 0.6 * aSeed.y);
+
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = clamp(worldSize * uPixelScale / max(0.1, -mv.z), 0.0, 300.0);
+  }
+`;
+
+const fragmentShader = /* glsl */`
+  varying float vLife;
+  varying float vTwinkle;
+  varying float vVariation;
+
+  const vec3 HOT   = vec3(2.7, 1.7, 0.6);  // white-hot core (HDR-ish)
+  const vec3 FLAME = vec3(1.9, 0.75, 0.1); // orange flame
+  const vec3 SMOKE = vec3(0.30, 0.28, 0.26);// smoky gray
+
+  void main() {
+    // --- circular gradient mask: kills the square quad edges --------------
+    vec2 q = gl_PointCoord - 0.5;
+    float d = length(q) * 2.0;
+    float disc = 1.0 - smoothstep(0.0, 1.0, d);
+    disc *= disc;
+    if (disc < 0.001) discard;
+
+    // --- yellow -> smoke color ramp over lifetime -------------------------
+    vec3 color = mix(HOT, FLAME, smoothstep(0.0, 0.18, vLife));
+    color = mix(color, SMOKE, smoothstep(0.36, 0.68, vLife));
+    color *= vTwinkle;
+    color *= 1.0 + (vVariation - 0.5) * 0.3 * smoothstep(0.4, 0.7, vLife);
+
+    // --- alpha: dense early, thinning late, full fade at both ends --------
+    float body = mix(0.05, 0.012, smoothstep(0.25, 0.6, vLife));
+    float inFade  = smoothstep(0.0, 0.07, vLife);
+    float outFade = 1.0 - smoothstep(0.55, 1.0, vLife);
+    float alpha = body * inFade * outFade * disc * vTwinkle;
+
+    if (alpha < 0.002) discard;
+    gl_FragColor = vec4(color, alpha);
+  }
+`;
+
+const uniforms = {
+  uTime:       { value: 0 },
+  uPixelScale: { value: 1 },
+  uSize:       { value: SIZE }
+};
+
+const material = new THREE.ShaderMaterial({
+  uniforms,
+  vertexShader,
+  fragmentShader,
+  transparent: true,
+  depthWrite: false,
+  depthTest: true,
+  blending: THREE.AdditiveBlending
+});
+
+const points = new THREE.Points(geometry, material);
+scene.add(points);
+
+/* ---------------- resize ---------------- */
+function resize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  uniforms.uPixelScale.value =
+    renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)));
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------------- loop ---------------- */
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  clock.getDelta();
+  uniforms.uTime.value = clock.elapsedTime;   // the only per-frame particle write
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

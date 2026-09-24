@@ -1,0 +1,1604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dyson Swarm Construct</title>
+<style>
+  :root {
+    --hud-bg: rgba(6, 12, 22, 0.72);
+    --hud-line: rgba(120, 190, 255, 0.18);
+    --hud-text: #cfe3ff;
+    --hud-dim: #6f88a8;
+    --accent: #6cc8ff;
+    --amber: #ffb450;
+    --good: #7dffb0;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  body { font: 12px/1.45 ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace; color: var(--hud-text); }
+  canvas { display: block; }
+  .panel {
+    position: absolute; background: var(--hud-bg); border: 1px solid var(--hud-line);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); border-radius: 6px; padding: 12px 14px;
+  }
+  #phases { top: 14px; left: 14px; width: 300px; }
+  #phases h1 { margin: 0 0 2px; font-size: 13px; letter-spacing: 0.22em; font-weight: 600; color: #fff; }
+  #phases .sub { color: var(--hud-dim); font-size: 11px; margin-bottom: 10px; }
+  .phase { margin: 8px 0; opacity: 0.45; transition: opacity 0.4s; }
+  .phase.active { opacity: 1; }
+  .phase.done { opacity: 0.8; }
+  .phase .row { display: flex; justify-content: space-between; align-items: baseline; }
+  .phase .name { letter-spacing: 0.08em; }
+  .phase .name b { color: var(--accent); font-weight: 600; margin-right: 6px; }
+  .phase.done .name b { color: var(--good); }
+  .phase .pct { color: var(--hud-dim); font-variant-numeric: tabular-nums; }
+  .bar { height: 3px; background: rgba(255,255,255,0.08); margin-top: 4px; border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #3a8cff, var(--accent)); transition: width 0.25s linear; }
+  .phase.done .bar i { background: linear-gradient(90deg, #2fbf7a, var(--good)); }
+  .phase .desc { color: var(--hud-dim); font-size: 10.5px; margin-top: 3px; }
+
+  #stats { top: 14px; right: 14px; width: 250px; }
+  #stats .kv { display: flex; justify-content: space-between; margin: 2px 0; font-variant-numeric: tabular-nums; }
+  #stats .kv span:first-child { color: var(--hud-dim); }
+  #stats hr { border: 0; border-top: 1px solid var(--hud-line); margin: 7px 0; }
+  #stats .big { font-size: 15px; color: var(--amber); }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; font-size: 10.5px; color: var(--hud-dim); }
+  .legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; vertical-align: 0; }
+
+  #controls {
+    bottom: 14px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center;
+    max-width: calc(100vw - 28px); padding: 8px 10px;
+  }
+  #controls .grp { display: flex; gap: 4px; align-items: center; padding: 0 6px; border-left: 1px solid var(--hud-line); }
+  #controls .grp:first-child { border-left: 0; }
+  button, select {
+    font: inherit; font-size: 11px; color: var(--hud-text); background: rgba(40, 70, 110, 0.35);
+    border: 1px solid var(--hud-line); border-radius: 4px; padding: 4px 8px; cursor: pointer;
+  }
+  button:hover, select:hover { background: rgba(60, 110, 170, 0.45); }
+  button.on { background: rgba(90, 170, 255, 0.35); border-color: rgba(120, 200, 255, 0.6); color: #fff; }
+  input[type=range] { width: 110px; accent-color: var(--accent); }
+  label.small { color: var(--hud-dim); font-size: 11px; }
+  #speedVal { width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  #hint { bottom: 14px; left: 14px; font-size: 10.5px; color: var(--hud-dim); max-width: 280px; padding: 8px 10px; }
+  #hint b { color: var(--hud-text); font-weight: 500; }
+
+  /* Clean view: every overlay hidden, only the scene remains */
+  body.clean .panel, body.clean #banner { display: none !important; }
+  #cleanHint {
+    position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); pointer-events: none;
+    font-size: 11px; letter-spacing: 0.15em; color: var(--hud-dim); opacity: 0; transition: opacity 1s;
+  }
+  body.clean #cleanHint.show { opacity: 0.8; }
+  #banner {
+    position: absolute; top: 18%; left: 50%; transform: translateX(-50%); text-align: center; pointer-events: none;
+    letter-spacing: 0.35em; font-size: 15px; color: #fff; opacity: 0; transition: opacity 1.2s;
+    text-shadow: 0 0 18px rgba(120, 200, 255, 0.8);
+  }
+  #banner small { display: block; letter-spacing: 0.2em; font-size: 11px; color: var(--hud-dim); margin-top: 6px; }
+
+  @media (max-width: 900px) {
+    #stats { display: none; }
+    #hint { display: none; }
+    #phases { width: calc(100vw - 28px); }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="phases" class="panel">
+  <h1>HELIOS SHELL</h1>
+  <div class="sub">Autonomous Dyson sphere construction · Swarm control</div>
+  <div class="phase" data-p="0">
+    <div class="row"><span class="name"><b>I</b>SWARM FABRICATION</span><span class="pct">0%</span></div>
+    <div class="bar"><i></i></div>
+    <div class="desc">Foundry world prints drones and inserts them into parking orbits</div>
+  </div>
+  <div class="phase" data-p="1">
+    <div class="row"><span class="name"><b>II</b>LATTICE SCAFFOLD</span><span class="pct">0%</span></div>
+    <div class="bar"><i></i></div>
+    <div class="desc">Geodesic truss laid from the equator toward the poles</div>
+  </div>
+  <div class="phase" data-p="2">
+    <div class="row"><span class="name"><b>III</b>COLLECTOR PLATING</span><span class="pct">0%</span></div>
+    <div class="bar"><i></i></div>
+    <div class="desc">Hexagonal collector panels mounted onto the lattice</div>
+  </div>
+  <div class="phase" data-p="3">
+    <div class="row"><span class="name"><b>IV</b>STELLAR CAPTURE</span><span class="pct">0%</span></div>
+    <div class="bar"><i></i></div>
+    <div class="desc">Shell energised, power beamed to receivers</div>
+  </div>
+</div>
+
+<div id="stats" class="panel">
+  <div class="kv"><span>Mission clock</span><span id="sClock">T+00:00</span></div>
+  <div class="kv"><span>FPS</span><span id="sFps">–</span></div>
+  <hr>
+  <div class="kv"><span>Drones online</span><span id="sOnline">0</span></div>
+  <div class="kv"><span>→ Foundry run</span><span id="sToF">0</span></div>
+  <div class="kv"><span>Loading</span><span id="sDock">0</span></div>
+  <div class="kv"><span>→ Shell (loaded)</span><span id="sToS">0</span></div>
+  <div class="kv"><span>Installing</span><span id="sWork">0</span></div>
+  <div class="kv"><span>Parked / returning</span><span id="sPark">0</span></div>
+  <hr>
+  <div class="kv"><span>Lattice struts</span><span id="sStruts">0</span></div>
+  <div class="kv"><span>Collector panels</span><span id="sPanels">0</span></div>
+  <div class="kv"><span>Shell coverage</span><span id="sCover">0.0%</span></div>
+  <hr>
+  <div class="kv"><span>Captured flux</span><span id="sPower" class="big">0 YW</span></div>
+  <div class="kv"><span>Kardashev index</span><span id="sKard">1.00</span></div>
+  <div class="legend">
+    <span><i style="background:#4aa3ff"></i>idle</span>
+    <span><i style="background:#9fd6ff"></i>strut cargo</span>
+    <span><i style="background:#ffae3c"></i>panel cargo</span>
+    <span><i style="background:#fff"></i>welding</span>
+    <span><i style="background:#5dff8f"></i>maintenance</span>
+  </div>
+</div>
+
+<div id="hint" class="panel">
+  Drones fly Keplerian spiral transfers (<b>ω = √(GM/r³)</b>): inner orbits run faster, so streams shear as they fall toward the shell.
+  <br><b>Space</b> pause · <b>1</b> orbit · <b>2</b> drone cam · <b>3</b> foundry · <b>F</b> next drone · <b>C</b> cutaway · <b>H</b> clean view
+</div>
+
+<div id="controls" class="panel">
+  <div class="grp">
+    <button id="bPause">❚❚ Pause</button>
+    <label class="small">Speed</label>
+    <input id="speed" type="range" min="0.25" max="10" step="0.25" value="2">
+    <span id="speedVal">2.0×</span>
+  </div>
+  <div class="grp">
+    <button id="bOrbit" class="on">Orbit</button>
+    <button id="bDrone">Drone cam</button>
+    <button id="bFoundry">Foundry</button>
+  </div>
+  <div class="grp">
+    <button id="bCut">Cutaway</button>
+    <button id="bStreak" class="on">Streaks</button>
+    <button id="bShadow" class="on">Shadows</button>
+  </div>
+  <div class="grp">
+    <label class="small">Swarm</label>
+    <select id="count">
+      <option value="3000">3 000</option>
+      <option value="6000">6 000</option>
+      <option value="10000" selected>10 000</option>
+      <option value="16000">16 000</option>
+    </select>
+    <button id="bRestart">↻ Restart</button>
+    <button id="bClean" title="Hide all overlays (H). Open with ?clean for a standalone clean view.">⤢ Clean view</button>
+  </div>
+</div>
+
+<div id="banner"></div>
+<div id="cleanHint">PRESS H TO SHOW CONTROLS</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ============================================================================
+// Constants — the whole system is scaled so orbital periods are watchable.
+// ============================================================================
+const GM = 16000;                 // gravitational parameter of the star
+const STAR_R = 9;
+const SHELL_R = 40;               // Dyson shell radius
+const FRAME_R = SHELL_R - 0.55;   // lattice sits just beneath the panels
+const PANEL_THICK = 0.14;
+const PARK_MIN = 52, PARK_MAX = 76;
+const FOUNDRY_R = 96, GIANT_R = 178;
+const DOCK_RING_R = 7;
+const PANEL_SUBDIV = 30;          // geodesic frequency of the collector tiling
+const FRAME_SUBDIV = 10;          // geodesic frequency of the truss (divides 30)
+const FAB_TIME = 32;              // sim-seconds to print the whole swarm
+const STRUT_RATE = 95;            // foundry loadout capacity (jobs / sim-second)
+const PANEL_RATE = 190;
+const MIN_ARC = Math.PI * 0.55;   // shortest transfer arc a drone will fly
+const MAX_DRONES = 16000;
+const DRONE_SCALE = 0.85;
+const TAU = Math.PI * 2;
+const L_SUN_YW = 382.8;           // solar luminosity in yottawatts
+
+const omega = r => Math.sqrt(GM / (r * r * r));
+const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const rand = (a, b) => a + Math.random() * (b - a);
+
+// ============================================================================
+// Renderer / scene / camera / post
+// ============================================================================
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.localClippingEnabled = true;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 5000);
+camera.position.set(95, 62, 150);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.25;
+controls.minDistance = 12;
+controls.maxDistance = 900;
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.7, 0.5, 0.85);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+// ============================================================================
+// Shared GLSL
+// ============================================================================
+const NOISE_GLSL = /* glsl */`
+vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
+vec4 mod289(vec4 x){return x-floor(x*(1.0/289.0))*289.0;}
+vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}
+vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-0.85373472095314*r;}
+float snoise(vec3 v){
+  const vec2 C=vec2(1.0/6.0,1.0/3.0); const vec4 D=vec4(0.0,0.5,1.0,2.0);
+  vec3 i=floor(v+dot(v,C.yyy)); vec3 x0=v-i+dot(i,C.xxx);
+  vec3 g=step(x0.yzx,x0.xyz); vec3 l=1.0-g; vec3 i1=min(g.xyz,l.zxy); vec3 i2=max(g.xyz,l.zxy);
+  vec3 x1=x0-i1+C.xxx; vec3 x2=x0-i2+C.yyy; vec3 x3=x0-D.yyy;
+  i=mod289(i);
+  vec4 p=permute(permute(permute(i.z+vec4(0.0,i1.z,i2.z,1.0))+i.y+vec4(0.0,i1.y,i2.y,1.0))+i.x+vec4(0.0,i1.x,i2.x,1.0));
+  float n_=0.142857142857; vec3 ns=n_*D.wyz-D.xzx;
+  vec4 j=p-49.0*floor(p*ns.z*ns.z);
+  vec4 x_=floor(j*ns.z); vec4 y_=floor(j-7.0*x_);
+  vec4 x=x_*ns.x+ns.yyyy; vec4 y=y_*ns.x+ns.yyyy; vec4 h=1.0-abs(x)-abs(y);
+  vec4 b0=vec4(x.xy,y.xy); vec4 b1=vec4(x.zw,y.zw);
+  vec4 s0=floor(b0)*2.0+1.0; vec4 s1=floor(b1)*2.0+1.0; vec4 sh=-step(h,vec4(0.0));
+  vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy; vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
+  vec3 p0=vec3(a0.xy,h.x); vec3 p1=vec3(a0.zw,h.y); vec3 p2=vec3(a1.xy,h.z); vec3 p3=vec3(a1.zw,h.w);
+  vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));
+  p0*=norm.x;p1*=norm.y;p2*=norm.z;p3*=norm.w;
+  vec4 m=max(0.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.0); m=m*m;
+  return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
+}
+float fbm(vec3 p){ float f=0.0, a=0.5; for(int i=0;i<5;i++){ f+=a*snoise(p); p*=2.03; a*=0.5; } return f; }
+`;
+
+const pointScale = { value: 1 };   // px-per-world-unit factor for glow points
+const globalUniforms = {
+  uTime: { value: 0 },
+  uAct: { value: 0 },        // shell activation wave (0 → 1.5)
+};
+
+// ============================================================================
+// Environment (for metallic reflections) + sky
+// ============================================================================
+{
+  const envScene = new THREE.Scene();
+  const envMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `varying vec3 vD; void main(){
+      vec3 c = mix(vec3(0.015,0.02,0.045), vec3(0.06,0.05,0.12), smoothstep(-0.6,0.8,vD.y));
+      c += vec3(0.25,0.12,0.30) * pow(max(dot(vD, normalize(vec3(-0.6,0.3,-0.7))),0.0), 6.0);
+      c += vec3(0.08,0.18,0.35) * pow(max(dot(vD, normalize(vec3(0.8,-0.2,0.5))),0.0), 4.0);
+      gl_FragColor = vec4(c,1.0); }`,
+  });
+  envScene.add(new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16), envMat));
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(envScene, 0.02).texture;
+  pmrem.dispose();
+}
+
+// Nebula sky dome
+{
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(2200, 48, 24),
+    new THREE.ShaderMaterial({
+      side: THREE.BackSide, depthWrite: false,
+      vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+      fragmentShader: NOISE_GLSL + `varying vec3 vD; void main(){
+        float n = fbm(vD*2.2);
+        float m = fbm(vD*4.5 + 7.0);
+        float band = exp(-pow(dot(vD, normalize(vec3(0.3,1.0,0.15)))*3.2, 2.0));
+        vec3 c = vec3(0.006,0.008,0.018);
+        c += vec3(0.09,0.03,0.12) * smoothstep(0.0,0.9,n) * (0.35+band);
+        c += vec3(0.02,0.06,0.12) * smoothstep(0.1,0.8,m) * band;
+        gl_FragColor = vec4(c,1.0); }`,
+    })
+  );
+  scene.add(sky);
+
+  const count = 7000;
+  const pos = new Float32Array(count * 3), col = new Float32Array(count * 3), size = new Float32Array(count);
+  const v = new THREE.Vector3();
+  for (let i = 0; i < count; i++) {
+    v.randomDirection().multiplyScalar(2000);
+    pos.set([v.x, v.y, v.z], i * 3);
+    const t = Math.random();
+    const c = t < 0.2 ? [1.0, 0.8, 0.6] : t < 0.5 ? [0.75, 0.85, 1.0] : [1, 1, 1];
+    const b = 0.3 + Math.pow(Math.random(), 4) * 0.9;
+    col.set([c[0] * b, c[1] * b, c[2] * b], i * 3);
+    size[i] = 1.0 + Math.pow(Math.random(), 6) * 2.5;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+  g.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+  const stars = new THREE.Points(g, new THREE.ShaderMaterial({
+    depthWrite: false,
+    vertexShader: `attribute vec3 aColor; attribute float aSize; varying vec3 vC;
+      void main(){ vC = aColor; gl_PointSize = aSize; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `varying vec3 vC; void main(){ vec2 d = gl_PointCoord-0.5; float a = smoothstep(0.5,0.0,length(d)); gl_FragColor = vec4(vC*a,1.0); }`,
+  }));
+  scene.add(stars);
+}
+
+// ============================================================================
+// Lights
+// ============================================================================
+const sun = new THREE.PointLight(0xfff1dc, 3.6, 0, 0);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = STAR_R + 0.5;
+sun.shadow.camera.far = 440;
+sun.shadow.bias = -0.0006;
+sun.shadow.normalBias = 0.04;
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x1a2640, 0.35));
+const galacticFill = new THREE.DirectionalLight(0x7088ff, 0.22);
+galacticFill.position.set(-1, 0.6, 0.8);
+scene.add(galacticFill);
+
+// ============================================================================
+// Star (animated photosphere + camera-facing corona)
+// ============================================================================
+const starMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(STAR_R, 96, 64),
+  new THREE.ShaderMaterial({
+    uniforms: globalUniforms,
+    vertexShader: `varying vec3 vP; varying vec3 vN; varying vec3 vV;
+      void main(){ vP = position; vN = normalize(normalMatrix*normal);
+        vec4 mv = modelViewMatrix*vec4(position,1.0); vV = normalize(-mv.xyz); gl_Position = projectionMatrix*mv; }`,
+    fragmentShader: NOISE_GLSL + `uniform float uTime; varying vec3 vP; varying vec3 vN; varying vec3 vV;
+      void main(){
+        vec3 p = vP / ${STAR_R.toFixed(1)};
+        float n = fbm(p*2.6 + vec3(0.0, uTime*0.04, uTime*0.02));
+        float g = snoise(p*18.0 + uTime*0.35)*0.5+0.5;
+        float spot = smoothstep(0.42, 0.62, fbm(p*1.3 + vec3(11.0, uTime*0.01, 0.0)));
+        float mu = max(dot(vN, vV), 0.0);
+        vec3 hot = vec3(1.0, 0.93, 0.78), warm = vec3(1.0, 0.52, 0.16);
+        vec3 c = mix(warm, hot, clamp(smoothstep(-0.4,0.6,n)*0.75 + g*0.25, 0.0, 1.0));
+        c *= 1.0 - spot*0.55;
+        c *= (0.45 + 0.75*pow(mu, 0.5)) * 2.3;
+        c += warm * pow(1.0-mu, 2.5) * 1.4;
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+  })
+);
+scene.add(starMesh);
+
+const corona = new THREE.Mesh(
+  new THREE.PlaneGeometry(1, 1),
+  new THREE.ShaderMaterial({
+    uniforms: globalUniforms,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv*2.0-1.0; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: NOISE_GLSL + `uniform float uTime; varying vec2 vUv;
+      void main(){
+        float r = length(vUv) * 42.0;              // world units
+        float a = atan(vUv.y, vUv.x);
+        float rays = snoise(vec3(cos(a)*2.5, sin(a)*2.5, uTime*0.12))*0.5+0.5;
+        rays = pow(rays, 2.0);
+        float d = max(r - ${STAR_R.toFixed(1)}*0.96, 0.0);
+        float glow = exp(-d/2.6)*0.9 + exp(-d/(7.0+9.0*rays))*0.28;
+        glow *= smoothstep(42.0, 20.0, r);
+        vec3 c = mix(vec3(1.0,0.45,0.12), vec3(1.0,0.85,0.6), exp(-d/4.0));
+        gl_FragColor = vec4(c*glow, 1.0);
+      }`,
+  })
+);
+corona.scale.setScalar(84);
+corona.renderOrder = 2;
+scene.add(corona);
+
+// ============================================================================
+// Geodesic generator — exact shared vertices via barycentric keys, so the
+// truss (freq 10) lands precisely on panel centres (freq 30).
+// ============================================================================
+const ICO_T = (1 + Math.sqrt(5)) / 2;
+const ICO_V = [-1, ICO_T, 0, 1, ICO_T, 0, -1, -ICO_T, 0, 1, -ICO_T, 0, 0, -1, ICO_T, 0, 1, ICO_T,
+  0, -1, -ICO_T, 0, 1, -ICO_T, ICO_T, 0, -1, ICO_T, 0, 1, -ICO_T, 0, -1, -ICO_T, 0, 1];
+const ICO_F = [0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11, 1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7, 1, 8,
+  3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9, 4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1];
+
+function geodesic(n) {
+  const base = [];
+  for (let i = 0; i < 12; i++) base.push(new THREE.Vector3(ICO_V[i * 3], ICO_V[i * 3 + 1], ICO_V[i * 3 + 2]).normalize());
+  const q = new THREE.Quaternion().setFromUnitVectors(base[0].clone(), new THREE.Vector3(0, 1, 0));
+  base.forEach(v => v.applyQuaternion(q));
+
+  const map = new Map(), pos = [], tris = [];
+  const tmp = new THREE.Vector3();
+  for (let f = 0; f < 20; f++) {
+    const ia = ICO_F[f * 3], ib = ICO_F[f * 3 + 1], ic = ICO_F[f * 3 + 2];
+    const A = base[ia], B = base[ib], C = base[ic];
+    const grid = [];
+    for (let i = 0; i <= n; i++) {
+      grid[i] = [];
+      for (let j = 0; j <= n - i; j++) {
+        const k = n - i - j;
+        const parts = [];
+        if (k) parts.push([ia, k]);
+        if (i) parts.push([ib, i]);
+        if (j) parts.push([ic, j]);
+        parts.sort((x, y) => x[0] - y[0]);
+        const key = parts.map(p => p[0] + ':' + p[1]).join('|');
+        let id = map.get(key);
+        if (id === undefined) {
+          tmp.set(0, 0, 0).addScaledVector(A, k).addScaledVector(B, i).addScaledVector(C, j).normalize();
+          id = pos.length / 3;
+          pos.push(tmp.x, tmp.y, tmp.z);
+          map.set(key, id);
+        }
+        grid[i][j] = id;
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n - i; j++) {
+        tris.push(grid[i][j], grid[i + 1][j], grid[i][j + 1]);
+        if (j < n - 1 - i) tris.push(grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1]);
+      }
+    }
+  }
+  const count = pos.length / 3;
+  const seen = new Set(), edges = [], nbr = Array.from({ length: count }, () => []);
+  for (let t = 0; t < tris.length; t += 3) {
+    for (let e = 0; e < 3; e++) {
+      const a = tris[t + e], b = tris[t + (e + 1) % 3];
+      const lo = Math.min(a, b), hi = Math.max(a, b), key = lo * count + hi;
+      if (seen.has(key)) continue;
+      seen.add(key); edges.push(lo, hi); nbr[lo].push(hi); nbr[hi].push(lo);
+    }
+  }
+  return { pos: new Float32Array(pos), count, edges: new Int32Array(edges), nbr };
+}
+
+// ============================================================================
+// Collector panels (hex tiles on the geodesic dual)
+// ============================================================================
+const PG = geodesic(PANEL_SUBDIV);
+const PANEL_N = PG.count;
+const panelBasis = new Float32Array(PANEL_N * 9);   // X, Y(normal), Z
+const panelRad = new Float32Array(PANEL_N);
+{
+  const N = new THREE.Vector3(), t = new THREE.Vector3(), b = new THREE.Vector3(), Z = new THREE.Vector3(), X = new THREE.Vector3(), o = new THREE.Vector3();
+  const c30 = Math.cos(Math.PI / 6), s30 = 0.5;
+  for (let p = 0; p < PANEL_N; p++) {
+    N.fromArray(PG.pos, p * 3);
+    const nb = PG.nbr[p];
+    let dsum = 0;
+    for (const q of nb) dsum += o.fromArray(PG.pos, q * 3).distanceTo(N);
+    panelRad[p] = (dsum / nb.length) * SHELL_R / Math.sqrt(3) * 0.975;
+    o.fromArray(PG.pos, nb[0] * 3);
+    t.copy(o).addScaledVector(N, -o.dot(N)).normalize();     // tangent toward neighbour
+    b.crossVectors(N, t);
+    Z.copy(t).multiplyScalar(c30).addScaledVector(b, -s30);   // puts a flat edge facing the neighbour
+    X.crossVectors(N, Z);
+    panelBasis.set([X.x, X.y, X.z, N.x, N.y, N.z, Z.x, Z.y, Z.z], p * 9);
+  }
+}
+
+const panelGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, false);
+const panelHeat = new THREE.InstancedBufferAttribute(new Float32Array(PANEL_N), 1);
+panelHeat.setUsage(THREE.DynamicDrawUsage);
+panelGeo.setAttribute('aHeat', panelHeat);
+
+const panelSideMat = new THREE.MeshStandardMaterial({ color: 0x2b313b, metalness: 0.85, roughness: 0.4, envMapIntensity: 0.6 });
+const panelInnerMat = new THREE.MeshStandardMaterial({ color: 0xc8904a, metalness: 1.0, roughness: 0.42, envMapIntensity: 0.4 });
+const panelOuterMat = new THREE.MeshStandardMaterial({ color: 0x0d1a2f, metalness: 0.55, roughness: 0.3, envMapIntensity: 0.8 });
+panelOuterMat.onBeforeCompile = (sh) => {
+  sh.uniforms.uAct = globalUniforms.uAct;
+  sh.uniforms.uTime = globalUniforms.uTime;
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', `#include <common>
+      attribute float aHeat; varying float vHeat; varying vec2 vHex; varying float vLat;`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      vHex = position.xz; vHeat = aHeat; vLat = abs(instanceMatrix[3].y) / ${SHELL_R.toFixed(1)};`);
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', `#include <common>
+      uniform float uAct; uniform float uTime; varying float vHeat; varying vec2 vHex; varying float vLat;`)
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      {
+        float hexd = max(max(abs(dot(vHex, vec2(0.5, 0.8660254))), abs(vHex.x)), abs(dot(vHex, vec2(0.5, -0.8660254)))) / 0.8660254;
+        float edge = smoothstep(0.80, 0.97, hexd);
+        vec2 g = abs(fract(vHex * 3.5) - 0.5);
+        float cell = smoothstep(0.44, 0.5, max(g.x, g.y)) * (1.0 - edge);
+        float a = clamp((uAct * 1.25 - vLat) * 3.0, 0.0, 1.0);
+        float pulse = 1.0 + 0.3 * a * sin(uTime * 2.2 - vLat * 18.0);
+        vec3 idle = vec3(0.10, 0.42, 0.95) * 0.42;
+        vec3 hot  = vec3(1.9, 0.62, 0.16);
+        vec3 em = mix(idle, hot, a) * edge * pulse;
+        em += mix(vec3(0.05, 0.14, 0.3) * 0.25, hot * 0.22, a) * cell;
+        em += vec3(1.9, 1.3, 0.7) * vHeat * (0.35 + 2.2 * edge);
+        totalEmissiveRadiance += em;
+      }`);
+};
+// Cylinder groups: 0 = sides, 1 = top cap (outward), 2 = bottom cap (faces the star)
+const panelMesh = new THREE.InstancedMesh(panelGeo, [panelSideMat, panelOuterMat, panelInnerMat], PANEL_N);
+panelMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+panelMesh.castShadow = true;
+panelMesh.receiveShadow = false;
+panelMesh.frustumCulled = false;
+scene.add(panelMesh);
+
+function setPanelMatrix(p, s, lift) {
+  const m = panelMesh.instanceMatrix.array, o = p * 16, b = p * 9;
+  const r = panelRad[p] * s, th = PANEL_THICK * s, R = SHELL_R + lift;
+  m[o] = panelBasis[b] * r;         m[o + 1] = panelBasis[b + 1] * r;     m[o + 2] = panelBasis[b + 2] * r;     m[o + 3] = 0;
+  m[o + 4] = panelBasis[b + 3] * th; m[o + 5] = panelBasis[b + 4] * th;    m[o + 6] = panelBasis[b + 5] * th;    m[o + 7] = 0;
+  m[o + 8] = panelBasis[b + 6] * r;  m[o + 9] = panelBasis[b + 7] * r;     m[o + 10] = panelBasis[b + 8] * r;    m[o + 11] = 0;
+  m[o + 12] = PG.pos[p * 3] * R;     m[o + 13] = PG.pos[p * 3 + 1] * R;    m[o + 14] = PG.pos[p * 3 + 2] * R;    m[o + 15] = 1;
+}
+
+// ============================================================================
+// Lattice scaffold (struts + nodes)
+// ============================================================================
+const FG = geodesic(FRAME_SUBDIV);
+const STRUT_N = FG.edges.length / 2;
+const NODE_N = FG.count;
+const strutData = new Float32Array(STRUT_N * 13); // ax,ay,az, dx,dy,dz, L, X(3), Y(3)
+{
+  const A = new THREE.Vector3(), B = new THREE.Vector3(), D = new THREE.Vector3(), M = new THREE.Vector3(), X = new THREE.Vector3(), Y = new THREE.Vector3();
+  for (let e = 0; e < STRUT_N; e++) {
+    A.fromArray(FG.pos, FG.edges[e * 2] * 3).multiplyScalar(FRAME_R);
+    B.fromArray(FG.pos, FG.edges[e * 2 + 1] * 3).multiplyScalar(FRAME_R);
+    D.subVectors(B, A);
+    const L = D.length(); D.divideScalar(L);
+    M.addVectors(A, B).normalize();
+    Y.copy(M).addScaledVector(D, -M.dot(D)).normalize();
+    X.crossVectors(Y, D);
+    strutData.set([A.x, A.y, A.z, D.x, D.y, D.z, L, X.x, X.y, X.z, Y.x, Y.y, Y.z], e * 13);
+  }
+}
+const strutMat = new THREE.MeshStandardMaterial({ color: 0x39424f, metalness: 0.8, roughness: 0.35, emissive: 0x2a8cff, emissiveIntensity: 1.25 });
+const strutMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), strutMat, STRUT_N);
+strutMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+strutMesh.castShadow = true;
+strutMesh.frustumCulled = false;
+scene.add(strutMesh);
+
+function setStrutMatrix(e, grow) {
+  const m = strutMesh.instanceMatrix.array, o = e * 16, d = strutData, b = e * 13;
+  const th = 0.17, L = d[b + 6] * grow;
+  m[o] = d[b + 7] * th;  m[o + 1] = d[b + 8] * th;  m[o + 2] = d[b + 9] * th;  m[o + 3] = 0;
+  m[o + 4] = d[b + 10] * th; m[o + 5] = d[b + 11] * th; m[o + 6] = d[b + 12] * th; m[o + 7] = 0;
+  m[o + 8] = d[b + 3] * L; m[o + 9] = d[b + 4] * L;  m[o + 10] = d[b + 5] * L; m[o + 11] = 0;
+  m[o + 12] = d[b] + d[b + 3] * L * 0.5; m[o + 13] = d[b + 1] + d[b + 4] * L * 0.5; m[o + 14] = d[b + 2] + d[b + 5] * L * 0.5; m[o + 15] = 1;
+}
+
+const nodeMat = new THREE.MeshStandardMaterial({ color: 0x8899aa, metalness: 0.6, roughness: 0.3, emissive: 0x7cc8ff, emissiveIntensity: 2.2 });
+const nodeMesh = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.34, 0), nodeMat, NODE_N);
+nodeMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+nodeMesh.castShadow = true;
+nodeMesh.frustumCulled = false;
+scene.add(nodeMesh);
+const nodeShown = new Uint8Array(NODE_N);
+function showNode(n) {
+  if (nodeShown[n]) return;
+  nodeShown[n] = 1;
+  const m = nodeMesh.instanceMatrix.array, o = n * 16;
+  m.fill(0, o, o + 16);
+  m[o] = m[o + 5] = m[o + 10] = m[o + 15] = 1;
+  m[o + 12] = FG.pos[n * 3] * FRAME_R; m[o + 13] = FG.pos[n * 3 + 1] * FRAME_R; m[o + 14] = FG.pos[n * 3 + 2] * FRAME_R;
+  nodeMesh.instanceMatrix.needsUpdate = true;
+}
+
+// Build order: equatorial belt first, growing toward both poles
+function latitudeOrder(count, yOf, jitter) {
+  const idx = Array.from({ length: count }, (_, i) => i);
+  const key = new Float32Array(count);
+  for (let i = 0; i < count; i++) key[i] = Math.abs(yOf(i)) + Math.random() * jitter;
+  idx.sort((a, b) => key[a] - key[b]);
+  return Int32Array.from(idx);
+}
+const strutOrder = latitudeOrder(STRUT_N, e => strutData[e * 13 + 1] / FRAME_R + strutData[e * 13 + 4] * strutData[e * 13 + 6] * 0.5 / FRAME_R, 0.035);
+const panelOrder = latitudeOrder(PANEL_N, p => PG.pos[p * 3 + 1], 0.045);
+
+// Cutaway clipping plane (keeps the hemisphere facing away from the camera)
+const clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+const clipMats = [panelSideMat, panelOuterMat, panelInnerMat, strutMat, nodeMat];
+
+// ============================================================================
+// Planets: foundry world (drone source), gas giant, asteroid belt
+// ============================================================================
+function hashNoise(x, y, z) {
+  return Math.sin(x * 1.7 + Math.sin(y * 2.3 + z * 0.7) * 1.3) * Math.cos(z * 1.9 + Math.sin(x * 1.1) * 1.7) * 0.5
+    + Math.sin(x * 4.1 + y * 3.3 + z * 2.7) * 0.18 + Math.sin(y * 7.3 - x * 5.1 + z * 6.1) * 0.08;
+}
+
+const foundry = new THREE.Group();
+scene.add(foundry);
+const FOUNDRY_A0 = 0.6;
+let foundryMesh, dockRing;
+{
+  const g = new THREE.IcosahedronGeometry(4.6, 6);
+  const p = g.attributes.position, col = new Float32Array(p.count * 3);
+  const v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i).normalize();
+    const n = hashNoise(v.x * 2.2, v.y * 2.2, v.z * 2.2);
+    v.multiplyScalar(4.6 * (1 + n * 0.07));
+    p.setXYZ(i, v.x, v.y, v.z);
+    const t = n * 0.5 + 0.5;
+    col.set([0.32 + t * 0.25, 0.27 + t * 0.18, 0.24 + t * 0.12], i * 3);
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  foundryMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.05, flatShading: true }));
+  foundryMesh.castShadow = true; foundryMesh.receiveShadow = true;
+  foundry.add(foundryMesh);
+
+  // Glowing mining sites on the surface
+  const sites = 70, sp = new Float32Array(sites * 3), sc = new Float32Array(sites * 3), ss = new Float32Array(sites);
+  for (let i = 0; i < sites; i++) {
+    v.randomDirection().multiplyScalar(4.75);
+    sp.set([v.x, v.y, v.z], i * 3); sc.set([2.6, 1.0, 0.25], i * 3); ss[i] = rand(0.25, 0.7);
+  }
+  foundryMesh.add(makeGlowPoints(sp, sc, ss));
+
+  dockRing = new THREE.Group();
+  const ringMetal = new THREE.Mesh(new THREE.TorusGeometry(DOCK_RING_R, 0.28, 8, 128),
+    new THREE.MeshStandardMaterial({ color: 0x5a6270, metalness: 0.9, roughness: 0.3 }));
+  ringMetal.castShadow = true; ringMetal.receiveShadow = true;
+  dockRing.add(ringMetal);
+  const ringGlow = new THREE.Mesh(new THREE.TorusGeometry(DOCK_RING_R, 0.07, 6, 128),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.2, 2.6) }));
+  ringGlow.position.z = 0.3;
+  dockRing.add(ringGlow);
+  for (let i = 0; i < 12; i++) {
+    const a = i / 12 * TAU;
+    const gantry = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 1.4), ringMetal.material);
+    gantry.position.set(Math.cos(a) * DOCK_RING_R, Math.sin(a) * DOCK_RING_R, 0);
+    gantry.rotation.z = a;
+    gantry.castShadow = true;
+    dockRing.add(gantry);
+  }
+  foundry.add(dockRing);
+}
+const ringTilt = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0.25, 1, 0.15).normalize());
+const ringA = new THREE.Vector3(1, 0, 0).applyQuaternion(ringTilt);
+const ringB = new THREE.Vector3(0, 1, 0).applyQuaternion(ringTilt);
+const RING_SPIN = 0.35;
+
+function foundryAngle(t) { return FOUNDRY_A0 + omega(FOUNDRY_R) * t; }
+function dockPos(t, i, out) {
+  const a = foundryAngle(t);
+  const ang = dockAng[i] + RING_SPIN * t;
+  const c = Math.cos(ang) * DOCK_RING_R, s = Math.sin(ang) * DOCK_RING_R;
+  out[0] = FOUNDRY_R * Math.cos(a) + ringA.x * c + ringB.x * s;
+  out[1] = ringA.y * c + ringB.y * s;
+  out[2] = -FOUNDRY_R * Math.sin(a) + ringA.z * c + ringB.z * s;
+}
+
+// Gas giant with rings
+const giant = new THREE.Group();
+scene.add(giant);
+const GIANT_A0 = 2.9;
+{
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 512;
+  const g = c.getContext('2d');
+  const pal = [[201, 165, 124], [158, 108, 78], [226, 204, 168], [136, 94, 70], [214, 176, 132], [118, 86, 72], [190, 150, 120]];
+  for (let y = 0; y < 512; y++) {
+    const v = y / 512;
+    const n = Math.sin(v * 38) * 0.5 + Math.sin(v * 91 + 1.3) * 0.3 + Math.sin(v * 211 + 2.1) * 0.2;
+    const f = (n * 0.5 + 0.5) * (pal.length - 1);
+    const i0 = Math.floor(f), i1 = Math.min(pal.length - 1, i0 + 1), k = f - i0;
+    const r = pal[i0][0] * (1 - k) + pal[i1][0] * k, gg = pal[i0][1] * (1 - k) + pal[i1][1] * k, b = pal[i0][2] * (1 - k) + pal[i1][2] * k;
+    g.fillStyle = `rgb(${r | 0},${gg | 0},${b | 0})`;
+    g.fillRect(0, y, 1024, 1);
+  }
+  for (let i = 0; i < 160; i++) {
+    g.fillStyle = `rgba(${Math.random() < 0.5 ? '255,235,200' : '90,60,45'},${rand(0.04, 0.12)})`;
+    g.beginPath(); g.ellipse(rand(0, 1024), rand(40, 472), rand(20, 120), rand(2, 7), 0, 0, TAU); g.fill();
+  }
+  g.fillStyle = 'rgba(170,80,50,0.55)';
+  g.beginPath(); g.ellipse(620, 330, 46, 18, 0, 0, TAU); g.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+  const planet = new THREE.Mesh(new THREE.SphereGeometry(11, 64, 48), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0 }));
+  planet.castShadow = true; planet.receiveShadow = true;
+  planet.name = 'giantBody';
+  giant.add(planet);
+
+  const rc = document.createElement('canvas'); rc.width = 512; rc.height = 4;
+  const rg = rc.getContext('2d');
+  for (let x = 0; x < 512; x++) {
+    const u = x / 512;
+    const a = (0.25 + 0.55 * Math.abs(Math.sin(u * 23) * Math.sin(u * 7 + 1))) * sstep(0, 0.08, u) * sstep(1, 0.85, u) * (u > 0.52 && u < 0.57 ? 0.1 : 1);
+    rg.fillStyle = `rgba(${210 - u * 50 | 0},${180 - u * 40 | 0},${150 - u * 30 | 0},${a})`;
+    rg.fillRect(x, 0, 1, 4);
+  }
+  const rtex = new THREE.CanvasTexture(rc); rtex.colorSpace = THREE.SRGBColorSpace;
+  const ringGeo = new THREE.RingGeometry(15, 25, 160, 1);
+  const rp = ringGeo.attributes.position, ruv = ringGeo.attributes.uv;
+  for (let i = 0; i < rp.count; i++) ruv.setXY(i, (Math.hypot(rp.getX(i), rp.getY(i)) - 15) / 10, 0.5);
+  const rings = new THREE.Mesh(ringGeo, new THREE.MeshStandardMaterial({ map: rtex, transparent: true, side: THREE.DoubleSide, roughness: 0.9, depthWrite: false }));
+  rings.receiveShadow = true;
+  rings.rotation.x = -Math.PI / 2 + 0.42;
+  rings.rotation.y = 0.2;
+  giant.add(rings);
+}
+function giantPos(t, out) {
+  const a = GIANT_A0 + omega(GIANT_R) * t;
+  out.set(GIANT_R * Math.cos(a), 0, -GIANT_R * Math.sin(a));
+  return out;
+}
+
+// Asteroid belt (instanced, receives the shell's shadow)
+const belt = new THREE.Group();
+scene.add(belt);
+{
+  const g = new THREE.DodecahedronGeometry(1, 0);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const k = 1 + hashNoise(x * 3, y * 3, z * 3) * 0.35;
+    p.setXYZ(i, x * k, y * k * 0.8, z * k);
+  }
+  g.computeVertexNormals();
+  const count = 2600;
+  const rocks = new THREE.InstancedMesh(g, new THREE.MeshStandardMaterial({ color: 0x8a7d70, roughness: 0.95, flatShading: true }), count);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), s = new THREE.Vector3(), pp = new THREE.Vector3();
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * TAU, r = 120 + Math.pow(Math.random(), 0.8) * 22 * (Math.random() < 0.5 ? 1 : 0.7);
+    pp.set(Math.cos(a) * r, (Math.random() - 0.5) * 5 * Math.random(), Math.sin(a) * r);
+    e.set(Math.random() * TAU, Math.random() * TAU, Math.random() * TAU);
+    s.setScalar(0.25 + Math.pow(Math.random(), 3) * 1.4);
+    m.compose(pp, q.setFromEuler(e), s);
+    rocks.setMatrixAt(i, m);
+  }
+  rocks.receiveShadow = true;
+  belt.add(rocks);
+}
+
+// Faint orbit guides
+function orbitLine(r, color, opacity) {
+  const pts = [];
+  for (let i = 0; i <= 256; i++) { const a = i / 256 * TAU; pts.push(new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r)); }
+  const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
+  scene.add(l);
+  return l;
+}
+orbitLine(FOUNDRY_R, 0x4b7bb5, 0.28);
+orbitLine(GIANT_R, 0x4b7bb5, 0.18);
+
+// ============================================================================
+// Glow points helper (nav lights, mining sites)
+// ============================================================================
+function makeGlowPoints(posArr, colArr, sizeArr) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  g.setAttribute('aColor', new THREE.BufferAttribute(colArr, 3));
+  g.setAttribute('aSize', new THREE.BufferAttribute(sizeArr, 1));
+  const pts = new THREE.Points(g, new THREE.ShaderMaterial({
+    uniforms: { uScale: pointScale },
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `uniform float uScale; attribute vec3 aColor; attribute float aSize; varying vec3 vC;
+      void main(){
+        vec4 mv = modelViewMatrix*vec4(position,1.0);
+        vC = aColor;
+        float s = aSize * uScale / -mv.z;
+        gl_PointSize = aSize > 0.0 ? clamp(s, 1.8, 64.0) : 0.0;
+        if (s < 1.8) vC *= s / 1.8 * 0.6 + 0.4;
+        gl_Position = projectionMatrix*mv;
+      }`,
+    fragmentShader: `varying vec3 vC; void main(){
+        vec2 d = gl_PointCoord - 0.5; float r2 = dot(d,d)*4.0;
+        if (r2 > 1.0) discard;
+        float a = exp(-r2*5.0) * (1.0 - r2);
+        gl_FragColor = vec4(vC*a, 1.0); }`,
+  }));
+  pts.frustumCulled = false;
+  return pts;
+}
+function updatePointScale() {
+  pointScale.value = renderer.getPixelRatio() * window.innerHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) * 0.55;
+}
+updatePointScale();
+
+// ============================================================================
+// Drones — instanced body, cargo, nav lights, velocity streaks
+// ============================================================================
+const droneGeo = (() => {
+  const body = new THREE.CylinderGeometry(0.1, 0.2, 0.75, 6); body.rotateX(Math.PI / 2);
+  const wing = new THREE.BoxGeometry(1.35, 0.03, 0.3); wing.translate(0, 0.02, -0.08);
+  const mast = new THREE.BoxGeometry(0.05, 0.28, 0.05); mast.translate(0, 0.16, 0.08);
+  const claw = new THREE.BoxGeometry(0.34, 0.06, 0.06); claw.translate(0, -0.18, 0.1);
+  return mergeGeometries([body, wing, mast, claw]);
+})();
+const droneMesh = new THREE.InstancedMesh(droneGeo, new THREE.MeshStandardMaterial({ color: 0xc3ccd8, metalness: 0.75, roughness: 0.32 }), MAX_DRONES);
+droneMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+droneMesh.castShadow = true;
+droneMesh.receiveShadow = true;
+droneMesh.frustumCulled = false;
+scene.add(droneMesh);
+
+const cargoMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.7, roughness: 0.35 }), MAX_DRONES);
+cargoMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+cargoMesh.castShadow = true;
+cargoMesh.frustumCulled = false;
+cargoMesh.setColorAt(0, new THREE.Color(1, 1, 1));
+scene.add(cargoMesh);
+const CARGO_STRUT_COL = new THREE.Color(0x9fc4ff), CARGO_PANEL_COL = new THREE.Color(0xe6a64a);
+
+const navPos = new Float32Array(MAX_DRONES * 3), navCol = new Float32Array(MAX_DRONES * 3), navSize = new Float32Array(MAX_DRONES);
+const navPoints = makeGlowPoints(navPos, navCol, navSize);
+navPoints.geometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
+navPoints.geometry.attributes.aColor.setUsage(THREE.DynamicDrawUsage);
+navPoints.geometry.attributes.aSize.setUsage(THREE.DynamicDrawUsage);
+scene.add(navPoints);
+
+const streakPos = new Float32Array(MAX_DRONES * 6), streakCol = new Float32Array(MAX_DRONES * 6);
+const streakGeo = new THREE.BufferGeometry();
+streakGeo.setAttribute('position', new THREE.BufferAttribute(streakPos, 3).setUsage(THREE.DynamicDrawUsage));
+streakGeo.setAttribute('color', new THREE.BufferAttribute(streakCol, 3).setUsage(THREE.DynamicDrawUsage));
+const streaks = new THREE.LineSegments(streakGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+streaks.frustumCulled = false;
+scene.add(streaks);
+
+// ---- Drone state (structure-of-arrays for thousands of agents) ----
+const DORMANT = 0, PARK = 1, TO_FOUNDRY = 2, DOCK = 3, TO_SITE = 4, WORK = 5, TO_PARK = 6;
+const JOB_NONE = 0, JOB_STRUT = 1, JOB_PANEL = 2, JOB_MAINT = 3;
+const state = new Uint8Array(MAX_DRONES);
+const U = new Float32Array(MAX_DRONES * 3), W = new Float32Array(MAX_DRONES * 3);  // orbital-plane basis
+const R0 = new Float32Array(MAX_DRONES), R1 = new Float32Array(MAX_DRONES);
+const TH = new Float32Array(MAX_DRONES), DTH = new Float32Array(MAX_DRONES);
+const LEGF = new Uint8Array(MAX_DRONES);        // bit0: accelerate from rest, bit1: brake to rest
+const TGTMODE = new Uint8Array(MAX_DRONES);     // 0 free, 1 static, 2 foundry dock
+const TGT = new Float32Array(MAX_DRONES * 3);
+const TIMER = new Float32Array(MAX_DRONES);
+const jobKind = new Uint8Array(MAX_DRONES), jobIdx = new Int32Array(MAX_DRONES);
+const dockAng = new Float32Array(MAX_DRONES);
+const P = new Float32Array(MAX_DRONES * 3), PP = new Float32Array(MAX_DRONES * 3);
+const FWD = new Float32Array(MAX_DRONES * 3), VEL = new Float32Array(MAX_DRONES * 3);
+const UPV = new Float32Array(MAX_DRONES * 3);
+
+const idle = new Int32Array(MAX_DRONES);
+let idleLen = 0;
+function pushIdle(i) { idle[idleLen++] = i; }
+function popIdle() {
+  if (!idleLen) return -1;
+  const k = (Math.random() * idleLen) | 0, i = idle[k];
+  idle[k] = idle[--idleLen];
+  return i;
+}
+
+// ============================================================================
+// Orbital mechanics — transfers are flown as spiral arcs inside a single
+// orbital plane. The phase angle advances at the local Keplerian rate
+// dθ/dt = √(GM/r³) while radius eases between endpoints (a low-thrust
+// spiral), so inner legs visibly outrun outer ones.
+// ============================================================================
+function legTime(r0, r1, dth) {
+  let T = 0;
+  for (let k = 0; k < 12; k++) {
+    const x = (k + 0.5) / 12, e = x * x * (3 - 2 * x);
+    T += (dth / 12) / omega(r0 + (r1 - r0) * e);
+  }
+  return T;
+}
+
+function planArc(i, tx, ty, tz) {
+  const b = i * 3;
+  const px = P[b], py = P[b + 1], pz = P[b + 2];
+  const r0 = Math.hypot(px, py, pz), ux = px / r0, uy = py / r0, uz = pz / r0;
+  const r1 = Math.hypot(tx, ty, tz), sx = tx / r1, sy = ty / r1, sz = tz / r1;
+  let nx = uy * sz - uz * sy, ny = uz * sx - ux * sz, nz = ux * sy - uy * sx;
+  const nl = Math.hypot(nx, ny, nz);
+  if (nl < 1e-4) {
+    nx = -uy * ux; ny = 1 - uy * uy; nz = -uy * uz;                 // y-axis projected ⟂ u
+    const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+    if (Math.abs(uy) > 0.99) { nx = 1; ny = 0; nz = 0; }
+  } else { nx /= nl; ny /= nl; nz /= nl; }
+  if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }                      // keep every transfer prograde
+  const wx = ny * uz - nz * uy, wy = nz * ux - nx * uz, wz = nx * uy - ny * ux;
+  let a = Math.atan2(sx * wx + sy * wy + sz * wz, sx * ux + sy * uy + sz * uz);
+  if (a < 0) a += TAU;
+  if (a < MIN_ARC) a += TAU;
+  U[b] = ux; U[b + 1] = uy; U[b + 2] = uz;
+  W[b] = wx; W[b + 1] = wy; W[b + 2] = wz;
+  R0[i] = r0; R1[i] = r1; TH[i] = 0; DTH[i] = a;
+  return legTime(r0, r1, a);
+}
+
+// Free spiral to a random parking orbit (inclined, prograde)
+function planFree(i, r1, arcMin, arcMax) {
+  const b = i * 3;
+  const r0 = Math.hypot(P[b], P[b + 1], P[b + 2]);
+  const ux = P[b] / r0, uy = P[b + 1] / r0, uz = P[b + 2] / r0;
+  let nx, ny, nz, l;
+  do {
+    nx = rand(-0.7, 0.7); ny = 1; nz = rand(-0.7, 0.7);
+    const d = nx * ux + ny * uy + nz * uz;
+    nx -= d * ux; ny -= d * uy; nz -= d * uz;
+    l = Math.hypot(nx, ny, nz);
+  } while (l < 0.2);
+  nx /= l; ny /= l; nz /= l;
+  if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+  U[b] = ux; U[b + 1] = uy; U[b + 2] = uz;
+  W[b] = ny * uz - nz * uy; W[b + 1] = nz * ux - nx * uz; W[b + 2] = nx * uy - ny * ux;
+  R0[i] = r0; R1[i] = r1; TH[i] = 0; DTH[i] = rand(arcMin, arcMax);
+}
+
+const tmp3 = new Float32Array(3);
+function planToDock(i, t) {
+  let T = 14;
+  for (let it = 0; it < 3; it++) {              // iterate: aim where the foundry will be
+    dockPos(t + T, i, tmp3);
+    T = planArc(i, tmp3[0], tmp3[1], tmp3[2]);
+  }
+}
+
+function evalLeg(i, t) {
+  const b = i * 3, d = DTH[i], th = TH[i];
+  const k = th / d, e = k * k * (3 - 2 * k);
+  const r = R0[i] + (R1[i] - R0[i]) * e;
+  const c = Math.cos(th) * r, s = Math.sin(th) * r;
+  let x = c * U[b] + s * W[b], y = c * U[b + 1] + s * W[b + 1], z = c * U[b + 2] + s * W[b + 2];
+  if (TGTMODE[i] === 2 && k > 0.8) {             // terminal guidance onto the moving dock
+    dockPos(t, i, tmp3);
+    const f = sstep(0.8, 1.0, k);
+    x += (tmp3[0] - x) * f; y += (tmp3[1] - y) * f; z += (tmp3[2] - z) * f;
+  }
+  P[b] = x; P[b + 1] = y; P[b + 2] = z;
+}
+
+// ============================================================================
+// Mission state
+// ============================================================================
+let N = 10000;
+let simTime = 0, launched = 0, fabAcc = 0;
+let scaffoldOn = false, platingOn = false;
+let strutPtr = 0, panelPtr = 0, strutAcc = 0, panelAcc = 0, maintAcc = 0;
+let strutsBuilt = 0, panelsBuilt = 0;
+let ignitionT = -1, activation = 0, complete = false;
+let anims = [];
+
+function resetMission() {
+  simTime = 0; launched = 0; fabAcc = 0;
+  scaffoldOn = platingOn = false;
+  strutPtr = panelPtr = 0; strutAcc = panelAcc = maintAcc = 0;
+  strutsBuilt = panelsBuilt = 0;
+  ignitionT = -1; activation = 0; complete = false;
+  anims = [];
+  idleLen = 0;
+  state.fill(DORMANT); jobKind.fill(JOB_NONE);
+  droneMesh.instanceMatrix.array.fill(0);
+  cargoMesh.instanceMatrix.array.fill(0);
+  navSize.fill(0); streakPos.fill(0); streakCol.fill(0);
+  panelMesh.instanceMatrix.array.fill(0);
+  strutMesh.instanceMatrix.array.fill(0);
+  nodeMesh.instanceMatrix.array.fill(0);
+  nodeShown.fill(0);
+  panelHeat.array.fill(0);
+  for (let i = 0; i < MAX_DRONES; i++) dockAng[i] = Math.random() * TAU;
+  droneMesh.count = cargoMesh.count = N;
+  navPoints.geometry.setDrawRange(0, N);
+  streakGeo.setDrawRange(0, N * 2);
+  for (const m of [droneMesh, cargoMesh, panelMesh, strutMesh, nodeMesh]) m.instanceMatrix.needsUpdate = true;
+  panelHeat.needsUpdate = true;
+  followId = -1;
+  globalUniforms.uAct.value = 0;
+  shownBanner = -1;
+}
+
+function launchDrone(i, t) {
+  dockPos(t, i, tmp3);
+  const b = i * 3;
+  P[b] = PP[b] = tmp3[0]; P[b + 1] = PP[b + 1] = tmp3[1]; P[b + 2] = PP[b + 2] = tmp3[2];
+  const a = foundryAngle(t);
+  FWD[b] = -Math.sin(a); FWD[b + 1] = 0; FWD[b + 2] = -Math.cos(a);
+  VEL[b] = VEL[b + 1] = VEL[b + 2] = 0;
+  planFree(i, rand(PARK_MIN, PARK_MAX), Math.PI * 0.5, Math.PI * 1.1);
+  LEGF[i] = 0; TGTMODE[i] = 0;
+  state[i] = TO_PARK;
+}
+
+function siteFor(kind, idx, out) {
+  if (kind === JOB_STRUT) {
+    const d = strutData, b = idx * 13;
+    const mx = d[b] + d[b + 3] * d[b + 6] * 0.5, my = d[b + 1] + d[b + 4] * d[b + 6] * 0.5, mz = d[b + 2] + d[b + 5] * d[b + 6] * 0.5;
+    const l = Math.hypot(mx, my, mz), R = SHELL_R + 0.85;
+    out[0] = mx / l * R; out[1] = my / l * R; out[2] = mz / l * R;
+  } else {
+    const R = SHELL_R + (kind === JOB_MAINT ? 1.6 : 0.95);
+    out[0] = PG.pos[idx * 3] * R; out[1] = PG.pos[idx * 3 + 1] * R; out[2] = PG.pos[idx * 3 + 2] * R;
+  }
+}
+
+function assignJob(i, kind, idx, t) {
+  jobKind[i] = kind; jobIdx[i] = idx;
+  siteFor(kind, idx, tmp3);
+  TGT[i * 3] = tmp3[0]; TGT[i * 3 + 1] = tmp3[1]; TGT[i * 3 + 2] = tmp3[2];
+  if (kind === JOB_MAINT) {
+    planArc(i, tmp3[0], tmp3[1], tmp3[2]);
+    LEGF[i] = 2; TGTMODE[i] = 1; state[i] = TO_SITE;
+  } else {
+    planToDock(i, t);
+    LEGF[i] = 0; TGTMODE[i] = 2; state[i] = TO_FOUNDRY;
+    cargoMesh.setColorAt(i, kind === JOB_STRUT ? CARGO_STRUT_COL : CARGO_PANEL_COL);
+    cargoMesh.instanceColor.needsUpdate = true;
+  }
+}
+
+function completeJob(i) {
+  const k = jobKind[i], idx = jobIdx[i];
+  if (k === JOB_STRUT) {
+    strutsBuilt++;
+    anims.push({ kind: 0, idx, age: 0 });
+    showNode(FG.edges[idx * 2]); showNode(FG.edges[idx * 2 + 1]);
+  } else if (k === JOB_PANEL) {
+    panelsBuilt++;
+    anims.push({ kind: 1, idx, age: 0 });
+  } else if (k === JOB_MAINT) {
+    anims.push({ kind: 2, idx, age: 0 });
+  }
+  jobKind[i] = JOB_NONE;
+}
+
+function arrive(i, t) {
+  switch (state[i]) {
+    case TO_FOUNDRY: state[i] = DOCK; TIMER[i] = rand(0.5, 0.9); break;
+    case TO_SITE: state[i] = WORK; TIMER[i] = jobKind[i] === JOB_MAINT ? 1.8 : 1.1; break;
+    case TO_PARK: state[i] = PARK; pushIdle(i); break;
+  }
+}
+
+function stepDrone(i, h, t) {
+  const b = i * 3;
+  switch (state[i]) {
+    case PARK: {
+      TH[i] += omega(R1[i]) * h;
+      const r = R1[i], c = Math.cos(TH[i]) * r, s = Math.sin(TH[i]) * r;
+      P[b] = c * U[b] + s * W[b]; P[b + 1] = c * U[b + 1] + s * W[b + 1]; P[b + 2] = c * U[b + 2] + s * W[b + 2];
+      break;
+    }
+    case TO_FOUNDRY: case TO_SITE: case TO_PARK: {
+      const d = DTH[i], k = TH[i] / d, e = k * k * (3 - 2 * k);
+      let rate = omega(R0[i] + (R1[i] - R0[i]) * e);
+      const fl = LEGF[i];
+      if (fl & 1) rate *= 0.1 + 0.9 * sstep(0, 0.16, k);
+      if (fl & 2) rate *= 0.08 + 0.92 * (1 - sstep(0.76, 1, k));
+      TH[i] += rate * h;
+      if (TH[i] >= d) { TH[i] = d; evalLeg(i, t); arrive(i, t); }
+      else evalLeg(i, t);
+      break;
+    }
+    case DOCK: {
+      dockPos(t, i, tmp3);
+      P[b] = tmp3[0]; P[b + 1] = tmp3[1]; P[b + 2] = tmp3[2];
+      TIMER[i] -= h;
+      if (TIMER[i] <= 0) {                           // loaded — fly to the construction site
+        planArc(i, TGT[b], TGT[b + 1], TGT[b + 2]);
+        LEGF[i] = 2; TGTMODE[i] = 1; state[i] = TO_SITE;
+      }
+      break;
+    }
+    case WORK: {
+      const bob = Math.sin(t * 9 + i) * 0.04;
+      const l = Math.hypot(TGT[b], TGT[b + 1], TGT[b + 2]), f = (l + bob) / l;
+      P[b] = TGT[b] * f; P[b + 1] = TGT[b + 1] * f; P[b + 2] = TGT[b + 2] * f;
+      TIMER[i] -= h;
+      if (TIMER[i] <= 0) {
+        completeJob(i);
+        planFree(i, rand(PARK_MIN, PARK_MAX), Math.PI * 0.45, Math.PI * 0.9);
+        LEGF[i] = 1; TGTMODE[i] = 0; state[i] = TO_PARK;
+      }
+      break;
+    }
+  }
+}
+
+function simulate(dt) {
+  const t0 = simTime;
+  simTime += dt;
+
+  // --- Phase I: fabrication
+  if (launched < N) {
+    fabAcc += (N / FAB_TIME) * dt;
+    while (fabAcc >= 1 && launched < N) { fabAcc -= 1; launchDrone(launched++, simTime); }
+  }
+  // --- Phase II: scaffold dispatch (starts once a quarter of the swarm exists)
+  if (!scaffoldOn && launched >= N * 0.25) scaffoldOn = true;
+  if (scaffoldOn && strutPtr < STRUT_N) {
+    strutAcc = Math.min(strutAcc + STRUT_RATE * dt, 10);
+    while (strutAcc >= 1 && strutPtr < STRUT_N && idleLen > 0) { strutAcc -= 1; assignJob(popIdle(), JOB_STRUT, strutOrder[strutPtr++], simTime); }
+  }
+  // --- Phase III: plating follows the scaffold wave
+  if (!platingOn && strutsBuilt >= STRUT_N * 0.7) platingOn = true;
+  if (platingOn && panelPtr < PANEL_N) {
+    panelAcc = Math.min(panelAcc + PANEL_RATE * dt, 10);
+    while (panelAcc >= 1 && panelPtr < PANEL_N && idleLen > 0) { panelAcc -= 1; assignJob(popIdle(), JOB_PANEL, panelOrder[panelPtr++], simTime); }
+  }
+  // --- Phase IV: ignition
+  if (panelsBuilt === PANEL_N && ignitionT < 0) ignitionT = simTime;
+  if (ignitionT >= 0) {
+    activation = Math.min(1.5, (simTime - ignitionT) / 9);
+    if (activation >= 1.5) complete = true;
+  }
+  if (complete) {                                    // steady-state inspection patrols
+    maintAcc = Math.min(maintAcc + 6 * dt, 4);
+    while (maintAcc >= 1 && idleLen > 0) { maintAcc -= 1; assignJob(popIdle(), JOB_MAINT, (Math.random() * PANEL_N) | 0, simTime); }
+  }
+
+  // --- Integrate every drone (sub-stepped at high time warp)
+  const steps = Math.max(1, Math.ceil(dt / 0.06)), h = dt / steps;
+  for (let s = 1; s <= steps; s++) {
+    const t = t0 + h * s;
+    for (let i = 0; i < N; i++) if (state[i] !== DORMANT) stepDrone(i, h, t);
+  }
+
+  updateItems(dt);
+}
+
+// Installed-item animations (panels drop in and flash, struts extend)
+function updateItems(dt) {
+  let panelsDirty = false, strutsDirty = false, heatDirty = false;
+  for (let k = anims.length - 1; k >= 0; k--) {
+    const a = anims[k];
+    a.age += dt;
+    if (a.kind === 0) {
+      const g = Math.min(1, a.age / 0.6);
+      setStrutMatrix(a.idx, 1 - Math.pow(1 - g, 3));
+      strutsDirty = true;
+      if (g >= 1) { anims[k] = anims[anims.length - 1]; anims.pop(); }
+    } else if (a.kind === 1) {
+      const g = Math.min(1, a.age / 0.7);
+      const c1 = 1.70158, c3 = c1 + 1, x = g - 1;
+      const s = g >= 1 ? 1 : Math.max(0, 1 + c3 * x * x * x + c1 * x * x);   // ease-out-back
+      setPanelMatrix(a.idx, s, (1 - g) * 0.9);
+      panelHeat.array[a.idx] = Math.max(0, 1 - a.age / 2.2);
+      panelsDirty = heatDirty = true;
+      if (a.age >= 2.2) { panelHeat.array[a.idx] = 0; anims[k] = anims[anims.length - 1]; anims.pop(); }
+    } else {
+      panelHeat.array[a.idx] = 0.45 * Math.max(0, 1 - a.age / 1.4);
+      heatDirty = true;
+      if (a.age >= 1.4) { panelHeat.array[a.idx] = 0; anims[k] = anims[anims.length - 1]; anims.pop(); }
+    }
+  }
+  if (panelsDirty) panelMesh.instanceMatrix.needsUpdate = true;
+  if (strutsDirty) strutMesh.instanceMatrix.needsUpdate = true;
+  if (heatDirty) panelHeat.needsUpdate = true;
+}
+
+// Write instance matrices / nav lights / streaks from simulation state
+function writeDrones(dt) {
+  const m = droneMesh.instanceMatrix.array, cm = cargoMesh.instanceMatrix.array;
+  const smooth = 1 - Math.exp(-dt * 5);
+  const s = DRONE_SCALE;
+  const flick = simTime * 37;
+  for (let i = 0; i < N; i++) {
+    const st = state[i];
+    if (st === DORMANT) continue;
+    const b = i * 3, o = i * 16;
+    const px = P[b], py = P[b + 1], pz = P[b + 2];
+    let vx = (px - PP[b]) / dt, vy = (py - PP[b + 1]) / dt, vz = (pz - PP[b + 2]) / dt;
+    PP[b] = px; PP[b + 1] = py; PP[b + 2] = pz;
+    VEL[b] = vx; VEL[b + 1] = vy; VEL[b + 2] = vz;
+    const sp = Math.hypot(vx, vy, vz);
+    let fx = FWD[b], fy = FWD[b + 1], fz = FWD[b + 2];
+    if (sp > 0.3) {
+      fx += (vx / sp - fx) * smooth; fy += (vy / sp - fy) * smooth; fz += (vz / sp - fz) * smooth;
+      const fl = Math.hypot(fx, fy, fz) || 1; fx /= fl; fy /= fl; fz /= fl;
+      FWD[b] = fx; FWD[b + 1] = fy; FWD[b + 2] = fz;
+    }
+    const pl = Math.hypot(px, py, pz);
+    const ux = px / pl, uy = py / pl, uz = pz / pl;           // "up" = away from the star (wings face it)
+    let rx = uy * fz - uz * fy, ry = uz * fx - ux * fz, rz = ux * fy - uy * fx;
+    let rl = Math.hypot(rx, ry, rz);
+    if (rl < 1e-3) { rx = 1; ry = 0; rz = 0; rl = 1; }
+    rx /= rl; ry /= rl; rz /= rl;
+    const u2x = fy * rz - fz * ry, u2y = fz * rx - fx * rz, u2z = fx * ry - fy * rx;
+    UPV[b] = u2x; UPV[b + 1] = u2y; UPV[b + 2] = u2z;
+
+    m[o] = rx * s; m[o + 1] = ry * s; m[o + 2] = rz * s; m[o + 3] = 0;
+    m[o + 4] = u2x * s; m[o + 5] = u2y * s; m[o + 6] = u2z * s; m[o + 7] = 0;
+    m[o + 8] = fx * s; m[o + 9] = fy * s; m[o + 10] = fz * s; m[o + 11] = 0;
+    m[o + 12] = px; m[o + 13] = py; m[o + 14] = pz; m[o + 15] = 1;
+
+    // Cargo slung beneath the drone (transfers to the site while welding)
+    const jk = jobKind[i];
+    const carrying = jk === JOB_STRUT || jk === JOB_PANEL;
+    const loaded = carrying && (st === TO_SITE || st === WORK || (st === DOCK && TIMER[i] < 0.35));
+    if (loaded) {
+      let cx = px - u2x * 0.42, cy = py - u2y * 0.42, cz = pz - u2z * 0.42;
+      if (st === WORK) {
+        const k = sstep(1.1, 0.2, TIMER[i]);
+        const l = Math.hypot(TGT[b], TGT[b + 1], TGT[b + 2]);
+        const R = jk === JOB_STRUT ? FRAME_R : SHELL_R;
+        cx += (TGT[b] / l * R - cx) * k; cy += (TGT[b + 1] / l * R - cy) * k; cz += (TGT[b + 2] / l * R - cz) * k;
+      }
+      const sx = jk === JOB_STRUT ? 0.11 : 0.95, sy = jk === JOB_STRUT ? 0.11 : 0.07, sz = jk === JOB_STRUT ? 1.7 : 0.95;
+      cm[o] = rx * sx; cm[o + 1] = ry * sx; cm[o + 2] = rz * sx; cm[o + 3] = 0;
+      cm[o + 4] = u2x * sy; cm[o + 5] = u2y * sy; cm[o + 6] = u2z * sy; cm[o + 7] = 0;
+      cm[o + 8] = fx * sz; cm[o + 9] = fy * sz; cm[o + 10] = fz * sz; cm[o + 11] = 0;
+      cm[o + 12] = cx; cm[o + 13] = cy; cm[o + 14] = cz; cm[o + 15] = 1;
+    } else if (cm[o + 15] !== 0) {
+      cm.fill(0, o, o + 16);
+    }
+
+    // Nav light / engine glow
+    let cr, cg, cb, size;
+    switch (st) {
+      case PARK: cr = 0.18; cg = 0.5; cb = 1.0; size = 0.75; break;
+      case TO_FOUNDRY: cr = 0.3; cg = 0.75; cb = 1.6; size = 0.95; break;
+      case DOCK: cr = 2.4; cg = 2.1; cb = 1.5; size = 1.3; break;
+      case TO_SITE:
+        if (jk === JOB_STRUT) { cr = 0.6; cg = 1.35; cb = 2.8; }
+        else if (jk === JOB_PANEL) { cr = 2.8; cg = 1.35; cb = 0.3; }
+        else { cr = 0.35; cg = 2.2; cb = 0.7; }
+        size = 1.15; break;
+      case WORK: {
+        const f = 0.55 + 0.45 * Math.sin(flick + i * 1.7) * Math.sin(flick * 0.61 + i);
+        if (jk === JOB_MAINT) { cr = 0.4 * f; cg = 2.6 * f; cb = 0.9 * f; size = 1.6; }
+        else { cr = 4.2 * f; cg = 3.8 * f; cb = 3.2 * f; size = 2.4; }
+        break;
+      }
+      default: cr = 0.22; cg = 0.55; cb = 1.15; size = 0.85;
+    }
+    const nx = st === WORK ? px - u2x * 0.3 : px - fx * 0.42 * s;
+    const ny = st === WORK ? py - u2y * 0.3 : py - fy * 0.42 * s;
+    const nz = st === WORK ? pz - u2z * 0.3 : pz - fz * 0.42 * s;
+    navPos[b] = nx; navPos[b + 1] = ny; navPos[b + 2] = nz;
+    navCol[b] = cr; navCol[b + 1] = cg; navCol[b + 2] = cb;
+    navSize[i] = size;
+
+    // Velocity streak (length ∝ orbital speed)
+    const so = i * 6, k = 0.085;
+    streakPos[so] = nx; streakPos[so + 1] = ny; streakPos[so + 2] = nz;
+    streakPos[so + 3] = nx - vx * k; streakPos[so + 4] = ny - vy * k; streakPos[so + 5] = nz - vz * k;
+    streakCol[so] = cr * 0.45; streakCol[so + 1] = cg * 0.45; streakCol[so + 2] = cb * 0.45;
+    streakCol[so + 3] = 0; streakCol[so + 4] = 0; streakCol[so + 5] = 0;
+  }
+  droneMesh.instanceMatrix.needsUpdate = true;
+  cargoMesh.instanceMatrix.needsUpdate = true;
+  const ga = navPoints.geometry.attributes;
+  ga.position.needsUpdate = ga.aColor.needsUpdate = ga.aSize.needsUpdate = true;
+  streakGeo.attributes.position.needsUpdate = streakGeo.attributes.color.needsUpdate = true;
+}
+
+// ============================================================================
+// Power beams (Phase IV)
+// ============================================================================
+const beamMat = new THREE.ShaderMaterial({
+  uniforms: { uTime: globalUniforms.uTime, uI: { value: 0 } },
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader: `uniform float uTime; uniform float uI; varying vec2 vUv;
+    void main(){
+      float pulse = pow(fract(vUv.y*14.0 - uTime*1.6), 6.0);
+      float fade = smoothstep(0.0,0.05,vUv.y)*smoothstep(1.0,0.9,vUv.y);
+      vec3 c = vec3(2.2,0.9,0.28)*(0.45 + 1.6*pulse);
+      gl_FragColor = vec4(c*fade*uI, 1.0);
+    }`,
+});
+const beamGeo = new THREE.CylinderGeometry(0.32, 0.32, 1, 10, 1, true);
+const beams = [new THREE.Mesh(beamGeo, beamMat), new THREE.Mesh(beamGeo, beamMat)];
+beams.forEach(b => { b.visible = false; b.frustumCulled = false; scene.add(b); });
+const receiverGlowTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.25, 'rgba(255,200,120,0.5)'); gr.addColorStop(1, 'rgba(255,120,40,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+})();
+const receivers = [0, 1].map(() => {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: receiverGlowTex, color: new THREE.Color(2.5, 1.2, 0.5), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+  s.visible = false; scene.add(s); return s;
+});
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _d = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+function placeBeam(beam, target, offset, intensity) {
+  _d.copy(target).normalize();
+  _a.copy(_d).multiplyScalar(SHELL_R + 0.3);
+  _b.copy(target).addScaledVector(_d, -offset);
+  const L = _a.distanceTo(_b);
+  beam.position.addVectors(_a, _b).multiplyScalar(0.5);
+  beam.quaternion.setFromUnitVectors(_up, _d);
+  beam.scale.set(1 + intensity * 0.5, L, 1 + intensity * 0.5);
+}
+
+// ============================================================================
+// Camera modes
+// ============================================================================
+let camMode = 'orbit', followId = -1;
+const lookTarget = new THREE.Vector3();
+const pathLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: new THREE.Color(0.5, 1.1, 2.0), transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending }));
+pathLine.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(97 * 3), 3));
+pathLine.frustumCulled = false;
+pathLine.visible = false;
+scene.add(pathLine);
+
+function pickFollow() {
+  const pref = [TO_SITE, TO_FOUNDRY, DOCK, WORK];
+  for (const want of pref) {
+    for (let tries = 0; tries < 400; tries++) {
+      const i = (Math.random() * N) | 0;
+      if (state[i] === want) { followId = i; return; }
+    }
+  }
+  for (let i = 0; i < N; i++) if (state[i] !== DORMANT) { followId = i; return; }
+  followId = -1;
+}
+
+function updatePathLine() {
+  const i = followId;
+  const st = i >= 0 ? state[i] : DORMANT;
+  const arr = pathLine.geometry.attributes.position.array;
+  const b = i * 3;
+  if (st === TO_FOUNDRY || st === TO_SITE || st === TO_PARK || st === PARK) {
+    const th0 = TH[i], th1 = st === PARK ? TH[i] + TAU : DTH[i];
+    for (let k = 0; k <= 96; k++) {
+      const th = th0 + (th1 - th0) * k / 96;
+      let r;
+      if (st === PARK) r = R1[i];
+      else { const x = th / DTH[i], e = x * x * (3 - 2 * x); r = R0[i] + (R1[i] - R0[i]) * e; }
+      const c = Math.cos(th) * r, s = Math.sin(th) * r;
+      arr[k * 3] = c * U[b] + s * W[b]; arr[k * 3 + 1] = c * U[b + 1] + s * W[b + 1]; arr[k * 3 + 2] = c * U[b + 2] + s * W[b + 2];
+    }
+    pathLine.geometry.attributes.position.needsUpdate = true;
+    pathLine.visible = true;
+  } else pathLine.visible = false;
+}
+
+const _cam = new THREE.Vector3(), _look = new THREE.Vector3(), _fp = new THREE.Vector3();
+function updateCamera(dtReal) {
+  const k = 1 - Math.exp(-dtReal * 3.5);
+  if (camMode === 'orbit') {
+    controls.target.lerp(_look.set(0, 0, 0), 1 - Math.exp(-dtReal * 2));
+    controls.update();
+    pathLine.visible = false;
+  } else if (camMode === 'drone') {
+    if (followId < 0 || state[followId] === DORMANT || (state[followId] === PARK && Math.random() < dtReal * 0.25)) pickFollow();
+    if (followId < 0) return;
+    const b = followId * 3;
+    _fp.set(P[b], P[b + 1], P[b + 2]);
+    _cam.set(P[b] - FWD[b] * 6 + UPV[b] * 2.4, P[b + 1] - FWD[b + 1] * 6 + UPV[b + 1] * 2.4, P[b + 2] - FWD[b + 2] * 6 + UPV[b + 2] * 2.4);
+    camera.position.lerp(_cam, k);
+    _look.set(P[b] + FWD[b] * 5, P[b + 1] + FWD[b + 1] * 5, P[b + 2] + FWD[b + 2] * 5);
+    lookTarget.lerp(_look, 1 - Math.exp(-dtReal * 6));
+    camera.up.set(UPV[b], UPV[b + 1], UPV[b + 2]).lerp(_up, 0.3).normalize();
+    camera.lookAt(lookTarget);
+    updatePathLine();
+  } else if (camMode === 'foundry') {
+    _fp.copy(foundry.position);
+    const radial = _d.copy(_fp).normalize();
+    const a = foundryAngle(simTime);
+    // trail the foundry slightly sunward so its lit hemisphere, the dock ring and the shell share the frame
+    _cam.copy(_fp).addScaledVector(radial, 8).add(_a.set(Math.sin(a) * 34, 14, Math.cos(a) * 34));
+    camera.position.lerp(_cam, k);
+    _look.copy(_fp).multiplyScalar(0.8);
+    lookTarget.lerp(_look, k);
+    camera.up.lerp(_up, k);
+    camera.lookAt(lookTarget);
+    pathLine.visible = false;
+  }
+}
+
+function setCamMode(mode) {
+  if (mode === camMode && mode === 'drone') { pickFollow(); return; }
+  if (camMode === 'orbit' && mode !== 'orbit') lookTarget.copy(controls.target);
+  if (mode === 'orbit') { controls.target.copy(lookTarget); camera.up.set(0, 1, 0); }
+  camMode = mode;
+  controls.enabled = mode === 'orbit';
+  if (mode === 'drone') pickFollow();
+  document.getElementById('bOrbit').classList.toggle('on', mode === 'orbit');
+  document.getElementById('bDrone').classList.toggle('on', mode === 'drone');
+  document.getElementById('bFoundry').classList.toggle('on', mode === 'foundry');
+}
+
+// ============================================================================
+// HUD & controls
+// ============================================================================
+let paused = false, speed = 2, cutaway = false;
+const $ = id => document.getElementById(id);
+const phaseEls = [...document.querySelectorAll('.phase')];
+const banner = $('banner');
+let shownBanner = -1, bannerTimer = 0;
+const BANNERS = [
+  ['PHASE I · SWARM FABRICATION', 'foundry world online · drones entering parking orbits'],
+  ['PHASE II · LATTICE SCAFFOLD', 'geodesic truss deployment · equatorial belt first'],
+  ['PHASE III · COLLECTOR PLATING', `${PANEL_N.toLocaleString()} hexagonal collectors`],
+  ['PHASE IV · STELLAR CAPTURE', 'shell sealed · energy transmission online'],
+];
+
+function currentPhase() {
+  if (ignitionT >= 0) return 3;
+  if (platingOn) return 2;
+  if (scaffoldOn) return 1;
+  return 0;
+}
+
+function togglePause() { paused = !paused; $('bPause').textContent = paused ? '▶ Resume' : '❚❚ Pause'; $('bPause').classList.toggle('on', paused); }
+function setCutaway(on) {
+  cutaway = on;
+  for (const m of clipMats) { m.clippingPlanes = on ? [clipPlane] : null; m.clipShadows = false; m.needsUpdate = true; }
+  $('bCut').classList.toggle('on', on);
+}
+$('bPause').onclick = togglePause;
+$('speed').oninput = e => { speed = parseFloat(e.target.value); $('speedVal').textContent = speed.toFixed(speed < 1 ? 2 : 1) + '×'; };
+$('bOrbit').onclick = () => setCamMode('orbit');
+$('bDrone').onclick = () => setCamMode('drone');
+$('bFoundry').onclick = () => setCamMode('foundry');
+$('bCut').onclick = () => setCutaway(!cutaway);
+$('bStreak').onclick = () => { streaks.visible = !streaks.visible; $('bStreak').classList.toggle('on', streaks.visible); };
+$('bShadow').onclick = () => { sun.castShadow = !sun.castShadow; $('bShadow').classList.toggle('on', sun.castShadow); };
+let hintTimer = 0;
+function setClean(on) {
+  document.body.classList.toggle('clean', on);
+  const hint = $('cleanHint');
+  clearTimeout(hintTimer);
+  hint.classList.toggle('show', on);
+  if (on) hintTimer = setTimeout(() => hint.classList.remove('show'), 2500);   // fades out, leaving an unobstructed view
+}
+$('bClean').onclick = () => setClean(true);
+{
+  const q = new URLSearchParams(location.search);
+  if (q.has('clean') || location.hash === '#clean') setClean(true);
+}
+$('bRestart').onclick = () => { N = parseInt($('count').value, 10); resetMission(); };
+$('count').onchange = () => { N = parseInt($('count').value, 10); resetMission(); };
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.code === 'Space') { e.preventDefault(); togglePause(); }
+  else if (e.key === '1') setCamMode('orbit');
+  else if (e.key === '2') setCamMode('drone');
+  else if (e.key === '3') setCamMode('foundry');
+  else if (e.key === 'f' || e.key === 'F') setCamMode('drone');
+  else if (e.key === 'c' || e.key === 'C') setCutaway(!cutaway);
+  else if (e.key === 'h' || e.key === 'H') setClean(!document.body.classList.contains('clean'));
+  else if (e.key === 'Escape') setClean(false);
+});
+
+let hudAcc = 0, fpsFrames = 0, fpsAcc = 0;
+function updateHud(dtReal) {
+  fpsFrames++; fpsAcc += dtReal; hudAcc += dtReal;
+  // Phase banner
+  const ph = currentPhase();
+  if (ph !== shownBanner) {
+    shownBanner = ph;
+    banner.innerHTML = `${BANNERS[ph][0]}<small>${BANNERS[ph][1]}</small>`;
+    banner.style.opacity = 1; bannerTimer = 4;
+  }
+  if (bannerTimer > 0) { bannerTimer -= dtReal; if (bannerTimer <= 0) banner.style.opacity = 0; }
+  if (hudAcc < 0.2) return;
+  hudAcc = 0;
+
+  const prog = [launched / N, strutsBuilt / STRUT_N, panelsBuilt / PANEL_N, Math.min(1, activation / 1.5)];
+  phaseEls.forEach((el, k) => {
+    const p = prog[k];
+    el.querySelector('.pct').textContent = (p * 100).toFixed(k === 2 ? 1 : 0) + '%';
+    el.querySelector('.bar i').style.width = (p * 100).toFixed(2) + '%';
+    const active = k === 0 ? launched < N : k === 1 ? scaffoldOn && strutsBuilt < STRUT_N : k === 2 ? platingOn && panelsBuilt < PANEL_N : ignitionT >= 0 && !complete;
+    el.classList.toggle('active', active || (k === 3 && complete));
+    el.classList.toggle('done', p >= 1);
+  });
+
+  const counts = [0, 0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < N; i++) counts[state[i]]++;
+  const mm = Math.floor(simTime / 60), ss = Math.floor(simTime % 60);
+  $('sClock').textContent = `T+${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  if (fpsAcc > 0.5) { $('sFps').textContent = Math.round(fpsFrames / fpsAcc); fpsFrames = 0; fpsAcc = 0; }
+  $('sOnline').textContent = `${launched.toLocaleString()} / ${N.toLocaleString()}`;
+  $('sToF').textContent = counts[TO_FOUNDRY].toLocaleString();
+  $('sDock').textContent = counts[DOCK].toLocaleString();
+  $('sToS').textContent = counts[TO_SITE].toLocaleString();
+  $('sWork').textContent = counts[WORK].toLocaleString();
+  $('sPark').textContent = (counts[PARK] + counts[TO_PARK]).toLocaleString();
+  $('sStruts').textContent = `${strutsBuilt.toLocaleString()} / ${STRUT_N.toLocaleString()}`;
+  $('sPanels').textContent = `${panelsBuilt.toLocaleString()} / ${PANEL_N.toLocaleString()}`;
+  const cover = panelsBuilt / PANEL_N;
+  $('sCover').textContent = (cover * 100).toFixed(1) + '%';
+  const yw = cover * 0.87 * L_SUN_YW * (0.35 + 0.65 * Math.min(1, activation / 1.5));
+  $('sPower').textContent = yw < 1 ? `${(yw * 1000).toFixed(0)} ZW` : `${yw.toFixed(1)} YW`;
+  const watts = yw * 1e24 + 1e16;
+  $('sKard').textContent = ((Math.log10(watts) - 6) / 10).toFixed(2);
+}
+
+// ============================================================================
+// Main loop
+// ============================================================================
+const clock = new THREE.Clock();
+const _gp = new THREE.Vector3();
+
+function frame() {
+  requestAnimationFrame(frame);
+  const dtReal = Math.min(clock.getDelta(), 0.05);
+  const dt = paused ? 0 : dtReal * speed;
+
+  if (dt > 0) {
+    simulate(dt);
+    writeDrones(dt);
+  }
+  globalUniforms.uTime.value += dtReal;
+  globalUniforms.uAct.value = activation;
+
+  // Celestial bodies on Keplerian orbits
+  const fa = foundryAngle(simTime);
+  foundry.position.set(FOUNDRY_R * Math.cos(fa), 0, -FOUNDRY_R * Math.sin(fa));
+  foundryMesh.rotation.y = simTime * 0.2;
+  dockRing.quaternion.copy(ringTilt);
+  dockRing.rotateZ(RING_SPIN * simTime);
+  giantPos(simTime, giant.position);
+  giant.getObjectByName('giantBody').rotation.y = simTime * 0.35;
+  belt.rotation.y = omega(131) * simTime;
+  starMesh.rotation.y = simTime * 0.03;
+  corona.quaternion.copy(camera.quaternion);
+
+  // Power beams once the shell is energised
+  const beamI = sstep(0.6, 1.3, activation);
+  beamMat.uniforms.uI.value = beamI;
+  const beamOn = beamI > 0.001;
+  beams[0].visible = beams[1].visible = receivers[0].visible = receivers[1].visible = beamOn;
+  if (beamOn) {
+    placeBeam(beams[0], foundry.position, 5.2, beamI);
+    placeBeam(beams[1], giant.position, 11.8, beamI);
+    receivers[0].position.copy(foundry.position).addScaledVector(_gp.copy(foundry.position).normalize(), -5);
+    receivers[1].position.copy(giant.position).addScaledVector(_gp.copy(giant.position).normalize(), -11.5);
+    receivers[0].scale.setScalar(6 * beamI); receivers[1].scale.setScalar(12 * beamI);
+  }
+
+  updateCamera(dtReal);
+
+  if (cutaway) {
+    _d.copy(camera.position).normalize();
+    clipPlane.normal.copy(_d).negate();
+    clipPlane.constant = 0;
+  }
+
+  if (window.innerWidth > 0 && window.innerHeight > 0) composer.render();   // skip while the window is collapsed
+  updateHud(dtReal);
+}
+
+window.addEventListener('resize', () => {
+  if (!window.innerWidth || !window.innerHeight) return;
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+  bloom.resolution.set(window.innerWidth, window.innerHeight);
+  updatePointScale();
+});
+
+resetMission();
+frame();
+
+// Expose a small handle for debugging in the console
+window.dyson = {
+  get state() { return { simTime, launched, strutsBuilt, panelsBuilt, activation, idleLen, PANEL_N, STRUT_N, NODE_N, N }; },
+  advance(sec, step = 0.1) { for (let t = 0; t < sec; t += step) simulate(step); writeDrones(step); simulate(step); writeDrones(step); },
+};
+</script>
+</body>
+</html>

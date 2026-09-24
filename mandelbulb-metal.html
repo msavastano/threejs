@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Metallic Mandelbulb — GLSL Raymarching</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- ============================================================
+     Fragment shader: full-screen quad raymarcher
+     ============================================================ -->
+<script id="fs" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+
+uniform vec2  uRes;
+uniform float uTime;
+
+out vec4 outColor;
+
+#define PI 3.14159265359
+#define MAX_DIST 20.0          // far clip for the scene ray
+#define MAX_STEPS 128          // primary march step budget
+
+// ------------------------------------------------------------
+// key light direction + hash utilities
+// ------------------------------------------------------------
+const vec3 LDIR = normalize(vec3(0.7, 0.55, -0.4));
+
+float hash(float n) { return fract(sin(n) * 43758.5453123); }
+vec2 hash2(vec2 p) {
+    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return fract(sin(p) * 43758.5453123);
+}
+
+// ------------------------------------------------------------
+// Mandelbulb SDF (power-8). Bounding-sphere accelerated.
+// ------------------------------------------------------------
+float mandelbulb(vec3 p) {
+    // cheap bounding sphere: skip iteration when far outside
+    if (length(p) > 1.25) return length(p) - 1.2;
+
+    vec3 w = p;
+    float m = dot(w, w);
+    float dz = 1.0;            // running derivative magnitude (for DE)
+    for (int i = 0; i < 4; i++) {
+        dz = 8.0 * pow(m, 3.5) * dz + 1.0;
+
+        // spherical power map: r^8 * (sin/cos polar form)
+        float r  = length(w);
+        float b  = 8.0 * acos(clamp(w.y / r, -1.0, 1.0));
+        float a  = 8.0 * atan(w.x, w.z);
+        w = p + pow(r, 8.0) * vec3(sin(b)*sin(a), cos(b), sin(b)*cos(a));
+
+        m = dot(w, w);
+        if (m > 256.0) break;
+    }
+    return 0.25 * log(m) * sqrt(m) / dz;   // analytic distance estimate
+}
+
+// Scene = bulb + ground plane, with material id in y
+vec2 mapScene(vec3 p) {
+    float d = mandelbulb(p);                       // mat 0 = metal
+    float g = p.y + 1.35;                          // mat 1 = dark glossy floor
+    return (d < g) ? vec2(d, 0.0) : vec2(g, 1.0);
+}
+
+// ------------------------------------------------------------
+// Normal via central differences of the DE field
+// ------------------------------------------------------------
+vec3 calcNormal(vec3 p) {
+    const vec2 e = vec2(1.0, -1.0) * 0.0008;
+    return normalize(
+        e.xyy * mandelbulb(p + e.xyy) +
+        e.yyx * mandelbulb(p + e.yyx) +
+        e.yxy * mandelbulb(p + e.yxy) +
+        e.xxx * mandelbulb(p + e.xxx));
+}
+
+// ------------------------------------------------------------
+// Sphere tracing: returns hit distance along the ray,
+// or -1.0 when the ray escapes within [tmin, tmax]
+// ------------------------------------------------------------
+float trace(vec3 ro, vec3 rd, float tmin, float tmax) {
+    float t = tmin;
+    for (int i = 0; i < MAX_STEPS; i++) {
+        float h = mapScene(ro + rd * t).x;
+        if (h < 0.0007 * t + 0.0004) return t;   // relative hit epsilon
+        t += h * 0.9;                            // slight undershoot for stability
+        if (t > tmax) break;
+    }
+    return -1.0;
+}
+
+// ------------------------------------------------------------
+// Smooth soft shadows (IQ's quadratic smooth-minimum kernel)
+// ------------------------------------------------------------
+float softShadow(vec3 ro, vec3 rd, float tmin, float tmax) {
+    float res   = 1.0;
+    float t     = tmin;
+    for (int i = 0; i < 48; i++) {
+        float h = mapScene(ro + rd * t).x;
+        res = min(res, smoothstep(0.0, 1.0, 10.0 * h / t));
+        t += clamp(h, 0.006, 0.25);
+        if (res < 0.005 || t > tmax) break;
+    }
+    return clamp(res, 0.0, 1.0);
+}
+
+// ------------------------------------------------------------
+// 5-tap AO along the surface normal
+// ------------------------------------------------------------
+float calcAO(vec3 pos, vec3 n) {
+    float occ = 0.0, sca = 1.0;
+    for (int i = 1; i <= 5; i++) {
+        float h = 0.01 + 0.13 * float(i) / 5.0;
+        occ += (h - mapScene(pos + n * h).x) * sca;
+        sca *= 0.72;
+        }
+    return clamp(1.0 - 2.2 * occ, 0.0, 1.0);
+}
+
+// ------------------------------------------------------------
+// Sphere-traced reflection ray
+// ------------------------------------------------------------
+vec3 reflectColor(vec3 pos, vec3 n, vec3 rd, inout float seed) {
+    seed += 17.0;
+    vec3 refl = reflect(rd, n);
+    // jitter start point to hide the self-hit seam
+    vec3 ro = pos + n * 0.002 + refl * (hash(seed) * 0.004);
+    float t = trace(ro, refl, 0.02, MAX_DIST);
+    vec3 sky = mix(vec3(0.05, 0.06, 0.09), vec3(0.9, 0.95, 1.0),
+                   pow(max(refl.y, 0.0), 0.6));       // gradient env
+    if (t > 0.0) {
+        vec3 p = ro + refl * t;
+        vec2 h = mapScene(p);
+        vec3 nn = calcNormal(p);
+        float ao2 = calcAO(p, nn);
+        if (h.y < 0.5) {
+            // metal reflecting itself: dim lambert + fresnel rim
+            float dif = max(dot(nn, LDIR), 0.0)
+                      * softShadow(p, LDIR, 0.02, 8.0);
+            vec3 c = vec3(0.75, 0.53, 0.21)
+                   * (0.15 + 0.85 * dif * ao2)
+                   + 0.12 * ao2;
+            return mix(c, sky, pow(1.0 - max(dot(-refl, nn), 0.0), 5.0));
+        } else {
+            float sh = softShadow(p, LDIR, 0.02, 8.0);
+            vec3 c = vec3(0.16) * (0.45 + 0.55 * sh);
+            return mix(c, sky, pow(1.0 - max(dot(-refl, nn), 0.0), 5.0));
+        }
+    }
+    return sky;
+}
+
+void main() {
+    // ---- camera: auto-orbit + gentle vertical bob -------------
+    float ang  = uTime * 0.22;
+    vec3 ta    = vec3(0.0, -0.05, 0.0);
+    vec3 ro    = ta + vec3(sin(ang) * 3.4,
+                           0.55 + 0.18 * sin(uTime * 0.37),
+                           cos(ang) * 3.4);
+
+    // ---- build orthonormal camera basis ------------------------
+    vec3 ww = normalize(ta - ro);                 // forward
+    vec3 uu = normalize(cross(ww, vec3(0.0, 1.0, 0.0)));
+    vec3 vv = cross(uu, ww);
+
+    vec2 q  = gl_FragCoord.xy / uRes;
+    vec2 uv = (2.0 * gl_FragCoord.xy - uRes) / uRes.y;
+
+    const float R_APERTURE = 0.0015;
+    float R_FOCUS = length(ta - ro);
+    vec2 off = R_APERTURE * hash2(gl_FragCoord.xy);
+    vec3 rd = normalize(uv.x * uu + uv.y * vv + 2.2 * ww
+                        + uu * off.x + vv * off.y);
+
+    // ---- primary march -----------------------------------------
+    float t = trace(ro, rd, 0.0015, MAX_DIST);
+    vec3 col;
+
+    if (t < 0.0) {
+        // ---- sky: vertical gradient + faint sun glow ----------
+        col = mix(vec3(0.04, 0.05, 0.08), vec3(0.10, 0.12, 0.18),
+                  smoothstep(-0.4, 1.0, rd.y));
+        float s = pow(max(dot(rd, LDIR), 0.0), 32.0);
+        col += vec3(1.0, 0.85, 0.6) * s * 0.7;
+    } else {
+        vec3 pos = ro + rd * t;
+        vec2 hit = mapScene(pos);
+        vec3 nor = calcNormal(pos);
+
+        float ao  = calcAO(pos, nor);
+        float dif = max(dot(nor, LDIR), 0.0);
+        float sh  = softShadow(pos, LDIR, 0.02, 8.0);
+        float fre = pow(1.0 + dot(rd, nor), 5.0);      // grazing boost
+        vec3  hal = normalize(LDIR - rd);
+        float spe = pow(clamp(dot(nor, hal), 0.0, 1.0), 64.0);
+
+        if (hit.y < 0.5) {
+            // ---- brushed gold metal ---------------------------
+            vec3 base = vec3(0.83, 0.57, 0.22);
+            vec3 lin  = vec3(0.0);
+            lin += 4.2 * dif * sh * vec3(1.00, 0.86, 0.62);
+            lin += 0.42 * ao * vec3(0.14, 0.15, 0.19);   // ambient
+            col  = base * lin;
+            col += 5.0 * spe * sh * vec3(1.0, 0.92, 0.78) * (0.04 + 0.96 * fre);
+            col += 0.30 * fre * fre * base;              // fresnel edge tint
+            // one bounce reflection, energy-scaled by fresnel-ish factor
+            vec3 rc = reflectColor(pos, nor, rd, t);
+            col = mix(col, rc, clamp(0.10 + 0.55 * fre, 0.0, 0.75));
+        } else {
+            // ---- dark glossy floor -----------------------------
+            vec3 base = vec3(0.16);
+            vec3 lin  = vec3(0.0);
+            lin += 1.1 * dif * sh * vec3(1.0, 0.9, 0.75);
+            lin += 0.25 * ao * vec3(0.12, 0.13, 0.16);
+            col  = base * lin;
+            col += 1.2 * spe * sh;
+            vec3 rc = reflectColor(pos, nor, rd, t);
+            col = mix(col, rc, clamp(0.10 + 0.40 * fre, 0.0, 0.6));
+        }
+
+        // subtle distance fog toward the sky color
+        col = mix(col, vec3(0.05, 0.06, 0.09),
+                  1.0 - exp(-0.0009 * t * t));
+    }
+
+    // ---- grade: gamma, vignette, slight saturation lift --------
+    col = pow(col, vec3(0.4545));
+    float vig = 1.0 - 0.28 * pow(length(q - 0.5) * 1.414, 2.5);
+    col *= vig;
+    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    col = mix(vec3(lum), col, 1.12);
+
+    outColor = vec4(col, 1.0);
+}
+</script>
+
+<script>
+"use strict";
+/* ============================================================
+   WebGL2 bootstrap: fullscreen triangle + fragment shader
+   ============================================================ */
+const canvas = document.getElementById("c");
+const gl = canvas.getContext("webgl2", { antialias: false });
+
+if (!gl) {
+    document.body.innerHTML =
+        "<p style='color:#fff;font-family:sans-serif;padding:1em'>" +
+        "WebGL2 is not available in this browser.</p>";
+} else {
+    const vsSrc = `#version 300 es
+    void main() {
+        vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+        gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+    }`;
+
+    function compile(type, src) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+            throw new Error(gl.getShaderInfoLog(s));
+        }
+        return s;
+    }
+
+    const prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER, vsSrc));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER,
+                                  document.getElementById("fs").textContent));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(prog));
+    }
+    gl.useProgram(prog);
+    gl.bindVertexArray(gl.createVertexArray());
+
+    const uRes  = gl.getUniformLocation(prog, "uRes");
+    const uTime = gl.getUniformLocation(prog, "uTime");
+
+    function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+        const w = Math.floor(canvas.clientWidth  * dpr);
+        const h = Math.floor(canvas.clientHeight * dpr);
+        if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+            gl.viewport(0, 0, w, h);
+        }
+    }
+
+    let start = performance.now();
+    function frame(nowMs) {
+        resize();
+        gl.uniform2f(uRes, canvas.width, canvas.height);
+        gl.uniform1f(uTime, (nowMs - start) / 1000);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+}
+</script>
+</body>
+</html>

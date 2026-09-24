@@ -1,0 +1,1559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>4D Tesseract Explorer</title>
+<style>
+  :root {
+    --accent-cyan: #00f0ff;
+    --accent-pink: #ff00a0;
+    --bg-dark: #040209;
+    --bg-card: rgba(14, 8, 30, 0.6);
+    --border-color: rgba(157, 123, 255, 0.15);
+    --text-primary: #e2d9ff;
+    --text-secondary: rgba(180, 170, 220, 0.6);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: var(--bg-dark);
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text-primary);
+  }
+  #app { position: fixed; inset: 0; z-index: 1; }
+  canvas { display: block; }
+
+  #vignette {
+    position: fixed; inset: 0; pointer-events: none; z-index: 10;
+    background: radial-gradient(ellipse at center,
+      rgba(0,0,0,0) 30%, rgba(4,2,15,0.4) 70%, rgba(2,1,10,0.9) 100%);
+    mix-blend-mode: multiply;
+  }
+
+  /* Glassmorphism panel style */
+  .panel {
+    background: var(--bg-card);
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 20px;
+    pointer-events: auto;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6);
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  }
+  .panel:hover {
+    border-color: rgba(157, 123, 255, 0.3);
+    box-shadow: 0 8px 36px 0 rgba(157, 123, 255, 0.1);
+  }
+
+  #title-panel {
+    position: absolute; top: 24px; left: 24px; z-index: 20;
+    pointer-events: none; width: 340px;
+  }
+  #title-panel h1 {
+    font-size: 20px; font-weight: 700; letter-spacing: 0.28em; text-transform: uppercase;
+    background: linear-gradient(135deg, var(--accent-cyan) 0%, #a275ff 50%, var(--accent-pink) 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 12px rgba(157, 123, 255, 0.4));
+  }
+  #title-panel p {
+    margin-top: 6px; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+
+  /* Left Dashboard HUD */
+  #hud-left {
+    position: absolute; top: 96px; left: 24px; bottom: 24px; z-index: 20;
+    width: 340px; display: flex; flex-direction: column; gap: 16px;
+    pointer-events: none; overflow-y: auto;
+    padding-right: 4px;
+  }
+  #hud-left::-webkit-scrollbar { width: 4px; }
+  #hud-left::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
+  #hud-left::-webkit-scrollbar-thumb { background: rgba(157, 123, 255, 0.2); border-radius: 2px; }
+
+  .hud-section-title {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase;
+    color: var(--accent-cyan); margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between;
+    border-left: 2px solid var(--accent-cyan); padding-left: 8px;
+  }
+
+  /* 4D Matrix Display */
+  #matrix-container {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+    font-family: "Fira Code", "Courier New", Courier, monospace;
+    font-size: 10px; text-align: center;
+  }
+  .matrix-cell {
+    background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 4px; padding: 6px 2px; color: var(--accent-cyan);
+    font-variant-numeric: tabular-nums; transition: color 0.1s ease;
+  }
+  .matrix-cell.active-val {
+    color: var(--accent-pink);
+    text-shadow: 0 0 6px rgba(255, 0, 160, 0.5);
+  }
+
+  /* Coordinates HUD Table */
+  .coord-table-wrapper {
+    max-height: 280px; overflow-y: auto; border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 6px; background: rgba(0, 0, 0, 0.3);
+  }
+  .coord-table-wrapper::-webkit-scrollbar { width: 3px; }
+  .coord-table-wrapper::-webkit-scrollbar-thumb { background: rgba(157, 123, 255, 0.2); }
+  
+  #coord-table {
+    width: 100%; border-collapse: collapse; text-align: left;
+    font-family: "Fira Code", "Courier New", Courier, monospace; font-size: 9.5px;
+  }
+  #coord-table th {
+    position: sticky; top: 0; background: rgba(15, 10, 35, 0.95);
+    padding: 6px 8px; font-weight: 600; color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-color);
+  }
+  #coord-table td {
+    padding: 5px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+    color: var(--text-primary); font-variant-numeric: tabular-nums;
+  }
+  #coord-table tr.hovered-row {
+    background: rgba(0, 240, 255, 0.15) !important;
+  }
+  #coord-table tr.selected-row {
+    background: rgba(255, 0, 160, 0.2) !important;
+  }
+  #coord-table tr:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  /* Information/Logs Panel */
+  #hud-bottom {
+    position: absolute; bottom: 24px; left: 380px; right: 340px; z-index: 20;
+    pointer-events: none; height: 96px; display: flex; flex-direction: column; justify-content: flex-end;
+  }
+  #console {
+    background: rgba(5, 3, 12, 0.85); border: 1px solid var(--border-color);
+    border-radius: 8px; padding: 12px 16px; font-family: "Fira Code", monospace; font-size: 10px;
+    color: var(--text-secondary); max-height: 80px; overflow-y: auto; pointer-events: auto;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+  #console::-webkit-scrollbar { width: 3px; }
+  #console::-webkit-scrollbar-thumb { background: rgba(157, 123, 255, 0.2); }
+  .console-line { margin-bottom: 4px; line-height: 1.4; }
+  .console-line .time { color: var(--accent-cyan); margin-right: 8px; }
+  .console-line .highlight { color: var(--accent-pink); }
+  .console-line .system { color: #8a63ff; }
+
+  /* Floating 2D HTML Labels for 4D vertices */
+  .vertex-label {
+    position: absolute; z-index: 15; pointer-events: none;
+    font-family: "Fira Code", monospace; font-size: 9.5px; font-weight: 600;
+    color: var(--text-primary); background: rgba(10, 6, 22, 0.72);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px;
+    padding: 3px 6px; user-select: none;
+    transform: translate(-50%, -50%);
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s, transform 0.1s ease-out;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .vertex-label.hovered {
+    z-index: 18; border-color: var(--accent-cyan);
+    background: rgba(0, 240, 255, 0.18);
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+  }
+  .vertex-label.selected {
+    z-index: 19; border-color: var(--accent-pink);
+    background: rgba(255, 0, 160, 0.22);
+    box-shadow: 0 0 12px rgba(255, 0, 160, 0.5);
+  }
+  .vertex-label-coords {
+    display: none; font-size: 8px; color: var(--text-secondary); margin-top: 3px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 3px;
+  }
+  .vertex-label.hovered .vertex-label-coords, .vertex-label.selected .vertex-label-coords {
+    display: block;
+  }
+
+  /* Preset controls bar at bottom left */
+  #preset-bar {
+    display: flex; gap: 8px; width: 100%;
+  }
+  .preset-btn {
+    flex: 1; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px; padding: 6px 4px; color: var(--text-primary); font-size: 9.5px;
+    font-weight: 600; text-transform: uppercase; cursor: pointer; transition: all 0.2s ease;
+    text-align: center;
+  }
+  .preset-btn:hover {
+    background: rgba(157, 123, 255, 0.15); border-color: var(--accent-cyan);
+    color: var(--accent-cyan); box-shadow: 0 0 8px rgba(0, 240, 255, 0.2);
+  }
+  .preset-btn.active {
+    background: rgba(255, 0, 160, 0.15); border-color: var(--accent-pink);
+    color: var(--accent-pink); box-shadow: 0 0 8px rgba(255, 0, 160, 0.2);
+  }
+
+  /* lil-gui custom styling to blend in */
+  .lil-gui {
+    --background-color: rgba(12, 6, 26, 0.78);
+    --widget-color: rgba(45, 25, 75, 0.6);
+    --focus-color: var(--accent-pink);
+    --hover-color: rgba(157, 123, 255, 0.25);
+    --font-family: "Segoe UI", system-ui, sans-serif;
+    --title-background-color: rgba(20, 10, 40, 0.88);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    z-index: 25 !important; border: 1px solid var(--border-color); border-radius: 12px;
+    box-shadow: -8px 8px 32px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+  }
+  .lil-gui .title { font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; font-size: 10px; }
+  .lil-gui .controller { font-size: 11px; }
+
+  @media (max-width: 900px) {
+    #hud-bottom { display: none; }
+    #hud-left { display: none; }
+  }
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+    "lil-gui": "https://unpkg.com/lil-gui@0.19.2/dist/lil-gui.esm.js"
+  }
+}
+</script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="vignette"></div>
+  
+  <!-- Floating screen labels for tesseract vertices -->
+  <div id="labels-container"></div>
+
+  <!-- Header Title -->
+  <div id="title-panel">
+    <h1>4D Tesseract</h1>
+    <p>Hyper-dimensional Rotation &amp; Projection</p>
+  </div>
+
+  <!-- Left Sidebar HUD Dashboard -->
+  <div id="hud-left">
+    <!-- Presets Selector -->
+    <div class="panel" style="pointer-events: auto;">
+      <div class="hud-section-title">
+        <span>Presets</span>
+        <span style="font-size: 8px; color: var(--text-secondary);">4D Configurations</span>
+      </div>
+      <div id="preset-bar">
+        <button class="preset-btn" id="btn-preset-hyper">Hyper-spin</button>
+        <button class="preset-btn" id="btn-preset-dual">Dual-plane</button>
+        <button class="preset-btn" id="btn-preset-fold">3D Fold</button>
+        <button class="preset-btn" id="btn-preset-reset">Reset</button>
+      </div>
+    </div>
+
+    <!-- 4D Rotation Matrix Panel -->
+    <div class="panel" style="pointer-events: auto;">
+      <div class="hud-section-title">
+        <span>Rotation Matrix SO(4)</span>
+        <span style="font-size: 8px; color: var(--text-secondary); font-family: monospace;">4x4 Real Matrix</span>
+      </div>
+      <div id="matrix-container">
+        <!-- Matrix cells will be generated programmatically -->
+        <div class="matrix-cell" id="m00">1.000</div>
+        <div class="matrix-cell" id="m01">0.000</div>
+        <div class="matrix-cell" id="m02">0.000</div>
+        <div class="matrix-cell" id="m03">0.000</div>
+        <div class="matrix-cell" id="m10">0.000</div>
+        <div class="matrix-cell" id="m11">1.000</div>
+        <div class="matrix-cell" id="m12">0.000</div>
+        <div class="matrix-cell" id="m13">0.000</div>
+        <div class="matrix-cell" id="m20">0.000</div>
+        <div class="matrix-cell" id="m21">0.000</div>
+        <div class="matrix-cell" id="m22">1.000</div>
+        <div class="matrix-cell" id="m23">0.000</div>
+        <div class="matrix-cell" id="m30">0.000</div>
+        <div class="matrix-cell" id="m31">0.000</div>
+        <div class="matrix-cell" id="m32">0.000</div>
+        <div class="matrix-cell" id="m33">1.000</div>
+      </div>
+    </div>
+
+    <!-- 4D Coordinates Table Panel -->
+    <div class="panel" style="pointer-events: auto; flex: 1; min-height: 200px; display: flex; flex-direction: column;">
+      <div class="hud-section-title" style="margin-bottom: 8px;">
+        <span>Vertex Registry</span>
+        <span style="font-size: 8px; color: var(--text-secondary); font-family: monospace;">(x, y, z, w)</span>
+      </div>
+      <div class="coord-table-wrapper" style="flex: 1;">
+        <table id="coord-table">
+          <thead>
+            <tr>
+              <th>ID (Bin)</th>
+              <th>X</th>
+              <th>Y</th>
+              <th>Z</th>
+              <th>W</th>
+            </tr>
+          </thead>
+          <tbody id="coord-table-body">
+            <!-- Programmatically populated -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Log Terminal -->
+  <div id="hud-bottom">
+    <div id="console">
+      <!-- Logs will be populated here -->
+    </div>
+  </div>
+
+<script>
+  // Catch uncaught errors and print to page console
+  window.addEventListener('error', (e) => {
+    console.error(e);
+    const consoleEl = document.getElementById('console');
+    if (consoleEl) {
+      const line = document.createElement('div');
+      line.className = 'console-line';
+      line.innerHTML = `<span class="time">[ERR]</span> <span class="highlight">${e.message}</span>`;
+      consoleEl.appendChild(line);
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+  });
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { GUI } from 'lil-gui';
+
+/* ------------------------------------------------------------------ *
+ *  4D Matrix Mathematics Class
+ * ------------------------------------------------------------------ */
+class Matrix4D {
+  constructor() {
+    this.elements = new Float32Array(16);
+    this.identity();
+  }
+
+  identity() {
+    this.set(
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      0, 0, 0, 1
+    );
+    return this;
+  }
+
+  set(
+    m00, m01, m02, m03,
+    m10, m11, m12, m13,
+    m20, m21, m22, m23,
+    m30, m31, m32, m33
+  ) {
+    const te = this.elements;
+    te[0] = m00; te[1] = m01; te[2] = m02; te[3] = m03;
+    te[4] = m10; te[5] = m11; te[6] = m12; te[7] = m13;
+    te[8] = m20; te[9] = m21; te[10] = m22; te[11] = m23;
+    te[12] = m30; te[13] = m31; te[14] = m32; te[15] = m33;
+    return this;
+  }
+
+  // this = A * B
+  multiplyMatrices(a, b) {
+    const ae = a.elements;
+    const be = b.elements;
+    const te = this.elements;
+
+    const a00 = ae[0],  a01 = ae[1],  a02 = ae[2],  a03 = ae[3];
+    const a10 = ae[4],  a11 = ae[5],  a12 = ae[6],  a13 = ae[7];
+    const a20 = ae[8],  a21 = ae[9],  a22 = ae[10], a23 = ae[11];
+    const a30 = ae[12], a31 = ae[13], a32 = ae[14], a33 = ae[15];
+
+    const b00 = be[0],  b01 = be[1],  b02 = be[2],  b03 = be[3];
+    const b10 = be[4],  b11 = be[5],  b12 = be[6],  b13 = be[7];
+    const b20 = be[8],  b21 = be[9],  b22 = be[10], b23 = be[11];
+    const b30 = be[12], b31 = be[13], b32 = be[14], b33 = be[15];
+
+    te[0]  = a00 * b00 + a01 * b10 + a02 * b20 + a03 * b30;
+    te[1]  = a00 * b01 + a01 * b11 + a02 * b21 + a03 * b31;
+    te[2]  = a00 * b02 + a01 * b12 + a02 * b22 + a03 * b32;
+    te[3]  = a00 * b03 + a01 * b13 + a02 * b23 + a03 * b33;
+
+    te[4]  = a10 * b00 + a11 * b10 + a12 * b20 + a13 * b30;
+    te[5]  = a10 * b01 + a11 * b11 + a12 * b21 + a13 * b31;
+    te[6]  = a10 * b02 + a11 * b12 + a12 * b22 + a13 * b32;
+    te[7]  = a10 * b03 + a11 * b13 + a12 * b23 + a13 * b33;
+
+    te[8]  = a20 * b00 + a21 * b10 + a22 * b20 + a23 * b30;
+    te[9]  = a20 * b01 + a21 * b11 + a22 * b21 + a23 * b31;
+    te[10] = a20 * b02 + a21 * b12 + a22 * b22 + a23 * b32;
+    te[11] = a20 * b03 + a21 * b13 + a22 * b23 + a23 * b33;
+
+    te[12] = a30 * b00 + a31 * b10 + a32 * b20 + a33 * b30;
+    te[13] = a30 * b01 + a31 * b11 + a32 * b21 + a33 * b31;
+    te[14] = a30 * b02 + a31 * b12 + a32 * b22 + a33 * b32;
+    te[15] = a30 * b03 + a31 * b13 + a32 * b23 + a33 * b33;
+
+    return this;
+  }
+
+  premultiply(m) {
+    const tmp = new Matrix4D().multiplyMatrices(m, this);
+    this.elements.set(tmp.elements);
+    return this;
+  }
+
+  multiply(m) {
+    const tmp = new Matrix4D().multiplyMatrices(this, m);
+    this.elements.set(tmp.elements);
+    return this;
+  }
+
+  // out = this * v
+  transformVector(x, y, z, w, out) {
+    const te = this.elements;
+    out.x = te[0] * x + te[1] * y + te[2] * z + te[3] * w;
+    out.y = te[4] * x + te[5] * y + te[6] * z + te[7] * w;
+    out.z = te[8] * x + te[9] * y + te[10] * z + te[11] * w;
+    out.w = te[12] * x + te[13] * y + te[14] * z + te[15] * w;
+    return out;
+  }
+
+  // Gram-Schmidt Orthonormalization (Column-wise)
+  orthonormalize() {
+    const te = this.elements;
+    const c0 = [te[0], te[4], te[8], te[12]];
+    const c1 = [te[1], te[5], te[9], te[13]];
+    const c2 = [te[2], te[6], te[10], te[14]];
+    const c3 = [te[3], te[7], te[11], te[15]];
+
+    const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3];
+    const norm = (a) => Math.sqrt(dot(a, a));
+    const sub = (a, b, scale) => {
+      a[0] -= b[0] * scale; a[1] -= b[1] * scale; a[2] -= b[2] * scale; a[3] -= b[3] * scale;
+    };
+    const div = (a, val) => {
+      if (val > 1e-6) {
+        a[0] /= val; a[1] /= val; a[2] /= val; a[3] /= val;
+      }
+    };
+
+    // Col 0
+    let n = norm(c0);
+    div(c0, n);
+
+    // Col 1
+    let d = dot(c1, c0);
+    sub(c1, c0, d);
+    n = norm(c1);
+    div(c1, n);
+
+    // Col 2
+    let d0 = dot(c2, c0);
+    let d1 = dot(c2, c1);
+    sub(c2, c0, d0);
+    sub(c2, c1, d1);
+    n = norm(c2);
+    div(c2, n);
+
+    // Col 3
+    d0 = dot(c3, c0);
+    d1 = dot(c3, c1);
+    let d2 = dot(c3, c2);
+    sub(c3, c0, d0);
+    sub(c3, c1, d1);
+    sub(c3, c2, d2);
+    n = norm(c3);
+    div(c3, n);
+
+    // Set columns back
+    te[0] = c0[0]; te[4] = c0[1]; te[8] = c0[2]; te[12] = c0[3];
+    te[1] = c1[0]; te[5] = c1[1]; te[9] = c1[2]; te[13] = c1[3];
+    te[2] = c2[0]; te[6] = c2[1]; te[10] = c2[2]; te[14] = c2[3];
+    te[3] = c3[0]; te[7] = c3[1]; te[11] = c3[2]; te[15] = c3[3];
+  }
+
+  static getRotationMatrix(plane, theta) {
+    const c = Math.cos(theta);
+    const s = Math.sin(theta);
+    const m = new Matrix4D();
+    switch(plane) {
+      case 'XY':
+        m.set(
+          c, -s, 0, 0,
+          s,  c, 0, 0,
+          0,  0, 1, 0,
+          0,  0, 0, 1
+        );
+        break;
+      case 'XZ':
+        m.set(
+          c, 0, -s, 0,
+          0, 1,  0, 0,
+          s, 0,  c, 0,
+          0, 0,  0, 1
+        );
+        break;
+      case 'XW':
+        m.set(
+          c, 0, 0, -s,
+          0, 1, 0,  0,
+          0, 0, 1,  0,
+          s, 0, 0,  c
+        );
+        break;
+      case 'YZ':
+        m.set(
+          1, 0,  0, 0,
+          0, c, -s, 0,
+          0, s,  c, 0,
+          0, 0,  0, 1
+        );
+        break;
+      case 'YW':
+        m.set(
+          1, 0, 0,  0,
+          0, c, 0, -s,
+          0, 0, 1,  0,
+          0, s, 0,  c
+        );
+        break;
+      case 'ZW':
+        m.set(
+          1, 0, 0, 0,
+          0, 1, 0, 0,
+          0, 0, c, -s,
+          0, 0, s,  c
+        );
+        break;
+    }
+    return m;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Application State & Options
+ * ------------------------------------------------------------------ */
+const state = {
+  // Rotations
+  speeds: {
+    XY: 0.15,
+    XZ: 0.08,
+    YZ: 0.00,
+    XW: 0.22,
+    YW: 0.05,
+    ZW: 0.00
+  },
+  autoRotate: {
+    XY: true,
+    XZ: true,
+    YZ: false,
+    XW: true,
+    YW: false,
+    ZW: false
+  },
+  // Projections
+  projectionMode: 'Perspective', // 'Perspective' or 'Orthographic'
+  projBlend: 1.0, // 0 = Ortho, 1 = Perspective
+  wCameraDistance: 2.2, // D factor
+  
+  // Visuals
+  showVertices: true,
+  showEdges: true,
+  showFaces: true,
+  showLabels: true,
+  labelType: 'Binary', // 'Binary', 'Decimal', 'Coordinate'
+  colorTheme: 'Cyberpunk', // 'Cyberpunk', 'Quantum', 'Vaporwave', 'Monochrome'
+  wColorIntensity: 1.0,
+  
+  // Dimensions
+  vertexRadius: 0.15,
+  edgeRadius: 0.045,
+  faceOpacity: 0.12,
+  pulseIntensity: 0.8,
+  
+  // Bloom Pass
+  bloomEnabled: true,
+  bloomStrength: 1.5,
+  bloomRadius: 0.4,
+  bloomThreshold: 0.08,
+
+  // Selection
+  hoveredVertex: null,
+  selectedVertex: null
+};
+
+// Log terminal counter
+let logCount = 0;
+function consoleLog(message, type = 'info') {
+  const consoleEl = document.getElementById('console');
+  if (!consoleEl) return;
+  const time = new Date().toLocaleTimeString().split(' ')[0];
+  const line = document.createElement('div');
+  line.className = 'console-line';
+  
+  let msgContent = message;
+  if (type === 'system') msgContent = `<span class="system">${message}</span>`;
+  else if (type === 'action') msgContent = `<span class="highlight">${message}</span>`;
+  
+  line.innerHTML = `<span class="time">[${time}]</span> ${msgContent}`;
+  consoleEl.appendChild(line);
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+  
+  // Limit total log lines
+  if (consoleEl.children.length > 25) {
+    consoleEl.removeChild(consoleEl.firstChild);
+  }
+}
+
+// Color palettes based on W-coordinate (normalized -1 to 1)
+const themes = {
+  Cyberpunk: {
+    near: new THREE.Color('#ff0080'), // Pink (close in W, w = 1)
+    far: new THREE.Color('#00f0ff'),  // Cyan (far in W, w = -1)
+    base: new THREE.Color('#7a22ff'), // Purple
+    bg: '#040209',
+    accent1: '#00f0ff',
+    accent2: '#ff00a0'
+  },
+  Quantum: {
+    near: new THREE.Color('#ffd700'), // Gold
+    far: new THREE.Color('#00ffa0'),  // Emerald
+    base: new THREE.Color('#005533'), // Dark Green
+    bg: '#010604',
+    accent1: '#00ffa0',
+    accent2: '#ffd700'
+  },
+  Vaporwave: {
+    near: new THREE.Color('#ff71ce'), // Light Pink
+    far: new THREE.Color('#01cdfe'),  // Light Cyan
+    base: new THREE.Color('#b967ff'), // Lavender
+    bg: '#0d0614',
+    accent1: '#01cdfe',
+    accent2: '#ff71ce'
+  },
+  Monochrome: {
+    near: new THREE.Color('#ffffff'), // White
+    far: new THREE.Color('#333333'),  // Dark Grey
+    base: new THREE.Color('#888888'), // Mid Grey
+    bg: '#050505',
+    accent1: '#ffffff',
+    accent2: '#888888'
+  }
+};
+
+function getWColor(w, normalized = true) {
+  const theme = themes[state.colorTheme];
+  // w starts in [-1, 1] if normalized is true
+  const t = normalized ? (w * 0.5 + 0.5) : w; // map [-1, 1] to [0, 1]
+  
+  const c = new THREE.Color();
+  // Lerp between far (w=-1) and near (w=+1)
+  c.lerpColors(theme.far, theme.near, THREE.MathUtils.clamp(t, 0, 1));
+  
+  // Blend with base color if wColorIntensity < 1.0
+  if (state.wColorIntensity < 1.0) {
+    c.lerp(theme.base, 1.0 - state.wColorIntensity);
+  }
+  return c;
+}
+
+function updateThemeCSS() {
+  const theme = themes[state.colorTheme];
+  const root = document.documentElement;
+  root.style.setProperty('--accent-cyan', theme.accent1);
+  root.style.setProperty('--accent-pink', theme.accent2);
+  root.style.setProperty('--bg-dark', theme.bg);
+  document.body.style.background = theme.bg;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Tesseract Geometry Setup
+ * ------------------------------------------------------------------ */
+// 16 vertices of size 1.0
+const baseVertices = [];
+const size = 1.0;
+for (let i = 0; i < 16; i++) {
+  baseVertices.push({
+    x: (i & 1) ? size : -size,
+    y: (i & 2) ? size : -size,
+    z: (i & 4) ? size : -size,
+    w: (i & 8) ? size : -size
+  });
+}
+
+// 32 edges (Hamming distance 1)
+const edgesData = [];
+for (let i = 0; i < 16; i++) {
+  for (let j = i + 1; j < 16; j++) {
+    const diff = i ^ j;
+    // If diff is a power of 2, it differs by exactly 1 bit
+    if (diff && (diff & (diff - 1)) === 0) {
+      // Find which dimension index is varying (0 to 3)
+      let dimension = 0;
+      let temp = diff;
+      while (temp > 1) {
+        temp >>= 1;
+        dimension++;
+      }
+      edgesData.push({ v1: i, v2: j, dim: dimension });
+    }
+  }
+}
+
+// 24 square faces (keeping 2 coordinates constant, varying 2)
+const facesData = [];
+const dims = [0, 1, 2, 3];
+// Select two varying dimensions (d1, d2)
+for (let i_d = 0; i_d < 4; i_d++) {
+  for (let j_d = i_d + 1; j_d < 4; j_d++) {
+    const d1 = dims[i_d];
+    const d2 = dims[j_d];
+    
+    // The other two dimensions are constant (d3, d4)
+    const constDims = dims.filter(d => d !== d1 && d !== d2);
+    const d3 = constDims[0];
+    const d4 = constDims[1];
+    
+    // 4 combinations for constant dimensions
+    for (let c3 = 0; c3 < 2; c3++) {
+      for (let c4 = 0; c4 < 2; c4++) {
+        // Construct the 4 vertices of the square face in a closed loop
+        const loopIndices = [];
+        const v3_val = c3 ? 1 : -1;
+        const v4_val = c4 ? 1 : -1;
+        
+        // Loop coordinates:
+        // 1. d1=-1, d2=-1
+        // 2. d1=1,  d2=-1
+        // 3. d1=1,  d2=1
+        // 4. d1=-1, d2=1
+        const loopCoords = [
+          { [d1]: -1, [d2]: -1 },
+          { [d1]: 1,  [d2]: -1 },
+          { [d1]: 1,  [d2]: 1 },
+          { [d1]: -1, [d2]: 1 }
+        ];
+        
+        for (const coord of loopCoords) {
+          // Reconstruct the 4-bit index
+          let idx = 0;
+          const getBit = (d, val) => (val === 1) ? (1 << d) : 0;
+          idx |= getBit(d1, coord[d1]);
+          idx |= getBit(d2, coord[d2]);
+          idx |= getBit(d3, v3_val);
+          idx |= getBit(d4, v4_val);
+          loopIndices.push(idx);
+        }
+        
+        facesData.push({
+          vertices: loopIndices,
+          dims: [d1, d2]
+        });
+      }
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Three.js Engine Initialization
+ * ------------------------------------------------------------------ */
+const container = document.getElementById('app');
+const labelsContainer = document.getElementById('labels-container');
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x040209, 0.015);
+
+// Add group for all tesseract objects
+const tesseractGroup = new THREE.Group();
+scene.add(tesseractGroup);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 4, 10);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.maxDistance = 25;
+controls.minDistance = 4;
+
+// Lighting
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+scene.add(ambientLight);
+
+const dirLight1 = new THREE.DirectionalLight(0xffffff, 1.2);
+dirLight1.position.set(5, 10, 7);
+scene.add(dirLight1);
+
+const dirLight2 = new THREE.DirectionalLight(0x7a22ff, 1.0);
+dirLight2.position.set(-5, -5, -5);
+scene.add(dirLight2);
+
+// Post-processing setup
+const renderPass = new RenderPass(scene, camera);
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  state.bloomStrength,
+  state.bloomRadius,
+  state.bloomThreshold
+);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(renderPass);
+composer.addPass(bloomPass);
+
+// Resize handler
+window.addEventListener('resize', onWindowResize);
+function onWindowResize() {
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+  renderer.setSize(width, height);
+  composer.setSize(width, height);
+}
+
+/* ------------------------------------------------------------------ *
+ *  3D Objects Generation
+ * ------------------------------------------------------------------ */
+const vertexMeshes = [];
+const edgeMeshes = [];
+const faceMeshes = [];
+const labelElements = [];
+
+// Create Table rows in vertex register HUD
+const coordTableBody = document.getElementById('coord-table-body');
+const tableRows = [];
+
+// Vertex Geometries (Spheres)
+const sphereGeom = new THREE.SphereGeometry(1, 32, 32);
+
+for (let i = 0; i < 16; i++) {
+  // Unique physical material for each vertex to support individual coloring/emissiveness
+  const mat = new THREE.MeshPhysicalMaterial({
+    roughness: 0.1,
+    metalness: 0.1,
+    emissiveIntensity: 1.5,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.1
+  });
+  
+  const mesh = new THREE.Mesh(sphereGeom, mat);
+  mesh.userData = { vertexIndex: i };
+  tesseractGroup.add(mesh);
+  vertexMeshes.push(mesh);
+  
+  // HTML label creation
+  const label = document.createElement('div');
+  label.className = 'vertex-label';
+  label.id = `label-v${i}`;
+  
+  // Format based on settings
+  const binaryString = i.toString(2).padStart(4, '0');
+  label.innerHTML = `
+    <span class="label-header">V${i} <span style="opacity: 0.5;">(${binaryString})</span></span>
+    <div class="vertex-label-coords" id="label-coords-v${i}"></div>
+  `;
+  labelsContainer.appendChild(label);
+  labelElements.push(label);
+
+  // Table row creation
+  const row = document.createElement('tr');
+  row.id = `row-v${i}`;
+  row.innerHTML = `
+    <td><strong>V${i}</strong> <span style="color: var(--text-secondary)">(${binaryString})</span></td>
+    <td id="row-v${i}-x">0.000</td>
+    <td id="row-v${i}-y">0.000</td>
+    <td id="row-v${i}-z">0.000</td>
+    <td id="row-v${i}-w">0.000</td>
+  `;
+  coordTableBody.appendChild(row);
+  tableRows.push(row);
+  
+  // Row hover highlights vertex
+  row.addEventListener('mouseenter', () => {
+    state.hoveredVertex = i;
+  });
+  row.addEventListener('mouseleave', () => {
+    if (state.hoveredVertex === i) state.hoveredVertex = null;
+  });
+  row.addEventListener('click', () => {
+    if (state.selectedVertex === i) {
+      state.selectedVertex = null;
+      consoleLog(`Deselected vertex V${i}`);
+    } else {
+      state.selectedVertex = i;
+      const bin = i.toString(2).padStart(4, '0');
+      const baseCoords = baseVertices[i];
+      consoleLog(`Selected vertex V${i} (Binary: ${bin}, Initial coords: [${baseCoords.x}, ${baseCoords.y}, ${baseCoords.z}, ${baseCoords.w}])`, 'action');
+    }
+  });
+}
+
+function updateLabelHeaders() {
+  for (let i = 0; i < 16; i++) {
+    const el = labelElements[i].querySelector('.label-header');
+    if (!el) continue;
+    
+    if (state.labelType === 'Binary') {
+      const bin = i.toString(2).padStart(4, '0');
+      el.innerHTML = `V${i} <span style="opacity: 0.5;">(${bin})</span>`;
+    } else if (state.labelType === 'Decimal') {
+      el.innerHTML = `V${i}`;
+    } else if (state.labelType === 'Coordinate') {
+      const v = baseVertices[i];
+      const signStr = (val) => val > 0 ? '+' : '-';
+      el.innerHTML = `[${signStr(v.x)},${signStr(v.y)},${signStr(v.z)},${signStr(v.w)}]`;
+    }
+  }
+}
+
+// Edge Geometries (Cylinders)
+// We construct a basic cylinder along the Y-axis of height 1.0 and radius 1.0.
+// Then in the render loop we scale and rotate it.
+const cylinderGeom = new THREE.CylinderGeometry(1, 1, 1, 12, 1);
+
+for (let i = 0; i < 32; i++) {
+  const edge = edgesData[i];
+  const mat = new THREE.MeshStandardMaterial({
+    roughness: 0.2,
+    metalness: 0.8,
+    transparent: true,
+    opacity: 0.9,
+    emissiveIntensity: 1.0
+  });
+  const mesh = new THREE.Mesh(cylinderGeom, mat);
+  mesh.userData = { edgeIndex: i, v1: edge.v1, v2: edge.v2, dim: edge.dim };
+  tesseractGroup.add(mesh);
+  edgeMeshes.push(mesh);
+}
+
+// Face Geometries
+// A tesseract has 24 square faces. We create a BufferGeometry for each square.
+for (let i = 0; i < 24; i++) {
+  const geom = new THREE.BufferGeometry();
+  const positions = new Float32Array(4 * 3); // 4 vertices, 3 coordinates each
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  
+  const indices = [0, 1, 2, 0, 2, 3];
+  geom.setIndex(indices);
+  
+  const mat = new THREE.MeshBasicMaterial({
+    transparent: true,
+    opacity: state.faceOpacity,
+    side: THREE.DoubleSide,
+    depthWrite: false
+  });
+  
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.userData = { faceIndex: i, dims: facesData[i].dims };
+  tesseractGroup.add(mesh);
+  faceMeshes.push(mesh);
+}
+
+/* ------------------------------------------------------------------ *
+ *  4D Matrix Accumulation & Integration
+ * ------------------------------------------------------------------ */
+let rotationMatrix = new Matrix4D();
+
+// Keep track of the active projection morph transition
+let transitionTime = 0.0;
+const rotationPlanes = ['XY', 'XZ', 'YZ', 'XW', 'YW', 'ZW'];
+
+// Setup HUD Matrix display cell references
+const matrixCells = {};
+for (let r = 0; r < 4; r++) {
+  for (let c = 0; c < 4; c++) {
+    matrixCells[`m${r}${c}`] = document.getElementById(`m${r}${c}`);
+  }
+}
+
+function updateHUDMatrix() {
+  const te = rotationMatrix.elements;
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const cell = matrixCells[`m${r}${c}`];
+      const val = te[r * 4 + c];
+      cell.textContent = val.toFixed(3);
+      
+      // Flash cells that are significantly active/non-identity
+      if (r === c) {
+        if (Math.abs(val - 1.0) > 0.005) {
+          cell.classList.add('active-val');
+        } else {
+          cell.classList.remove('active-val');
+        }
+      } else {
+        if (Math.abs(val) > 0.005) {
+          cell.classList.add('active-val');
+        } else {
+          cell.classList.remove('active-val');
+        }
+      }
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Raycasting for Interactive Selection
+ * ------------------------------------------------------------------ */
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+window.addEventListener('mousemove', (e) => {
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+});
+
+window.addEventListener('click', () => {
+  // Raycast against vertex sphere meshes
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObjects(vertexMeshes);
+  
+  if (intersects.length > 0) {
+    const vIdx = intersects[0].object.userData.vertexIndex;
+    if (state.selectedVertex === vIdx) {
+      state.selectedVertex = null;
+      consoleLog(`Deselected vertex V${vIdx}`);
+    } else {
+      state.selectedVertex = vIdx;
+      const bin = vIdx.toString(2).padStart(4, '0');
+      const baseCoords = baseVertices[vIdx];
+      consoleLog(`Selected vertex V${vIdx} (Binary: ${bin}, Initial coords: [${baseCoords.x}, ${baseCoords.y}, ${baseCoords.z}, ${baseCoords.w}])`, 'action');
+    }
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ *  Main Animation Tick Loop
+ * ------------------------------------------------------------------ */
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  
+  const dt = Math.min(clock.getDelta(), 0.1);
+  const time = clock.getElapsedTime();
+  
+  // 1. Handle projection blend interpolation
+  const targetBlend = (state.projectionMode === 'Perspective') ? 1.0 : 0.0;
+  if (state.projBlend !== targetBlend) {
+    // Smooth transition interpolation
+    state.projBlend += (targetBlend - state.projBlend) * 5.0 * dt;
+    if (Math.abs(state.projBlend - targetBlend) < 0.001) {
+      state.projBlend = targetBlend;
+      consoleLog(`Projection animation complete. Active: ${state.projectionMode}`, 'system');
+    }
+  }
+
+  // 2. Accumulate 4D rotations in real time
+  let anyRotation = false;
+  for (const plane of rotationPlanes) {
+    if (state.autoRotate[plane] && state.speeds[plane] !== 0) {
+      const angle = state.speeds[plane] * dt;
+      const R = Matrix4D.getRotationMatrix(plane, angle);
+      // Premultiply by plane rotation matrix (global axis rotation)
+      rotationMatrix.premultiply(R);
+      anyRotation = true;
+    }
+  }
+
+  // Keep matrix perfectly orthonormal to prevent numerical skewing
+  if (anyRotation) {
+    rotationMatrix.orthonormalize();
+    updateHUDMatrix();
+  }
+
+  // 3. Transform and project 4D points to 3D
+  const rotatedVertices = [];
+  const projectedVertices = [];
+  
+  const D = state.wCameraDistance;
+  const blend = state.projBlend;
+  
+  // The average distance scale multiplier
+  const factorOrtho = 0.45; // Fixed orthographic scale multiplier
+  const sceneScale = 4.5;   // General screen scale multiplier
+
+  for (let i = 0; i < 16; i++) {
+    const v = baseVertices[i];
+    const out = { x: 0, y: 0, z: 0, w: 0 };
+    rotationMatrix.transformVector(v.x, v.y, v.z, v.w, out);
+    rotatedVertices.push(out);
+    
+    // Projection Factor (interpolating Ortho vs Perspective)
+    const factorPersp = 1.0 / Math.max(D - out.w, 0.01);
+    const factor = (1.0 - blend) * factorOrtho + blend * factorPersp;
+    
+    projectedVertices.push({
+      x: out.x * factor * sceneScale,
+      y: out.y * factor * sceneScale,
+      z: out.z * factor * sceneScale,
+      w: out.w // Keep rotated W for color-coding
+    });
+  }
+
+  // 4. Update vertex positions, scales, colors, and labels
+  // Update mouse raycasting
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObjects(vertexMeshes);
+  
+  // Raycast hover detection
+  if (intersects.length > 0) {
+    state.hoveredVertex = intersects[0].object.userData.vertexIndex;
+  } else {
+    // If not hovering, keep hover set by mouseenter in table rows
+    // (Only clear it if mouse coordinates are not hovering elements)
+    const activeEl = document.activeElement;
+    const isHoveringTable = document.querySelector('#coord-table-body:hover');
+    if (!isHoveringTable && intersects.length === 0) {
+      state.hoveredVertex = null;
+    }
+  }
+
+  const pulse = 1.0 + Math.sin(time * 5.0) * 0.15 * state.pulseIntensity;
+
+  for (let i = 0; i < 16; i++) {
+    const mesh = vertexMeshes[i];
+    const projV = projectedVertices[i];
+    const rotV = rotatedVertices[i];
+    
+    mesh.position.set(projV.x, projV.y, projV.z);
+    
+    // Render state visibility toggle
+    mesh.visible = state.showVertices;
+    
+    // Scale animations based on hover/selection
+    let targetScale = state.vertexRadius;
+    if (state.selectedVertex === i) {
+      targetScale = state.vertexRadius * 1.8 * pulse;
+    } else if (state.hoveredVertex === i) {
+      targetScale = state.vertexRadius * 1.5;
+    } else if (state.selectedVertex !== null) {
+      // If another vertex is selected, check if this vertex shares an edge with it
+      const connected = (state.selectedVertex ^ i) && ((state.selectedVertex ^ i) & ((state.selectedVertex ^ i) - 1)) === 0;
+      if (connected) {
+        targetScale = state.vertexRadius * 1.25;
+      }
+    } else if (state.hoveredVertex !== null) {
+      // If another vertex is hovered, check connection
+      const connected = (state.hoveredVertex ^ i) && ((state.hoveredVertex ^ i) & ((state.hoveredVertex ^ i) - 1)) === 0;
+      if (connected) {
+        targetScale = state.vertexRadius * 1.15;
+      }
+    }
+    
+    // Smoothly scale
+    mesh.scale.set(targetScale, targetScale, targetScale);
+    
+    // Color mapping
+    const col = getWColor(projV.w);
+    mesh.material.color.copy(col);
+    
+    // Emissive glowing highlight
+    if (state.selectedVertex === i || state.hoveredVertex === i) {
+      mesh.material.emissive.copy(col).multiplyScalar(2.0);
+    } else {
+      mesh.material.emissive.copy(col).multiplyScalar(0.6);
+    }
+
+    // 5. Update Vertex Labels (HTML overlays)
+    const labelEl = labelElements[i];
+    const rowEl = tableRows[i];
+    
+    // Update Coordinates Table
+    document.getElementById(`row-v${i}-x`).textContent = rotV.x.toFixed(3);
+    document.getElementById(`row-v${i}-y`).textContent = rotV.y.toFixed(3);
+    document.getElementById(`row-v${i}-z`).textContent = rotV.z.toFixed(3);
+    document.getElementById(`row-v${i}-w`).textContent = rotV.w.toFixed(3);
+
+    // Apply active classes to table rows
+    if (state.selectedVertex === i) {
+      rowEl.className = 'selected-row';
+    } else if (state.hoveredVertex === i) {
+      rowEl.className = 'hovered-row';
+    } else {
+      rowEl.className = '';
+    }
+
+    if (state.showLabels) {
+      labelEl.style.display = 'block';
+      
+      // Highlight matching label classes
+      if (state.selectedVertex === i) {
+        labelEl.className = 'vertex-label selected';
+      } else if (state.hoveredVertex === i) {
+        labelEl.className = 'vertex-label hovered';
+      } else {
+        labelEl.className = 'vertex-label';
+      }
+      
+      // Update label coordinates detail sub-panel
+      const coordsSubPanel = document.getElementById(`label-coords-v${i}`);
+      coordsSubPanel.innerHTML = `
+        X: ${rotV.x.toFixed(2)}<br>
+        Y: ${rotV.y.toFixed(2)}<br>
+        Z: ${rotV.z.toFixed(2)}<br>
+        W: ${rotV.w.toFixed(2)}
+      `;
+
+      // Update color variables on labels to match vertex coloring
+      labelEl.style.color = getWColor(projV.w).getStyle();
+      
+      // Project 3D coordinate to 2D NDC screen space
+      const screenPos = new THREE.Vector3(projV.x, projV.y, projV.z);
+      screenPos.project(camera);
+      
+      // Convert NDC to viewport pixels
+      const x = (screenPos.x * 0.5 + 0.5) * window.innerWidth;
+      const y = (-(screenPos.y * 0.5) + 0.5) * window.innerHeight;
+      
+      // Render label only if in front of camera
+      if (screenPos.z > 1.0) {
+        labelEl.style.opacity = '0';
+        labelEl.style.pointerEvents = 'none';
+      } else {
+        labelEl.style.opacity = '1';
+        labelEl.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+      }
+    } else {
+      labelEl.style.display = 'none';
+    }
+  }
+
+  // 6. Update edges (Cylinder positioning, rotation, and scaling)
+  for (let i = 0; i < 32; i++) {
+    const mesh = edgeMeshes[i];
+    const data = edgesData[i];
+    const p1 = projectedVertices[data.v1];
+    const p2 = projectedVertices[data.v2];
+    
+    mesh.visible = state.showEdges;
+    
+    const v1Vec = new THREE.Vector3(p1.x, p1.y, p1.z);
+    const v2Vec = new THREE.Vector3(p2.x, p2.y, p2.z);
+    
+    // Position, scale, and rotate cylinder to fit between v1 and v2
+    const dir = new THREE.Vector3().subVectors(v2Vec, v1Vec);
+    const height = dir.length();
+    
+    mesh.position.copy(v1Vec).addScaledVector(dir, 0.5);
+    mesh.scale.set(1, 1, 1);
+    
+    dir.normalize();
+    const upAxis = new THREE.Vector3(0, 1, 0);
+    const quat = new THREE.Quaternion().setFromUnitVectors(upAxis, dir);
+    mesh.quaternion.copy(quat);
+    
+    // Calculate radius, boosting it if connected to hovered/selected vertices
+    let r = state.edgeRadius;
+    const isSelectedConnection = (state.selectedVertex === data.v1 || state.selectedVertex === data.v2);
+    const isHoveredConnection = (state.hoveredVertex === data.v1 || state.hoveredVertex === data.v2);
+    
+    let emissionScalar = 0.5;
+    
+    if (state.selectedVertex !== null && isSelectedConnection) {
+      r *= 2.0;
+      emissionScalar = 2.5 * pulse;
+    } else if (state.hoveredVertex !== null && isHoveredConnection) {
+      r *= 1.6;
+      emissionScalar = 1.8;
+    }
+    
+    mesh.scale.set(r, height, r);
+    
+    // Color edge according to average W
+    const avgW = (p1.w + p2.w) * 0.5;
+    const col = getWColor(avgW);
+    mesh.material.color.copy(col);
+    
+    // Emissive intensity setting
+    mesh.material.emissive.copy(col).multiplyScalar(emissionScalar);
+  }
+
+  // 7. Update transparent square faces
+  for (let i = 0; i < 24; i++) {
+    const mesh = faceMeshes[i];
+    const data = facesData[i];
+    const geom = mesh.geometry;
+    
+    mesh.visible = state.showFaces;
+    
+    const posAttr = geom.attributes.position;
+    const arr = posAttr.array;
+    
+    let avgW = 0;
+    
+    // Map the 4 square vertices
+    for (let k = 0; k < 4; k++) {
+      const p = projectedVertices[data.vertices[k]];
+      arr[k * 3 + 0] = p.x;
+      arr[k * 3 + 1] = p.y;
+      arr[k * 3 + 2] = p.z;
+      avgW += p.w;
+    }
+    avgW /= 4.0;
+    
+    posAttr.needsUpdate = true;
+    geom.computeVertexNormals();
+    
+    // Color face by average W-coordinate
+    const col = getWColor(avgW);
+    mesh.material.color.copy(col);
+    
+    // Adjust opacity: boost opacity for selected/hovered faces
+    let baseOpacity = state.faceOpacity;
+    const isFaceSelected = (state.selectedVertex !== null && data.vertices.includes(state.selectedVertex));
+    const isFaceHovered = (state.hoveredVertex !== null && data.vertices.includes(state.hoveredVertex));
+    
+    if (isFaceSelected) {
+      baseOpacity *= 2.2;
+    } else if (isFaceHovered) {
+      baseOpacity *= 1.6;
+    }
+    
+    mesh.material.opacity = baseOpacity;
+  }
+
+  // Controls damping update
+  controls.update();
+
+  // Render composer
+  if (state.bloomEnabled) {
+    composer.render();
+  } else {
+    renderer.render(scene, camera);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  UI Integration & Parameter Tuning (lil-gui)
+ * ------------------------------------------------------------------ */
+let gui;
+function buildGUI() {
+  if (gui) gui.destroy();
+  
+  gui = new GUI({ title: 'Tesseract Controls' });
+  
+  // 1. Projections Folder
+  const fProj = gui.addFolder('Projection Engine');
+  fProj.add(state, 'projectionMode', ['Perspective', 'Orthographic']).name('Proj Mode').onChange((val) => {
+    consoleLog(`Requested projection mode change to: ${val}`, 'action');
+  });
+  fProj.add(state, 'wCameraDistance', 1.2, 5.0, 0.05).name('4D Depth (D)').onChange((val) => {
+    consoleLog(`4D Depth offset set to: ${val.toFixed(2)}`);
+  });
+
+  // 2. 4D Rotations Folder
+  const fRot = gui.addFolder('4D Rotation Rates');
+  
+  // Create speed controllers
+  const autoCtrls = {};
+  const speedCtrls = {};
+  
+  rotationPlanes.forEach(plane => {
+    const subF = fRot.addFolder(plane);
+    subF.close(); // Collapse to keep it tidy
+    
+    autoCtrls[plane] = subF.add(state.autoRotate, plane).name('Auto Rotation').onChange(val => {
+      consoleLog(`${plane} rotation auto-state: ${val ? 'ON' : 'OFF'}`);
+    });
+    speedCtrls[plane] = subF.add(state.speeds, plane, -1.0, 1.0, 0.01).name('Speed Rate').onChange(val => {
+      if (val !== 0 && !state.autoRotate[plane]) {
+        state.autoRotate[plane] = true;
+        autoCtrls[plane].updateDisplay();
+      }
+    });
+  });
+
+  // 3. Visualization Folder
+  const fVis = gui.addFolder('Visualization Styles');
+  fVis.add(state, 'showVertices').name('Show Vertices').onChange(val => {
+    consoleLog(`Vertex meshes toggled: ${val ? 'VISIBLE' : 'HIDDEN'}`);
+  });
+  fVis.add(state, 'showEdges').name('Show Edges').onChange(val => {
+    consoleLog(`Edge meshes toggled: ${val ? 'VISIBLE' : 'HIDDEN'}`);
+  });
+  fVis.add(state, 'showFaces').name('Show Faces').onChange(val => {
+    consoleLog(`Face fills toggled: ${val ? 'VISIBLE' : 'HIDDEN'}`);
+  });
+  fVis.add(state, 'showLabels').name('Show Labels').onChange(val => {
+    consoleLog(`Vertex screen labels toggled: ${val ? 'ON' : 'OFF'}`);
+  });
+  fVis.add(state, 'labelType', ['Binary', 'Decimal', 'Coordinate']).name('Label Format').onChange(val => {
+    updateLabelHeaders();
+    consoleLog(`Vertex label format set to: ${val}`, 'action');
+  });
+  
+  fVis.add(state, 'colorTheme', ['Cyberpunk', 'Quantum', 'Vaporwave', 'Monochrome']).name('Color Palette').onChange(val => {
+    updateThemeCSS();
+    consoleLog(`Color palette changed to: ${val}`, 'action');
+  });
+  fVis.add(state, 'wColorIntensity', 0.0, 1.0, 0.05).name('4D Color Influence');
+  
+  fVis.add(state, 'vertexRadius', 0.05, 0.35, 0.01).name('Vertex Size');
+  fVis.add(state, 'edgeRadius', 0.01, 0.12, 0.005).name('Edge Thickness');
+  fVis.add(state, 'faceOpacity', 0.0, 0.4, 0.01).name('Face Opacity');
+
+  // 4. Glow / Post-processing
+  const fPost = gui.addFolder('Hologram Bloom');
+  fPost.add(state, 'bloomEnabled').name('Enable Bloom').onChange(val => {
+    consoleLog(`Post-processing bloom toggled: ${val ? 'ENABLED' : 'DISABLED'}`, 'system');
+  });
+  fPost.add(state, 'bloomStrength', 0.0, 3.0, 0.1).name('Glow Strength').onChange(val => {
+    bloomPass.strength = val;
+  });
+  fPost.add(state, 'bloomRadius', 0.0, 1.5, 0.05).name('Glow Radius').onChange(val => {
+    bloomPass.radius = val;
+  });
+  fPost.add(state, 'bloomThreshold', 0.0, 1.0, 0.01).name('Glow Threshold').onChange(val => {
+    bloomPass.threshold = val;
+  });
+
+  gui.open();
+}
+
+/* ------------------------------------------------------------------ *
+ *  Presets Handling
+ * ------------------------------------------------------------------ */
+function applyPreset(name) {
+  const btns = document.querySelectorAll('.preset-btn');
+  btns.forEach(b => b.classList.remove('active'));
+  
+  if (name !== 'reset') {
+    const activeBtn = document.getElementById(`btn-preset-${name}`);
+    if (activeBtn) activeBtn.classList.add('active');
+  }
+
+  // Set rotation matrix to Identity first to avoid compounding
+  rotationMatrix.identity();
+
+  if (name === 'hyper') {
+    // Hyper-spin: simultaneous rotations in spatial and 4D planes
+    state.autoRotate.XY = true;
+    state.autoRotate.XZ = false;
+    state.autoRotate.YZ = false;
+    state.autoRotate.XW = true;
+    state.autoRotate.YW = true;
+    state.autoRotate.ZW = false;
+    
+    state.speeds.XY = 0.20;
+    state.speeds.XZ = 0.00;
+    state.speeds.YZ = 0.00;
+    state.speeds.XW = 0.28;
+    state.speeds.YW = 0.12;
+    state.speeds.ZW = 0.00;
+    
+    state.projectionMode = 'Perspective';
+    consoleLog('Applied Preset: Hyper-spin (Rotates XY, XW, YW. Classic 4D folding look)', 'system');
+  } else if (name === 'dual') {
+    // Dual plane: rotation in two orthogonal planes (e.g. XY and ZW)
+    // In 4D, rotating in two orthogonal planes simultaneously represents a "double rotation".
+    state.autoRotate.XY = true;
+    state.autoRotate.XZ = false;
+    state.autoRotate.YZ = false;
+    state.autoRotate.XW = false;
+    state.autoRotate.YW = false;
+    state.autoRotate.ZW = true;
+    
+    state.speeds.XY = 0.35;
+    state.speeds.XZ = 0.00;
+    state.speeds.YZ = 0.00;
+    state.speeds.XW = 0.00;
+    state.speeds.YW = 0.00;
+    state.speeds.ZW = 0.35;
+    
+    state.projectionMode = 'Perspective';
+    consoleLog('Applied Preset: Dual-plane (Orthogonal rotations in XY and ZW planes)', 'system');
+  } else if (name === 'fold') {
+    // 3D Fold: Standard spatial rotations only. Shows how 4D hypercube looks in 3D without 4D morphing.
+    state.autoRotate.XY = true;
+    state.autoRotate.XZ = true;
+    state.autoRotate.YZ = true;
+    state.autoRotate.XW = false;
+    state.autoRotate.YW = false;
+    state.autoRotate.ZW = false;
+    
+    state.speeds.XY = 0.15;
+    state.speeds.XZ = 0.12;
+    state.speeds.YZ = 0.08;
+    state.speeds.XW = 0.00;
+    state.speeds.YW = 0.00;
+    state.speeds.ZW = 0.00;
+    
+    state.projectionMode = 'Perspective';
+    consoleLog('Applied Preset: 3D Fold (Rotates spatial XY, XZ, YZ planes only. No 4D distortion)', 'system');
+  } else if (name === 'reset') {
+    // Reset rotations to default values
+    state.autoRotate.XY = true;
+    state.autoRotate.XZ = true;
+    state.autoRotate.YZ = false;
+    state.autoRotate.XW = true;
+    state.autoRotate.YW = false;
+    state.autoRotate.ZW = false;
+    
+    state.speeds.XY = 0.15;
+    state.speeds.XZ = 0.08;
+    state.speeds.YZ = 0.00;
+    state.speeds.XW = 0.22;
+    state.speeds.YW = 0.05;
+    state.speeds.ZW = 0.00;
+    
+    state.selectedVertex = null;
+    state.hoveredVertex = null;
+    
+    consoleLog('Reset 4D rotation matrix & speeds to defaults', 'system');
+  }
+
+  // Update lil-gui inputs
+  buildGUI();
+  updateHUDMatrix();
+}
+
+document.getElementById('btn-preset-hyper').addEventListener('click', () => applyPreset('hyper'));
+document.getElementById('btn-preset-dual').addEventListener('click', () => applyPreset('dual'));
+document.getElementById('btn-preset-fold').addEventListener('click', () => applyPreset('fold'));
+document.getElementById('btn-preset-reset').addEventListener('click', () => applyPreset('reset'));
+
+/* ------------------------------------------------------------------ *
+ *  Bootstrapping
+ * ------------------------------------------------------------------ */
+function init() {
+  updateThemeCSS();
+  buildGUI();
+  updateHUDMatrix();
+  updateLabelHeaders();
+  
+  consoleLog('Hyper-dimensional projection console initialized.', 'system');
+  consoleLog('SO(4) Rotation Matrix calibrated to Identity.', 'system');
+  consoleLog('Select preset configurations or adjust sliders to rotate in 4D.', 'system');
+  consoleLog('Hover or click vertices to inspect structural Hamming pathways.', 'system');
+
+  animate();
+}
+
+// Start
+init();
+</script>
+</body>
+</html>

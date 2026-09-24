@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Boids Flock — 500 Autonomous Birds</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #0b0e12;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+    color: #e8e4d8;
+  }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; top: 16px; left: 16px; z-index: 20;
+    background: rgba(13, 17, 23, 0.88);
+    border: 1px solid rgba(232, 228, 216, 0.14);
+    border-radius: 10px;
+    padding: 12px 16px; min-width: 228px;
+    font-size: 12px; line-height: 1.8;
+    pointer-events: none; user-select: none;
+  }
+  #hud h1 { font-size: 13px; font-weight: 600; letter-spacing: 0.14em; color: #e8b64c; }
+  #hud .sub { color: rgba(232, 228, 216, 0.6); font-size: 11px; margin-bottom: 4px; }
+  #hud .row { display: flex; justify-content: space-between; gap: 16px; font-variant-numeric: tabular-nums; }
+  #hud .row span:last-child { color: #fff; }
+  #hint {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 20;
+    background: rgba(13, 17, 23, 0.85);
+    border: 1px solid rgba(232, 228, 216, 0.12);
+    border-radius: 999px;
+    padding: 7px 18px; font-size: 12px; white-space: nowrap;
+    color: rgba(232, 228, 216, 0.75);
+    pointer-events: none; user-select: none;
+  }
+  #hint b { color: #e8b64c; font-weight: 600; }
+  .lil-gui { --width: 290px; z-index: 30 !important; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+    "lil-gui": "https://unpkg.com/lil-gui@0.19.2/dist/lil-gui.esm.js"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud">
+  <h1>BOIDS FLOCK</h1>
+  <div class="sub">separation &middot; alignment &middot; cohesion</div>
+  <div class="row"><span>boids</span><span id="stat-boids">500</span></div>
+  <div class="row"><span>fps</span><span id="stat-fps">—</span></div>
+  <div class="row"><span>state</span><span id="stat-state">flying</span></div>
+</div>
+<div id="hint"><b>Drag</b> a red sphere to move an obstacle &nbsp;&middot;&nbsp; <b>Right-drag / wheel</b> to orbit &amp; zoom</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GUI } from 'lil-gui';
+
+/* ================= 1. Parameters ================= */
+const params = {
+  separation: 1.5,
+  alignment: 1.0,
+  cohesion: 1.0,
+  speed: 14.0,          // max speed (min speed tracks at 45%)
+  count: 500,           // active boids
+  perception: 9.0,      // neighbor radius for alignment + cohesion
+  wander: 0.55,         // natural wandering strength
+  avoid: 2.6,           // obstacle avoidance strength
+  showBoundary: false,
+  paused: false,
+  reset: () => seedFlock(),
+};
+const MAX_BOIDS = 800;
+const BOUNDARY_R = 70;      // large invisible containment sphere
+const SEP_RADIUS = 4.2;     // tighter radius for separation
+const MAX_FORCE = 60;
+
+/* ================= 2. Renderer / scene / camera ================= */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0e12);
+scene.fog = new THREE.Fog(0x0b0e12, 140, 420);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 2000);
+camera.position.set(0, 42, 128);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.getElementById('app').appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.minDistance = 20;
+controls.maxDistance = 400;
+
+scene.add(new THREE.HemisphereLight(0xcfd8e6, 0x1a1d22, 0.9));
+const sun = new THREE.DirectionalLight(0xfff1d6, 1.6);
+sun.position.set(60, 90, 40);
+scene.add(sun);
+
+const grid = new THREE.PolarGridHelper(90, 12, 8, 64, 0x2a3340, 0x1a212b);
+grid.position.y = -52;
+grid.material.transparent = true;
+grid.material.opacity = 0.5;
+scene.add(grid);
+
+/* Invisible containment sphere + optional faint helper (hidden by default) */
+const boundaryHelper = new THREE.Mesh(
+  new THREE.SphereGeometry(BOUNDARY_R, 32, 24),
+  new THREE.MeshBasicMaterial({ color: 0xe8b64c, wireframe: true, transparent: true, opacity: 0.05 })
+);
+boundaryHelper.visible = false;
+scene.add(boundaryHelper);
+
+/* ================= 3. Obstacles (visible, draggable) ================= */
+const obstacles = [];
+const obstacleDefs = [
+  { pos: [28, 6, -10], r: 9 },
+  { pos: [-30, -8, 12], r: 11 },
+  { pos: [0, 18, 30], r: 7 },
+  { pos: [-8, -20, -30], r: 8 },
+];
+const obstacleSolid = new THREE.MeshStandardMaterial({
+  color: 0xa33327, roughness: 0.45, metalness: 0.1,
+  transparent: true, opacity: 0.55,
+});
+const obstacleWire = new THREE.MeshBasicMaterial({ color: 0xff7a5c, wireframe: true, transparent: true, opacity: 0.35 });
+for (const def of obstacleDefs) {
+  const group = new THREE.Group();
+  const solid = new THREE.Mesh(new THREE.SphereGeometry(def.r, 32, 24), obstacleSolid);
+  const wire = new THREE.Mesh(new THREE.SphereGeometry(def.r * 1.02, 18, 14), obstacleWire);
+  group.add(solid, wire);
+  group.position.set(...def.pos);
+  group.userData.radius = def.r;
+  group.userData.isObstacle = true;
+  scene.add(group);
+  obstacles.push(group);
+}
+
+/* ================= 4. Boids: ONE InstancedMesh, no per-boid meshes ================= */
+// Small dart/bird shape pointing down +Z, built once and instanced.
+function makeBirdGeometry() {
+  const v = {
+    nose:  [0, 0.02, 1.35],
+    tail:  [0, 0.16, -0.85],
+    wingL: [-1.15, 0, -0.3],
+    wingR: [1.15, 0, -0.3],
+    belly: [0, -0.14, -0.25],
+  };
+  const tris = [
+    [v.nose, v.wingL, v.belly], [v.nose, v.belly, v.wingR],   // underside
+    [v.nose, v.tail, v.wingL],  [v.nose, v.wingR, v.tail],    // top
+    [v.tail, v.belly, v.wingL], [v.tail, v.wingR, v.belly],   // rear
+  ];
+  const pos = new Float32Array(tris.flat(2));
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+const birdGeo = makeBirdGeometry();
+const birdMat = new THREE.MeshStandardMaterial({
+  color: 0xffffff, roughness: 0.6, metalness: 0.15, side: THREE.DoubleSide,
+});
+const flock = new THREE.InstancedMesh(birdGeo, birdMat, MAX_BOIDS);
+flock.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+flock.frustumCulled = false;
+scene.add(flock);
+
+/* Boid state: typed arrays, one slot per potential boid */
+const pos = new Float32Array(MAX_BOIDS * 3);
+const vel = new Float32Array(MAX_BOIDS * 3);
+const wanderSeed = new Float32Array(MAX_BOIDS * 3);
+const tint = new THREE.Color();
+
+function randomInSphere(radius, out, i3) {
+  const r = radius * Math.cbrt(Math.random());
+  const theta = Math.random() * Math.PI * 2;
+  const phi = Math.acos(2 * Math.random() - 1);
+  const s = Math.sin(phi);
+  out[i3] = r * s * Math.cos(theta);
+  out[i3 + 1] = r * s * Math.sin(theta) * 0.6; // flatter starting disc
+  out[i3 + 2] = r * Math.cos(phi);
+}
+function seedFlock() {
+  for (let i = 0; i < MAX_BOIDS; i++) {
+    const i3 = i * 3;
+    randomInSphere(BOUNDARY_R * 0.55, pos, i3);
+    // Random initial heading at ~70% of max speed
+    const th = Math.random() * Math.PI * 2;
+    const ph = Math.acos(2 * Math.random() - 1);
+    const sp = params.speed * 0.7;
+    vel[i3] = sp * Math.sin(ph) * Math.cos(th);
+    vel[i3 + 1] = sp * Math.sin(ph) * Math.sin(th);
+    vel[i3 + 2] = sp * Math.cos(ph);
+    wanderSeed[i3] = Math.random() * 100;
+    wanderSeed[i3 + 1] = Math.random() * 100;
+    wanderSeed[i3 + 2] = Math.random() * 100;
+    // Warm off-white plumage with subtle per-bird variation
+    tint.setHSL(0.09 + Math.random() * 0.06, 0.25 + Math.random() * 0.3, 0.55 + Math.random() * 0.25);
+    flock.setColorAt(i, tint);
+  }
+  flock.instanceColor.needsUpdate = true;
+}
+seedFlock();
+
+/* ================= 5. Simulation step ================= */
+// Uniform-grid spatial hash so neighbor lookup stays fast at 800 boids.
+const gridMap = new Map();
+const cellOf = (x, y, z, cs) =>
+  `${Math.floor(x / cs)},${Math.floor(y / cs)},${Math.floor(z / cs)}`;
+
+const _m = new THREE.Matrix4();
+const _p = new THREE.Vector3(), _z = new THREE.Vector3(),
+      _x = new THREE.Vector3(), _y = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0);
+const _steer = new THREE.Vector3(), _v = new THREE.Vector3();
+
+function limit(vec, max) {
+  const l = vec.length();
+  if (l > max) vec.multiplyScalar(max / l);
+  return vec;
+}
+
+function stepBoids(dt, time) {
+  const n = Math.min(params.count, MAX_BOIDS);
+  const maxSpeed = params.speed;
+  const minSpeed = params.speed * 0.45;
+  const cs = params.perception;
+
+  // Rebuild spatial hash over active boids
+  gridMap.clear();
+  for (let i = 0; i < n; i++) {
+    const i3 = i * 3;
+    const key = cellOf(pos[i3], pos[i3 + 1], pos[i3 + 2], cs);
+    let cell = gridMap.get(key);
+    if (!cell) gridMap.set(key, (cell = []));
+    cell.push(i);
+  }
+
+  for (let i = 0; i < n; i++) {
+    const i3 = i * 3;
+    const px = pos[i3], py = pos[i3 + 1], pz = pos[i3 + 2];
+    _v.set(vel[i3], vel[i3 + 1], vel[i3 + 2]);
+
+    // --- gather neighbors from 27 surrounding cells ---
+    let cntAli = 0, cntCoh = 0, cntSep = 0;
+    let avgVx = 0, avgVy = 0, avgVz = 0;
+    let ctrX = 0, ctrY = 0, ctrZ = 0;
+    let sepX = 0, sepY = 0, sepZ = 0;
+    const bx = Math.floor(px / cs), by = Math.floor(py / cs), bz = Math.floor(pz / cs);
+    for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) for (let oz = -1; oz <= 1; oz++) {
+      const cell = gridMap.get(`${bx + ox},${by + oy},${bz + oz}`);
+      if (!cell) continue;
+      for (let k = 0; k < cell.length; k++) {
+        const j = cell[k];
+        if (j === i) continue;
+        const j3 = j * 3;
+        const dx = px - pos[j3], dy = py - pos[j3 + 1], dz = pz - pos[j3 + 2];
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > cs * cs || d2 < 1e-8) continue;
+        const d = Math.sqrt(d2);
+        // cohesion + alignment neighbors
+        avgVx += vel[j3]; avgVy += vel[j3 + 1]; avgVz += vel[j3 + 2];
+        ctrX += pos[j3]; ctrY += pos[j3 + 1]; ctrZ += pos[j3 + 2];
+        cntAli++; cntCoh++;
+        // separation neighbors (tighter radius, weighted by 1/d)
+        if (d < SEP_RADIUS) {
+          sepX += dx / d; sepY += dy / d; sepZ += dz / d;
+          cntSep++;
+        }
+      }
+    }
+
+    _steer.set(0, 0, 0);
+
+    // SEPARATION — steer away from crowding neighbors
+    if (cntSep > 0) {
+      _steer.x += (sepX / cntSep - _v.x / maxSpeed) * params.separation;
+      _steer.y += (sepY / cntSep - _v.y / maxSpeed) * params.separation;
+      _steer.z += (sepZ / cntSep - _v.z / maxSpeed) * params.separation;
+    }
+    // ALIGNMENT — steer toward average neighbor heading
+    if (cntAli > 0) {
+      _steer.x += (avgVx / cntAli / maxSpeed - _v.x / maxSpeed) * params.alignment;
+      _steer.y += (avgVy / cntAli / maxSpeed - _v.y / maxSpeed) * params.alignment;
+      _steer.z += (avgVz / cntAli / maxSpeed - _v.z / maxSpeed) * params.alignment;
+    }
+    // COHESION — steer toward local center of mass
+    if (cntCoh > 0) {
+      _steer.x += ((ctrX / cntCoh - px) / cs - _v.x / maxSpeed) * params.cohesion;
+      _steer.y += ((ctrY / cntCoh - py) / cs - _v.y / maxSpeed) * params.cohesion;
+      _steer.z += ((ctrZ / cntCoh - pz) / cs - _v.z / maxSpeed) * params.cohesion;
+    }
+
+    // WANDER — smooth per-boid meander from layered sines (no jitter)
+    const w1 = wanderSeed[i3], w2 = wanderSeed[i3 + 1], w3 = wanderSeed[i3 + 2];
+    _steer.x += Math.sin(time * 0.9 + w1) * params.wander;
+    _steer.y += Math.sin(time * 0.7 + w2) * params.wander * 0.6;
+    _steer.z += Math.cos(time * 0.8 + w3) * params.wander;
+
+    // Spherical OBSTACLE avoidance — anticipate along velocity
+    for (let o = 0; o < obstacles.length; o++) {
+      const ob = obstacles[o];
+      const R = ob.userData.radius + 3.5; // safety margin
+      const ox = px - ob.position.x, oy = py - ob.position.y, oz = pz - ob.position.z;
+      const d2 = ox * ox + oy * oy + oz * oz;
+      if (d2 < R * R && d2 > 1e-6) {
+        const d = Math.sqrt(d2);
+        const push = (1 - d / R) * params.avoid * 4;
+        _steer.x += (ox / d) * push;
+        _steer.y += (oy / d) * push;
+        _steer.z += (oz / d) * push;
+      }
+    }
+
+    // Invisible spherical BOUNDARY — steer back inside, harder when farther out
+    const distC = Math.sqrt(px * px + py * py + pz * pz);
+    if (distC > BOUNDARY_R) {
+      const push = (distC - BOUNDARY_R) * 0.35 + 1.2;
+      _steer.x -= (px / distC) * push;
+      _steer.y -= (py / distC) * push;
+      _steer.z -= (pz / distC) * push;
+    }
+
+    // Integrate with clamped steering force and speed range
+    limit(_steer, MAX_FORCE);
+    _v.addScaledVector(_steer, dt * MAX_FORCE * 0.28);
+    const sp = _v.length();
+    if (sp > maxSpeed) _v.multiplyScalar(maxSpeed / sp);
+    else if (sp < minSpeed && sp > 1e-6) _v.multiplyScalar(minSpeed / sp);
+    else if (sp <= 1e-6) _v.set(0, minSpeed, 0);
+
+    vel[i3] = _v.x; vel[i3 + 1] = _v.y; vel[i3 + 2] = _v.z;
+    pos[i3] = px + _v.x * dt;
+    pos[i3 + 1] = py + _v.y * dt;
+    pos[i3 + 2] = pz + _v.z * dt;
+
+    // Orient the instance along its velocity (forward = +Z of bird geometry)
+    _z.copy(_v).normalize();
+    _x.crossVectors(_up, _z);
+    if (_x.lengthSq() < 1e-6) _x.set(1, 0, 0); // heading straight up/down
+    else _x.normalize();
+    _y.crossVectors(_z, _x).normalize();
+    _m.makeBasis(_x, _y, _z);
+    _p.set(pos[i3], pos[i3 + 1], pos[i3 + 2]);
+    _m.setPosition(_p);
+    flock.setMatrixAt(i, _m);
+  }
+  flock.count = n;
+  flock.instanceMatrix.needsUpdate = true;
+}
+
+/* ================= 6. Drag obstacles (OrbitControls yields while dragging) ================= */
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const dragPlane = new THREE.Plane();
+const dragOffset = new THREE.Vector3();
+const hitPoint = new THREE.Vector3();
+let dragged = null;
+
+function setPointer(e) {
+  pointer.x = (e.clientX / innerWidth) * 2 - 1;
+  pointer.y = -(e.clientY / innerHeight) * 2 + 1;
+}
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  setPointer(e);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(obstacles, true);
+  if (hits.length) {
+    let g = hits[0].object;
+    while (g && !g.userData.isObstacle) g = g.parent;
+    dragged = g;
+    // Drag on a camera-facing plane through the grab point
+    camera.getWorldDirection(dragPlane.normal).negate();
+    dragPlane.setFromNormalAndCoplanarPoint(dragPlane.normal, hits[0].point);
+    dragOffset.copy(dragged.position).sub(hits[0].point);
+    controls.enabled = false;
+    renderer.domElement.setPointerCapture(e.pointerId);
+    document.getElementById('stat-state').textContent = 'moving obstacle';
+  }
+});
+renderer.domElement.addEventListener('pointermove', (e) => {
+  setPointer(e);
+  if (dragged) {
+    raycaster.setFromCamera(pointer, camera);
+    if (raycaster.ray.intersectPlane(dragPlane, hitPoint)) {
+      dragged.position.copy(hitPoint).add(dragOffset);
+      // Keep the obstacle inside the containment sphere
+      const d = dragged.position.length();
+      const maxD = BOUNDARY_R - dragged.userData.radius;
+      if (d > maxD) dragged.position.multiplyScalar(maxD / d);
+    }
+  } else {
+    raycaster.setFromCamera(pointer, camera);
+    const hits = raycaster.intersectObjects(obstacles, true);
+    renderer.domElement.style.cursor = hits.length ? 'grab' : '';
+  }
+});
+function endDrag(e) {
+  if (dragged) {
+    dragged = null;
+    controls.enabled = true;
+    document.getElementById('stat-state').textContent = params.paused ? 'paused' : 'flying';
+    try { renderer.domElement.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+}
+renderer.domElement.addEventListener('pointerup', endDrag);
+renderer.domElement.addEventListener('pointercancel', endDrag);
+
+/* ================= 7. lil-gui controls ================= */
+const gui = new GUI({ title: 'Flock Controls' });
+gui.add(params, 'separation', 0, 3, 0.05).name('Separation');
+gui.add(params, 'alignment', 0, 3, 0.05).name('Alignment');
+gui.add(params, 'cohesion', 0, 3, 0.05).name('Cohesion');
+gui.add(params, 'speed', 2, 30, 0.5).name('Speed');
+gui.add(params, 'count', 10, MAX_BOIDS, 10).name('Boids').onChange((v) => {
+  params.count = Math.round(v);
+  document.getElementById('stat-boids').textContent = params.count;
+});
+const fAdv = gui.addFolder('Advanced');
+fAdv.add(params, 'perception', 4, 16, 0.5).name('Perception');
+fAdv.add(params, 'wander', 0, 2, 0.05).name('Wander');
+fAdv.add(params, 'avoid', 0, 6, 0.1).name('Avoidance');
+fAdv.add(params, 'showBoundary').name('Show boundary').onChange((v) => {
+  boundaryHelper.visible = v; // containment itself is always active
+});
+fAdv.add(params, 'paused').name('Pause').onChange((v) => {
+  document.getElementById('stat-state').textContent = v ? 'paused' : 'flying';
+});
+fAdv.add(params, 'reset').name('Reset flock');
+
+/* ================= 8. Main loop ================= */
+const clock = new THREE.Clock();
+const statFps = document.getElementById('stat-fps');
+let fpsAcc = 0, fpsN = 0, fpsT = 0;
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+  if (!params.paused && !document.hidden) stepBoids(dt, t);
+  controls.update();
+  renderer.render(scene, camera);
+  // fps meter (updates twice a second)
+  fpsAcc += dt; fpsN++; fpsT += dt;
+  if (fpsT > 0.5) {
+    statFps.textContent = Math.round(fpsN / fpsAcc);
+    fpsAcc = 0; fpsN = 0; fpsT = 0;
+  }
+});
+</script>
+</body>
+</html>
