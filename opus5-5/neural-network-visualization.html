@@ -540,7 +540,7 @@ const sphereMat = new THREE.ShaderMaterial({
     void main() {
       float a = vDyn.x, p = vDyn.y, st = vDyn.z, m = abs(a);
       float ndv = clamp(dot(normalize(vN), normalize(vV)), 0.0, 1.0);
-      float fres = pow(1.0 - ndv, 2.2);
+      float fres = pow(max(1.0 - ndv, 0.0), 2.2);
       vec3 c = actColor(a);
       vec3 col = c * (0.18 + 0.75 * m) * (0.45 + 0.55 * ndv)
                + mix(c, vec3(1.0), 0.3) * fres * (0.45 + 0.8 * m)
@@ -581,7 +581,7 @@ const haloMat = new THREE.ShaderMaterial({
       float r = length(vQ);
       if (r > 1.0) discard;
       float a = vDyn.x, p = vDyn.y, st = vDyn.z;
-      float g = pow(1.0 - r, 3.2) * (0.05 + 0.22 * abs(a) + 0.55 * p);
+      float g = pow(max(1.0 - r, 0.0), 3.2) * (0.05 + 0.22 * abs(a) + 0.55 * p);
       float k = st > 2.5 ? 0.15 : (st > 0.5 && st < 1.5 ? 1.8 : 1.0);
       gl_FragColor = vec4(mix(actColor(a), vec3(1.0), 0.15 + 0.3 * p) * g * k, 1.0);
     }`,
@@ -654,10 +654,10 @@ const tubeMat = new THREE.ShaderMaterial({
     void main() {
       float m = abs(vW);
       vec3 col = vW >= 0.0 ? uPosCol : uNegCol;
-      float I = (0.035 + 0.55 * pow(m, 1.25)) * (0.35 + 0.65 * pow(vFacing, 1.5));
+      float I = (0.035 + 0.55 * pow(m, 1.25)) * (0.35 + 0.65 * pow(max(vFacing, 0.0), 1.5)); // interpolation can dip just below 0
       float s = vAlong * vLen;
       // slow luminous bands drifting input → output, locked to the signal clock
-      float sheen = pow(0.5 + 0.5 * sin(6.2831 * (s * 0.3 - uSigTime * 0.8)), 10.0);
+      float sheen = pow(max(0.5 + 0.5 * sin(6.2831 * (s * 0.3 - uSigTime * 0.8)), 0.0), 10.0);
       I *= 0.75 + 0.7 * sheen;
       if (vW < 0.0) { // inhibitory: marching dashes
         float f = fract(s * 1.3 - uSigTime * 0.8);
@@ -665,7 +665,7 @@ const tubeMat = new THREE.ShaderMaterial({
       }
       if (vRel > 2.5) I *= 0.07;
       else if (vRel > 0.5) {
-        float chev = pow(0.5 + 0.5 * sin(6.2831 * (s * 0.7 - uTime * 1.4)), 14.0);
+        float chev = pow(max(0.5 + 0.5 * sin(6.2831 * (s * 0.7 - uTime * 1.4)), 0.0), 14.0);
         I = I * 2.4 + 0.12 + chev * 0.9;
         if (vRel < 1.5) col = mix(col, vec3(1.0), 0.28); // incoming: whiter
       }
@@ -901,11 +901,12 @@ const gridMat = new THREE.ShaderMaterial({
   vertexShader: `varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
   fragmentShader: /* glsl */`
     uniform vec3 uCol; uniform float uTime; varying vec3 vW;
-    float line(vec2 p, float s) { vec2 q = p / s; vec2 g = abs(fract(q - 0.5) - 0.5) / fwidth(q); return 1.0 - min(min(g.x, g.y), 1.0); }
+    float line(vec2 p, float s) { vec2 q = p / s; vec2 g = abs(fract(q - 0.5) - 0.5) / max(fwidth(q), vec2(1e-5)); return 1.0 - min(min(g.x, g.y), 1.0); }
     void main() {
       float d = length(vW.xz);
       float fade = (1.0 - smoothstep(6.0, 70.0, d));
-      float pulseRing = exp(-pow(d - mod(uTime * 9.0, 90.0), 2.0) * 0.05) * 0.5;
+      float dr = d - mod(uTime * 9.0, 90.0);             // signed: squared by hand, pow() of a negative base is NaN on D3D
+      float pulseRing = exp(-dr * dr * 0.05) * 0.5;
       float a = (line(vW.xz, 1.0) * 0.09 + line(vW.xz, 5.0) * 0.28) * fade * (1.0 + pulseRing * 3.0);
       gl_FragColor = vec4(uCol * a, 1.0);
     }`,
@@ -930,9 +931,9 @@ const dust = (() => {
     vertexShader: `attribute float aSeed; uniform float uTime, uScale; varying float vA;
       void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0);
         vA = 0.35 + 0.65 * (0.5 + 0.5 * sin(uTime * (0.4 + aSeed) + aSeed * 40.0));
-        gl_PointSize = (1.0 + aSeed * 2.2) * uScale * (60.0 / -mv.z) + 1.0; gl_Position = projectionMatrix * mv; }`,
+        gl_PointSize = (1.0 + aSeed * 2.2) * uScale * (60.0 / max(-mv.z, 0.1)) + 1.0; gl_Position = projectionMatrix * mv; }`,
     fragmentShader: `varying float vA; void main(){ float r = length(gl_PointCoord - 0.5); if (r > 0.5) discard;
-        gl_FragColor = vec4(vec3(0.35, 0.62, 0.95) * pow(1.0 - r * 2.0, 2.0) * vA * 0.5, 1.0); }`,
+        gl_FragColor = vec4(vec3(0.35, 0.62, 0.95) * pow(max(1.0 - r * 2.0, 0.0), 2.0) * vA * 0.5, 1.0); }`,
   });
   const pts = new THREE.Points(g, m);
   pts.frustumCulled = false;
