@@ -1,0 +1,1604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mechanical Butterfly</title>
+<style>
+  /* Maker's-plaque HUD: engraved brass on smoked glass. */
+  :root {
+    --panel: rgba(16, 12, 9, 0.58);
+    --brass: #d9b26f;
+    --brass-dim: rgba(217, 178, 111, 0.35);
+    --ink: #f4ead8;
+    --muted: #9b8f7c;
+    --alarm: #ff7a6e;
+  }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #070509; color: var(--ink); }
+  body { font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; }
+  canvas { display: block; }
+
+  #plaque {
+    position: fixed; top: 14px; left: 14px; width: min(300px, calc(100vw - 28px));
+    padding: 12px 16px 13px; pointer-events: none;
+    background: var(--panel); border-radius: 3px;
+    border-top: 1px solid var(--brass-dim); border-bottom: 1px solid var(--brass-dim);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 8px 30px rgba(0, 0, 0, 0.35);
+    -webkit-backdrop-filter: blur(5px) saturate(1.2); backdrop-filter: blur(5px) saturate(1.2);
+  }
+  #plaque .title { font-size: 19px; font-style: italic; letter-spacing: 0.02em; color: var(--brass); }
+  #plaque .sub { margin-top: 1px; font-size: 10px; font-variant: small-caps; letter-spacing: 0.16em; color: var(--muted); }
+  #plaque .gauges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 11px 0 9px; }
+  #plaque .gauge { border-left: 1px solid var(--brass-dim); padding-left: 7px; }
+  #plaque .gauge span { display: block; font-size: 9px; font-variant: small-caps; letter-spacing: 0.14em; color: var(--muted); }
+  #plaque .gauge b { font: 500 15px/1.3 ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; color: var(--ink); }
+  #plaque .gauge small { font-size: 10px; color: var(--muted); }
+  #plaque .spring { display: flex; align-items: center; gap: 8px; font-size: 10px; font-variant: small-caps; letter-spacing: 0.14em; color: var(--muted); }
+  #plaque .track { flex: 1; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+  #plaque .fill { height: 100%; width: 100%; background: linear-gradient(90deg, #6b3f17, var(--brass) 70%, #fff2cf); }
+  #plaque #g-spring { min-width: 52px; text-align: right; color: var(--ink); }
+
+  #keys {
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100vw - 28px);
+    font-size: 11px; letter-spacing: 0.06em; color: var(--muted); text-align: center; pointer-events: none;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+  }
+  #keys b { color: var(--brass); font-weight: 600; }
+
+  body.clean #plaque, body.clean #keys, body.clean .lil-gui { display: none !important; }
+
+  /* Startup failure notice */
+  #stall { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgba(7, 5, 9, 0.82); }
+  #stall[hidden] { display: none; }
+  #stall .card { max-width: 440px; padding: 16px 18px; border-top: 2px solid var(--alarm); background: var(--panel); }
+  #stall h2 { margin: 0 0 8px; font-size: 17px; font-style: italic; font-weight: normal; color: var(--alarm); }
+  #stall p { margin: 6px 0; font-size: 13px; line-height: 1.5; color: var(--muted); }
+  #stall #stall-why { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--ink); overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<header id="plaque">
+  <div class="title">Mechanical Butterfly</div>
+  <div class="sub">a wind-up automaton in brass and glass</div>
+  <div class="gauges">
+    <div class="gauge"><span>wingbeat</span><b id="g-hz">0.00</b> <small>Hz</small></div>
+    <div class="gauge"><span>stroke</span><b id="g-stroke">0°</b></div>
+    <div class="gauge"><span>frames</span><b id="g-fps">–</b> <small>/s</small></div>
+  </div>
+  <div class="spring">mainspring <div class="track"><div class="fill" id="g-spring-fill"></div></div> <span id="g-spring">full</span></div>
+</header>
+<div id="keys"><b>W</b> wind &nbsp;·&nbsp; <b>F</b> fly or hover &nbsp;·&nbsp; <b>X</b> glass shell &nbsp;·&nbsp; <b>Space</b> pause &nbsp;·&nbsp; <b>R</b> reset view &nbsp;·&nbsp; <b>H</b> hide panels &nbsp;·&nbsp; drag to look around</div>
+
+<div id="stall" hidden>
+  <div class="card">
+    <h2>The movement didn't start</h2>
+    <p id="stall-why"></p>
+    <p>This page fetches Three.js r160 from cdn.jsdelivr.net and draws with WebGL 2. Check your connection and any content blocker, try a current browser, then reload. The developer console has the details.</p>
+  </div>
+</div>
+
+<script>
+// Startup check. This plain script runs even when the module below can't, for example when the
+// CDN is unreachable, so it is the one place that can explain a blank page. The module marks
+// <html data-running> after its first frame; until then any error is shown on the notice.
+(function () {
+  var root = document.documentElement;
+  var lastError = '';
+  function stall(why) {
+    if (root.dataset.running) return;
+    document.getElementById('stall-why').textContent = why;
+    document.getElementById('stall').hidden = false;
+  }
+  window.__butterflyStall = stall;
+  window.addEventListener('error', function (ev) {
+    // A module whose imports fail reports on its own <script> element, with no message.
+    var el = ev.target;
+    if (el instanceof HTMLScriptElement) lastError = el.src ? 'Could not load ' + el.src : 'The scene could not load its modules (Three.js from cdn.jsdelivr.net).';
+    else if (ev.message) lastError = ev.message;
+    if (lastError) stall(lastError);
+  }, true);
+  window.addEventListener('unhandledrejection', function (ev) {
+    stall('Startup failed: ' + (ev.reason && ev.reason.message ? ev.reason.message : ev.reason));
+  });
+  document.addEventListener('DOMContentLoaded', function () {
+    if (!document.createElement('canvas').getContext('webgl2')) stall('This browser has no WebGL 2 support.');
+  });
+  window.addEventListener('load', function () {
+    setTimeout(function () { stall(lastError || 'Three.js did not arrive from cdn.jsdelivr.net within 15 seconds.'); }, 15000);
+  });
+})();
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import GUI from 'three/addons/libs/lil-gui.module.min.js';
+
+/* ==========================================================================
+   CONFIG
+   --------------------------------------------------------------------------
+   Body frame: +z is forward (head), +y is up, +x is the butterfly's right.
+   All mechanism numbers are in that frame, relative to the thorax centre.
+   ========================================================================== */
+
+// Wing drive: crank -> conrod -> vertical slider -> two links -> wing levers.
+// The slider sits on the midline, so both wings are driven by one crank and
+// stay exact mirror images. Each wing is a first-class lever: the hinge pin is
+// the fulcrum, the short inboard arm is pushed by the link, the long outboard
+// arm is the wing. Geometry tuned so the stroke runs about -27° .. +34°.
+const MECH = {
+  crank:  { x: 0, y: -0.02, r: 0.095 },
+  conrod: 0.14,                // crank pin -> slider pin
+  hinge:  { x: 0.30, y: 0.24 },
+  lever:  0.18,                // hinge -> knee (inboard arm of the wing)
+  link:   0.12,                // slider cross-pin -> knee
+  pinX:   0.10,                // half-width of the slider cross-bar
+  planeZ: 0.165,               // z of the linkage plane
+  foreZ:  0.14,                // forewing hinge station
+  hindZ: -0.20,                // hindwing hinge station (same hinge axis)
+};
+
+// Gear train (module 0.01): mainspring barrel with a contrate (crown) wheel
+// -> 8-leaf pinion on the intermediate arbor, which carries a 30-tooth wheel
+// -> 10-leaf pinion on the crankshaft. Overall ratio 24/8 * 30/10 = 9.
+const TRAIN = {
+  m: 0.01,
+  crankN: 10, wheelN: 30, pinionN: 8, crownN: 24,
+  gearZ: -0.05,                // layer of the wheel / crank pinion pair
+  pinionZ: -0.25,              // contrate pinion (meets the crown's front rim)
+  crownZ: -0.37,               // barrel arbor station
+};
+TRAIN.I = { x: 0, y: MECH.crank.y + TRAIN.m * (TRAIN.wheelN + TRAIN.crankN) / 2 };  // intermediate arbor
+TRAIN.crownR = TRAIN.m * TRAIN.crownN / 2;                                          // pitch radius 0.12
+
+const THORAX = { cy: 0.05, rx: 0.46, ry: 0.42, rz: 0.62 };
+
+const SPRING = {
+  maxHz: 2.4,                  // wingbeat at full wind, speed 1
+  beatsPerWind: 180,           // wingbeats from fully wound to empty (at speed 1)
+  windTime: 1.6,               // seconds to wind from empty to full
+};
+
+const HOVER_HEIGHT = 1.9;
+
+const PALETTES = {
+  'Morpho':  { root: '#0a1450', mid: '#1d58ff', outer: '#43d9ff', band: '#04060e', spot: '#eaf6ff', vein: '#020510', eyeRing: '#ffc94d', eyeIris: '#0b0b12', eyePupil: '#9ff0ff', gem: 0x39c8ff, spark: [0x7fe3ff, 0xffffff, 0x4c7dff] },
+  'Monarch': { root: '#4a1300', mid: '#e0600a', outer: '#ffb33b', band: '#110703', spot: '#fff3df', vein: '#0d0502', eyeRing: '#ffd27a', eyeIris: '#1a0803', eyePupil: '#ffe6a8', gem: 0xff8a1a, spark: [0xffc060, 0xffffff, 0xff7a2a] },
+  'Emerald': { root: '#03241a', mid: '#13b874', outer: '#94ffbf', band: '#020d08', spot: '#e9ffdc', vein: '#010805', eyeRing: '#d6ff7a', eyeIris: '#03140c', eyePupil: '#b7ffd8', gem: 0x2dff9a, spark: [0x9dffc8, 0xffffff, 0x3fe08a] },
+  'Opal':    { root: '#33124f', mid: '#b874ff', outer: '#ffd3f6', band: '#140a1e', spot: '#ffffff', vein: '#0b0612', eyeRing: '#9cf3ff', eyeIris: '#170b22', eyePupil: '#ffe0fb', gem: 0xd28bff, spark: [0xffd0f6, 0xffffff, 0xa27bff] },
+};
+
+const FINISHES = {
+  'Brass':     { brass: 0xc9a05a, dark: 0x7f6233, gold: 0xf0c977, copper: 0xc27a4c },
+  'Silver':    { brass: 0xc8ccd2, dark: 0x6f747c, gold: 0xeef1f5, copper: 0xa9b3c0 },
+  'Rose gold': { brass: 0xd9a08c, dark: 0x8a5848, gold: 0xf3c4b0, copper: 0xc9806a },
+  'Gunmetal':  { brass: 0x6c6f78, dark: 0x2d2f35, gold: 0xc9a05a, copper: 0x8f6a4c },
+};
+
+const params = {
+  palette: 'Morpho',
+  finish: 'Brass',
+  speed: 1.0,
+  flight: false,
+  autoWind: true,
+  xray: 0.12,
+  sparkles: true,
+  bloom: 0.45,
+  exposure: 0.9,
+};
+
+/* ==========================================================================
+   RENDERER, SCENE, CAMERA, POST
+   ========================================================================== */
+
+// MSAA lives on the composer's render target below, so the default framebuffer doesn't need it.
+const renderer = new THREE.WebGLRenderer({ powerPreference: 'high-performance', stencil: false });
+const DPR = Math.min(window.devicePixelRatio, 1.75);
+renderer.setPixelRatio(DPR);
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = params.exposure;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const FOG_COLOR = new THREE.Color().setRGB(0.032, 0.022, 0.038);
+scene.fog = new THREE.FogExp2(FOG_COLOR, 0.03);
+
+const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.05, 140);
+const CAM_HOME = new THREE.Vector3(4.4, 5.6, 6.2);
+const TARGET_HOME = new THREE.Vector3(0, HOVER_HEIGHT - 0.25, 0);
+camera.position.copy(CAM_HOME);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(TARGET_HOME);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.minDistance = 1.6;
+controls.maxDistance = 22;
+controls.maxPolarAngle = Math.PI * 0.495;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.35;
+// stop the idle drift as soon as someone takes the camera
+renderer.domElement.addEventListener('pointerdown', () => { controls.autoRotate = false; });
+
+// Image-based lighting: the metals are mostly reflection, so they need an environment.
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envScene = new RoomEnvironment(renderer);
+scene.environment = pmrem.fromScene(envScene, 0.02).texture;
+envScene.dispose();
+pmrem.dispose();
+
+// Multisampled HDR target so the post stack keeps MSAA and bloom has headroom.
+const composerRT = new THREE.WebGLRenderTarget(innerWidth * DPR, innerHeight * DPR, { type: THREE.HalfFloatType, samples: 4 });
+const composer = new EffectComposer(renderer, composerRT);
+composer.setPixelRatio(DPR);
+composer.setSize(innerWidth, innerHeight);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), params.bloom, 0.5, 0.9);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+/* ==========================================================================
+   UTILITIES
+   ========================================================================== */
+
+const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+const Y_UP = V(0, 1, 0);
+const Z_FWD = V(0, 0, 1);
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const damp = (k, dt) => 1 - Math.exp(-k * dt);   // frame-rate independent lerp factor
+
+// Seeded xorshift32, so the wing paint and dust layout come out the same on every load.
+function seededRandom(seed) {
+  let s = Math.imul(seed + 1, 2654435761) >>> 0 || 1;
+  return () => {
+    s ^= s << 13; s ^= s >>> 17; s ^= s << 5;
+    s >>>= 0;
+    return s / 4294967296;
+  };
+}
+
+// Geometry for a rod of radius r from a to b, baked into the returned geometry.
+function rodGeometry(a, b, r, seg = 10) {
+  const dir = new THREE.Vector3().subVectors(b, a);
+  const g = new THREE.CylinderGeometry(r, r, dir.length(), seg, 1);
+  const q = new THREE.Quaternion().setFromUnitVectors(Y_UP, dir.clone().normalize());
+  g.applyMatrix4(new THREE.Matrix4().compose(a.clone().addScaledVector(dir, 0.5), q, V(1, 1, 1)));
+  return g;
+}
+
+function sphereGeometryAt(p, r, seg = 12) {
+  return new THREE.SphereGeometry(r, seg, Math.max(6, seg * 0.75 | 0)).translate(p.x, p.y, p.z);
+}
+
+// Strip uv/normal differences so heterogeneous primitives can be merged into one draw call.
+function merge(geoms) {
+  const clean = geoms.map((g) => {
+    const n = g.index ? g.toNonIndexed() : g;
+    for (const k of Object.keys(n.attributes)) if (k !== 'position' && k !== 'normal') n.deleteAttribute(k);
+    return n;
+  });
+  return mergeGeometries(clean, false);
+}
+
+function mesh(geo, mat, { cast = true, receive = true } = {}) {
+  const m = new THREE.Mesh(geo, mat);
+  m.castShadow = cast;
+  m.receiveShadow = receive;
+  return m;
+}
+
+// Closed tube along an axis-aligned ellipse in the plane z = const.
+function ellipseTube(rx, ry, cy, z, r) {
+  const pts = [];
+  for (let i = 0; i < 64; i++) {
+    const a = (i / 64) * Math.PI * 2;
+    pts.push(V(Math.cos(a) * rx, cy + Math.sin(a) * ry, z));
+  }
+  return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 128, r, 8, true);
+}
+
+// Helical coil (springs, the proboscis is done separately).
+function helixGeometry(cx, cy, z0, z1, R, turns, r) {
+  const pts = [];
+  const n = Math.ceil(turns * 24);
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, a = t * turns * Math.PI * 2;
+    pts.push(V(cx + Math.cos(a) * R, cy + Math.sin(a) * R, z0 + (z1 - z0) * t));
+  }
+  return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), n * 2, r, 6, false);
+}
+
+/* ==========================================================================
+   MATERIALS
+   ========================================================================== */
+
+const MAT = {
+  brass:  new THREE.MeshStandardMaterial({ color: 0xc9a05a, metalness: 1, roughness: 0.3 }),
+  dark:   new THREE.MeshStandardMaterial({ color: 0x7f6233, metalness: 1, roughness: 0.42 }),
+  gold:   new THREE.MeshPhysicalMaterial({ color: 0xf0c977, metalness: 1, roughness: 0.24, clearcoat: 0.3, clearcoatRoughness: 0.25 }),
+  copper: new THREE.MeshStandardMaterial({ color: 0xc27a4c, metalness: 1, roughness: 0.34 }),
+  steel:  new THREE.MeshStandardMaterial({ color: 0xa7adb5, metalness: 1, roughness: 0.22 }),
+  // heat-blued steel: springs and screws, with a thin-film sheen
+  blued:  new THREE.MeshPhysicalMaterial({ color: 0x2a3f86, metalness: 1, roughness: 0.25, iridescence: 0.7, iridescenceIOR: 1.8 }),
+  ruby:   new THREE.MeshPhysicalMaterial({ color: 0xff2a48, emissive: 0xff1036, emissiveIntensity: 1.6, roughness: 0.08, clearcoat: 1 }),
+  gem:    new THREE.MeshPhysicalMaterial({ color: 0x39c8ff, emissive: 0x39c8ff, emissiveIntensity: 2.2, roughness: 0.05, clearcoat: 1 }),
+  eye:    new THREE.MeshPhysicalMaterial({ color: 0x120a04, emissive: 0xff7a14, emissiveIntensity: 0.55, roughness: 0.06, metalness: 0.2,
+                                           clearcoat: 1, iridescence: 1, iridescenceIOR: 1.6, flatShading: true }),
+  glass:  new THREE.MeshPhysicalMaterial({ color: 0xcfe0ff, metalness: 0, roughness: 0.03, transparent: true, opacity: params.xray,
+                                           depthWrite: false, iridescence: 0.7, iridescenceIOR: 1.35,
+                                           iridescenceThicknessRange: [250, 700], side: THREE.FrontSide, envMapIntensity: 0.8 }),
+  // HDR colour so the filament crosses the bloom threshold
+  filament: new THREE.MeshBasicMaterial({ color: new THREE.Color(6.0, 2.6, 0.7), toneMapped: true }),
+  floor:  new THREE.MeshStandardMaterial({ color: 0x0e0c12, metalness: 0.2, roughness: 0.55, envMapIntensity: 0.12 }),
+  inlay:  new THREE.MeshStandardMaterial({ color: 0x9c7a44, metalness: 1, roughness: 0.45, envMapIntensity: 0.35 }),
+};
+
+function applyFinish(name) {
+  const f = FINISHES[name];
+  MAT.brass.color.setHex(f.brass);
+  MAT.dark.color.setHex(f.dark);
+  MAT.gold.color.setHex(f.gold);
+  MAT.copper.color.setHex(f.copper);
+}
+
+/* ==========================================================================
+   GEAR GEOMETRY
+   --------------------------------------------------------------------------
+   Straight-flank trapezoid teeth on a module-m pitch circle (r = m·N/2),
+   addendum m, dedendum 1.25m. Tooth 0 is centred on local angle 0, which the
+   meshing-phase formula in MECHANISM relies on.
+   ========================================================================== */
+
+function gearGeometry(N, m, thick, { spokes = 0, bore = 0.012 } = {}) {
+  const r = (m * N) / 2, ra = r + m, rr = r - 1.25 * m, p = (Math.PI * 2) / N;
+  const shape = new THREE.Shape();
+  for (let i = 0; i < N; i++) {
+    const c = i * p;
+    const pts = [[rr, c - 0.5 * p], [rr, c - 0.26 * p], [ra, c - 0.12 * p], [ra, c + 0.12 * p], [rr, c + 0.26 * p]];
+    pts.forEach(([rad, a], k) => {
+      const x = rad * Math.cos(a), y = rad * Math.sin(a);
+      if (i === 0 && k === 0) shape.moveTo(x, y); else shape.lineTo(x, y);
+    });
+  }
+  shape.closePath();
+
+  const boreHole = new THREE.Path();
+  boreHole.absarc(0, 0, bore, 0, Math.PI * 2, true);
+  shape.holes.push(boreHole);
+
+  // Spoked wheels: crossing-out windows between a hub and a rim, like a watch wheel.
+  if (spokes > 0) {
+    const rh = Math.max(bore * 2.2, rr * 0.3), rin = rr * 0.8, w = rr * 0.1;
+    for (let s = 0; s < spokes; s++) {
+      const a0 = (s / spokes) * Math.PI * 2, a1 = ((s + 1) / spokes) * Math.PI * 2;
+      const dO = w / 2 / rin, dI = w / 2 / rh;
+      const win = new THREE.Path();
+      const seg = 14;
+      for (let k = 0; k <= seg; k++) {
+        const a = a0 + dO + (a1 - dO - (a0 + dO)) * (k / seg);
+        const x = Math.cos(a) * rin, y = Math.sin(a) * rin;
+        if (k === 0) win.moveTo(x, y); else win.lineTo(x, y);
+      }
+      for (let k = seg; k >= 0; k--) {
+        const a = a0 + dI + (a1 - dI - (a0 + dI)) * (k / seg);
+        win.lineTo(Math.cos(a) * rh, Math.sin(a) * rh);
+      }
+      win.closePath();
+      shape.holes.push(win);
+    }
+  }
+
+  const g = new THREE.ExtrudeGeometry(shape, {
+    depth: thick, curveSegments: 10,
+    bevelEnabled: true, bevelThickness: thick * 0.15, bevelSize: m * 0.12, bevelSegments: 1,
+  });
+  g.translate(0, 0, -thick / 2);
+  return g;
+}
+
+// Contrate (crown) wheel: teeth stand off the rim parallel to the arbor, so a
+// pinion whose axis is radial to the wheel can mesh with it at 90°.
+// Built around +y; teeth hang downward from the plate.
+function crownGeometry(N, R, toothH) {
+  const parts = [];
+  const pitch = (Math.PI * 2 * R) / N;
+  const tooth = new THREE.BoxGeometry(pitch * 0.46, toothH, 0.02);
+  const mtx = new THREE.Matrix4(), q = new THREE.Quaternion();
+  for (let k = 0; k < N; k++) {
+    const b = (k / N) * Math.PI * 2;      // tooth k at local angle b, measured from +z towards +x
+    q.setFromAxisAngle(Y_UP, b);
+    mtx.compose(V(Math.sin(b) * R, -toothH / 2, Math.cos(b) * R), q, V(1, 1, 1));
+    parts.push(tooth.clone().applyMatrix4(mtx));
+  }
+  return merge(parts);
+}
+
+/* ==========================================================================
+   LINKAGE SOLVER
+   --------------------------------------------------------------------------
+   Solved fresh every frame from the crank angle; nothing is keyframed.
+     P  crank pin      = C + r(cos θ, sin θ)
+     S  slider (x = 0) = P.y + sqrt(conrod² − P.x²)          (crank–slider)
+     Q  knee           = circle(hinge, lever) ∩ circle((pinX, S.y), link), inboard root
+     φ  wing angle     = direction from Q through the hinge (the wing is the far arm)
+   ========================================================================== */
+
+const link = { px: 0, py: 0, sy: 0, qx: 0, qy: 0, phi: 0 };
+
+function solveLinkage(theta, out) {
+  const { crank, conrod, hinge, lever, link: L2, pinX } = MECH;
+  const px = crank.x + crank.r * Math.cos(theta);
+  const py = crank.y + crank.r * Math.sin(theta);
+  const sy = py + Math.sqrt(conrod * conrod - px * px);
+
+  const sx = pinX, dx = hinge.x - sx, dy = hinge.y - sy, D = Math.hypot(dx, dy);
+  const a = (L2 * L2 - lever * lever + D * D) / (2 * D);
+  const h = Math.sqrt(Math.max(0, L2 * L2 - a * a));
+  const mx = sx + (a * dx) / D, my = sy + (a * dy) / D;
+  const q1x = mx + (h * dy) / D, q1y = my - (h * dx) / D;
+  const q2x = mx - (h * dy) / D, q2y = my + (h * dx) / D;
+  const inboard1 = q1x < q2x;
+  out.px = px; out.py = py; out.sy = sy;
+  out.qx = inboard1 ? q1x : q2x;
+  out.qy = inboard1 ? q1y : q2y;
+  out.phi = Math.atan2(hinge.y - out.qy, hinge.x - out.qx);
+  return out;
+}
+
+/* ==========================================================================
+   WING DESIGN
+   --------------------------------------------------------------------------
+   Each wing is defined once in its own 2D frame (u = outboard from the hinge,
+   v = forward). That same outline and vein set produces the membrane shape,
+   the painted texture, and the gold tube frame, so paint and metal agree.
+   ========================================================================== */
+
+const WING_DEFS = {
+  fore: {
+    outline: [
+      [0.10, 0.12], [0.50, 0.40], [1.20, 0.72], [1.90, 0.97], [2.42, 1.08], [2.62, 0.80],
+      [2.50, 0.30], [2.18, -0.12], [1.72, -0.42], [1.05, -0.42], [0.48, -0.26], [0.12, -0.07],
+    ],
+    root: [0.16, 0.02],
+    veins: { from: 0.12, to: 0.74, count: 11 },
+    chains: [{ f: 0.62, first: 0, last: 10 }, { f: 0.34, first: 3, last: 8, closed: true }],
+    band: 0.2,
+    eyespot: null,
+    tip: [2.46, 1.0],
+    yOffset: 0.012,
+    seed: 7,
+  },
+  hind: {
+    outline: [
+      [0.10, 0.10], [0.62, 0.16], [1.30, 0.06], [1.84, -0.28], [2.02, -0.74], [1.86, -1.14],
+      [1.50, -1.40], [1.30, -1.62], [1.24, -2.08], [1.10, -2.38], [0.98, -2.10], [0.94, -1.62],
+      [0.62, -1.34], [0.30, -0.92], [0.10, -0.36],
+    ],
+    root: [0.16, -0.10],
+    veins: { from: 0.11, to: 0.86, count: 12 },
+    chains: [{ f: 0.58, first: 0, last: 11 }],
+    band: 0.18,
+    eyespot: { at: [1.32, -1.02], r: 0.2 },
+    tip: [1.10, -2.32],
+    yOffset: -0.012,
+    seed: 23,
+  },
+};
+
+const TEX_SIZE = 1024;
+
+// Build everything that depends only on the outline: curves, veins, bounds,
+// spot / perforation positions, canvases. Painting is separate so palettes can change.
+function prepareWing(def) {
+  const outline3 = new THREE.CatmullRomCurve3(def.outline.map(([u, v]) => V(u, 0, v)), true, 'centripetal');
+  const pts = outline3.getSpacedPoints(240).slice(0, -1);
+  const shapePts = pts.map((p) => new THREE.Vector2(p.x, p.z));
+
+  let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  for (const p of shapePts) { minU = Math.min(minU, p.x); maxU = Math.max(maxU, p.x); minV = Math.min(minV, p.y); maxV = Math.max(maxV, p.y); }
+  const pad = 0.04;
+  minU -= pad; maxU += pad; minV -= pad; maxV += pad;
+  const W = maxU - minU, H = maxV - minV;
+  const scale = TEX_SIZE / Math.max(W, H);
+  const cw = Math.round(W * scale), ch = Math.round(H * scale);
+  const toPx = (u, v) => [(u - minU) * scale, (1 - (v - minV) / H) * ch];
+
+  // Radial veins from the root to evenly spaced points on the outer margin.
+  const root = V(def.root[0], 0, def.root[1]);
+  const veins = [];
+  for (let i = 0; i < def.veins.count; i++) {
+    const t = def.veins.from + (def.veins.to - def.veins.from) * (i / (def.veins.count - 1));
+    const end = outline3.getPointAt(t);
+    const dir = end.clone().sub(root);
+    const len = dir.length();
+    dir.normalize();
+    const start = root.clone().addScaledVector(dir, 0.1);
+    // bow each vein slightly towards the leading edge, like real venation
+    const perp = V(-dir.z, 0, dir.x);
+    const ctrl = root.clone().addScaledVector(dir, len * 0.45).addScaledVector(perp, len * 0.07);
+    veins.push(new THREE.QuadraticBezierCurve3(start, ctrl, end));
+  }
+
+  // Cross-vein chains (the cells between radial veins).
+  const chains = def.chains.map(({ f, first, last, closed }) => {
+    const cp = [];
+    for (let i = first; i <= last; i++) cp.push(veins[i].getPoint(f));
+    if (closed) cp.push(root.clone().lerp(cp[cp.length - 1], 0.35), root.clone().lerp(cp[0], 0.35));
+    return new THREE.CatmullRomCurve3(cp, !!closed, 'centripetal');
+  });
+
+  // Margin decoration: cream spots between vein ends, pierced holes beside them.
+  const spots = [], holes = [];
+  const n = 26;
+  for (let i = 0; i < n; i++) {
+    const t = def.veins.from + (def.veins.to - def.veins.from) * ((i + 0.5) / n);
+    const m = outline3.getPointAt(t);
+    const inward = root.clone().sub(m).normalize();
+    spots.push({ p: m.clone().addScaledVector(inward, def.band * 0.55), r: def.band * (0.16 + 0.08 * Math.sin(i * 1.7) ** 2) });
+    holes.push({ p: m.clone().addScaledVector(inward, def.band * 0.22), r: def.band * 0.075 });
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = ch;
+  const alphaCanvas = document.createElement('canvas');
+  alphaCanvas.width = cw; alphaCanvas.height = ch;
+
+  def.prep = { outline3, shapePts, minU, minV, W, H, scale, cw, ch, toPx, root, veins, chains, spots, holes, canvas, alphaCanvas };
+  return def.prep;
+}
+
+function strokeCurve(ctx, toPx, curve, n = 40) {
+  const pts = curve.getPoints(n);
+  ctx.beginPath();
+  pts.forEach((p, i) => { const [x, y] = toPx(p.x, p.z); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+  if (curve.closed) ctx.closePath();
+  ctx.stroke();
+}
+
+function paintWing(def, pal) {
+  const P = def.prep;
+  const { toPx, scale, cw, ch, root } = P;
+  const ctx = P.canvas.getContext('2d');
+  const rnd = seededRandom(def.seed);
+
+  const path = new Path2D();
+  P.shapePts.forEach((p, i) => { const [x, y] = toPx(p.x, p.y); if (i) path.lineTo(x, y); else path.moveTo(x, y); });
+  path.closePath();
+
+  ctx.save();
+  ctx.fillStyle = pal.band;
+  ctx.fillRect(0, 0, cw, ch);
+  ctx.clip(path);
+
+  // Base: root-to-margin radial gradient.
+  const [rx, ry] = toPx(root.x, root.z);
+  const reach = Math.max(P.W, P.H) * scale;
+  const g = ctx.createRadialGradient(rx, ry, 0, rx, ry, reach * 0.95);
+  g.addColorStop(0.0, pal.root);
+  g.addColorStop(0.42, pal.mid);
+  g.addColorStop(0.8, pal.outer);
+  g.addColorStop(1.0, pal.outer);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, cw, ch);
+
+  // Structural-colour streaks fanning out from the root.
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 140; i++) {
+    const a = rnd() * Math.PI * 2, len = reach * (0.4 + rnd() * 0.6);
+    ctx.strokeStyle = `rgba(255,255,255,${0.008 + rnd() * 0.02})`;
+    ctx.lineWidth = 1 + rnd() * 5;
+    ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx + Math.cos(a) * len, ry + Math.sin(a) * len); ctx.stroke();
+  }
+  // Scales: thousands of faint flecks.
+  for (let i = 0; i < 14000; i++) {
+    ctx.fillStyle = `rgba(255,255,255,${0.01 + rnd() * 0.03})`;
+    ctx.fillRect(rnd() * cw, rnd() * ch, 1.5, 1.5);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  // Dark margin band: a wide stroke of the outline, half of which lands inside the clip.
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = pal.band;
+  ctx.lineWidth = def.band * 2 * scale;
+  ctx.stroke(path);
+  ctx.globalAlpha = 0.45;
+  ctx.lineWidth = def.band * 3.2 * scale;
+  ctx.stroke(path);
+  ctx.globalAlpha = 1;
+
+  // Eyespot (hindwing): gold ring, dark iris, bright pupil with a highlight.
+  if (def.eyespot) {
+    const [ex, ey] = toPx(def.eyespot.at[0], def.eyespot.at[1]);
+    const er = def.eyespot.r * scale;
+    const rings = [[1.0, pal.band], [0.86, pal.eyeRing], [0.62, pal.eyeIris], [0.3, pal.eyePupil]];
+    for (const [k, c] of rings) { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(ex, ey, er * k, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath(); ctx.arc(ex - er * 0.12, ey - er * 0.12, er * 0.1, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // Margin spots.
+  ctx.fillStyle = pal.spot;
+  for (const s of P.spots) {
+    const [x, y] = toPx(s.p.x, s.p.z);
+    ctx.beginPath(); ctx.arc(x, y, s.r * scale, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // Dark "lead came" under every gold vein so the metal reads against the colour.
+  ctx.strokeStyle = pal.vein;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 0.055 * scale;
+  for (const v of P.veins) strokeCurve(ctx, toPx, v);
+  ctx.lineWidth = 0.042 * scale;
+  for (const c of P.chains) strokeCurve(ctx, toPx, c, 80);
+  ctx.restore();
+
+  // Alpha: opaque membrane with a row of pierced holes along the margin.
+  const actx = P.alphaCanvas.getContext('2d');
+  actx.fillStyle = '#fff';
+  actx.fillRect(0, 0, cw, ch);
+  actx.fillStyle = '#000';
+  for (const h of P.holes) {
+    const [x, y] = toPx(h.p.x, h.p.z);
+    actx.beginPath(); actx.arc(x, y, h.r * scale, 0, Math.PI * 2); actx.fill();
+  }
+
+  if (def.tex) { def.tex.needsUpdate = true; def.alphaTex.needsUpdate = true; }
+}
+
+// One membrane material and one gold frame geometry per wing kind; the left
+// side reuses them through a mirrored parent.
+function buildWingAssets(def) {
+  const P = prepareWing(def);
+  paintWing(def, PALETTES[params.palette]);
+
+  def.tex = new THREE.CanvasTexture(P.canvas);
+  def.tex.colorSpace = THREE.SRGBColorSpace;
+  def.tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  def.alphaTex = new THREE.CanvasTexture(P.alphaCanvas);
+
+  // Membrane: ShapeGeometry in (u, v), uv remapped to the canvas bounds, laid into the x–z plane.
+  const shape = new THREE.Shape(P.shapePts);
+  const geo = new THREE.ShapeGeometry(shape, 1);
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) - P.minU) / P.W, (pos.getY(i) - P.minV) / P.H);
+  geo.rotateX(Math.PI / 2);        // (u, v, 0) -> (u, 0, v)
+  geo.translate(0, def.yOffset, 0);
+  def.membraneGeo = geo;
+
+  def.membraneMat = new THREE.MeshPhysicalMaterial({
+    map: def.tex, alphaMap: def.alphaTex, alphaTest: 0.5,
+    transparent: true, opacity: 0.93, side: THREE.DoubleSide,
+    roughness: 0.4, metalness: 0.1, envMapIntensity: 0.55,
+    iridescence: 0.55, iridescenceIOR: 1.5, iridescenceThicknessRange: [180, 520],
+    clearcoat: 0.35, clearcoatRoughness: 0.25,
+    emissive: 0xffffff, emissiveMap: def.tex, emissiveIntensity: 0.16,
+  });
+
+  // Gold frame: rim + spar + radial veins + cross-vein chains, one merged geometry.
+  const frame = [];
+  frame.push(new THREE.TubeGeometry(P.outline3, 320, 0.022, 8, true));
+  frame.push(new THREE.TubeGeometry(new THREE.LineCurve3(V(0, 0, 0), P.root), 4, 0.03, 10));
+  for (const v of P.veins) frame.push(new THREE.TubeGeometry(v, 24, 0.0115, 6));
+  for (const c of P.chains) frame.push(new THREE.TubeGeometry(c, 90, 0.0085, 6, c.closed));
+  frame.push(sphereGeometryAt(P.root, 0.045, 14));
+  for (const v of P.veins) frame.push(sphereGeometryAt(v.v2, 0.026, 10));   // studs where veins meet the rim
+  for (const g of frame) g.translate(0, def.yOffset, 0);
+  def.frameGeo = merge(frame);
+}
+
+for (const def of Object.values(WING_DEFS)) buildWingAssets(def);
+
+function applyPalette(name) {
+  const pal = PALETTES[name];
+  for (const def of Object.values(WING_DEFS)) paintWing(def, pal);
+  MAT.gem.color.setHex(pal.gem);
+  MAT.gem.emissive.setHex(pal.gem);
+  sparkleColors = pal.spark.map((h) => new THREE.Color(h));
+}
+
+/* ==========================================================================
+   STAGE: backdrop, floor, lights, drifting dust
+   ========================================================================== */
+
+// Backdrop dome: dark gradient with a warm glow low behind the subject. Drawn at the far plane.
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(60, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false,
+    uniforms: { uHorizon: { value: FOG_COLOR.clone() } },
+    vertexShader: /* glsl */`
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        gl_Position.z = gl_Position.w;
+      }`,
+    fragmentShader: /* glsl */`
+      uniform vec3 uHorizon;
+      varying vec3 vDir;
+      void main() {
+        vec3 top = vec3(0.006, 0.007, 0.014);
+        vec3 col = mix(uHorizon, top, smoothstep(-0.05, 0.55, vDir.y));
+        float glow = pow(max(0.0, dot(vDir, normalize(vec3(-0.35, 0.18, -1.0)))), 5.0);
+        col += vec3(0.035, 0.03, 0.05) * glow;
+        gl_FragColor = vec4(col, 1.0);
+      }`,
+  }),
+);
+sky.renderOrder = -1;
+scene.add(sky);
+
+const floor = mesh(new THREE.CircleGeometry(40, 96).rotateX(-Math.PI / 2), MAT.floor, { cast: false });
+scene.add(floor);
+
+// Clock-face inlay on the floor: two brass rings and hour ticks.
+{
+  const parts = [
+    new THREE.RingGeometry(2.62, 2.66, 160).rotateX(-Math.PI / 2),
+    new THREE.RingGeometry(2.86, 2.88, 160).rotateX(-Math.PI / 2),
+    new THREE.RingGeometry(0.34, 0.36, 64).rotateX(-Math.PI / 2),
+  ];
+  for (let i = 0; i < 60; i++) {
+    const a = (i / 60) * Math.PI * 2, major = i % 5 === 0;
+    const len = major ? 0.2 : 0.08;
+    const g = new THREE.PlaneGeometry(major ? 0.035 : 0.014, len).rotateX(-Math.PI / 2);
+    g.translate(0, 0, -(2.62 - 0.03 - len / 2));
+    g.rotateY(a);
+    parts.push(g);
+  }
+  const inlay = mesh(merge(parts), MAT.inlay, { cast: false });
+  inlay.position.y = 0.002;
+  scene.add(inlay);
+}
+
+scene.add(new THREE.HemisphereLight(0x8fa3ff, 0x1c1208, 0.2));
+
+// Key: a warm theatrical spot from above, carrying the shadows.
+const keyLight = new THREE.SpotLight(0xffe2b8, 90, 26, 0.5, 0.65, 1.6);
+keyLight.position.set(1.6, 10, 2.6);
+keyLight.target.position.set(0, 0, 0);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.camera.near = 3;
+keyLight.shadow.camera.far = 16;
+keyLight.shadow.bias = -0.0002;
+keyLight.shadow.normalBias = 0.015;
+scene.add(keyLight, keyLight.target);
+
+// Cool rim from behind to trace the wing edges.
+const rimLight = new THREE.DirectionalLight(0x86b6ff, 1.5);
+rimLight.position.set(-5, 3.5, -6);
+scene.add(rimLight);
+
+// Dust motes drifting through the light. Motion is entirely in the vertex shader.
+const dust = (() => {
+  const N = 900, rnd = seededRandom(99);
+  const pos = new Float32Array(N * 3), seed = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    pos[i * 3] = (rnd() - 0.5) * 16; pos[i * 3 + 1] = rnd() * 6; pos[i * 3 + 2] = (rnd() - 0.5) * 16;
+    seed[i] = rnd();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: { uTime: { value: 0 }, uScale: { value: innerHeight * DPR * 0.5 } },
+    vertexShader: /* glsl */`
+      uniform float uTime, uScale;
+      attribute float aSeed;
+      varying float vA;
+      void main() {
+        vec3 p = position;
+        p.y = mod(p.y + uTime * (0.03 + 0.05 * aSeed), 6.0);
+        p.x += sin(uTime * 0.13 + aSeed * 40.0) * 0.5;
+        p.z += cos(uTime * 0.11 + aSeed * 23.0) * 0.5;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        // brightest inside the spotlight cone, fading towards the edges of the room
+        float inCone = 1.0 - smoothstep(1.5, 6.0, length(p.xz));
+        vA = (0.15 + 0.85 * inCone) * (0.5 + 0.5 * sin(uTime * (0.8 + aSeed) + aSeed * 60.0));
+        gl_PointSize = (0.6 + 1.4 * aSeed) * uScale * 0.02 / -mv.z;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */`
+      varying float vA;
+      void main() {
+        float d = length(gl_PointCoord - 0.5);
+        float a = smoothstep(0.5, 0.0, d) * vA * 0.5;
+        gl_FragColor = vec4(vec3(1.0, 0.82, 0.58) * a, a);
+      }`,
+  });
+  const pts = new THREE.Points(geo, mat);
+  pts.frustumCulled = false;
+  scene.add(pts);
+  return mat;
+})();
+
+/* ==========================================================================
+   THE BUTTERFLY: hierarchy
+     flyer  — world pose (hover / flight path)
+       bob  — vertical heave and pitch from wing lift
+         body — nose-up attitude; thorax, head, abdomen, two mirrored sides
+   ========================================================================== */
+
+const flyer = new THREE.Group();
+flyer.position.set(0, HOVER_HEIGHT, 0);
+scene.add(flyer);
+const bob = new THREE.Group();
+flyer.add(bob);
+const body = new THREE.Group();
+body.rotation.x = -0.2;
+bob.add(body);
+
+const sides = [1, -1].map((s) => {
+  const g = new THREE.Group();
+  g.scale.x = s;        // the left side is the right side seen in a mirror
+  body.add(g);
+  return g;
+});
+
+/* --------------------------------------------------------------------------
+   THORAX: glass shell, brass cage, interior lamp
+   -------------------------------------------------------------------------- */
+
+const ell = (z) => Math.sqrt(Math.max(0, 1 - (z / THORAX.rz) ** 2));
+
+const shell = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 40), MAT.glass);
+shell.scale.set(THORAX.rx, THORAX.ry, THORAX.rz);
+shell.position.y = THORAX.cy;
+shell.renderOrder = 2;
+body.add(shell);
+
+{
+  const cage = [];
+  for (const z of [-0.5, 0.44]) cage.push(ellipseTube(THORAX.rx * ell(z), THORAX.ry * ell(z), THORAX.cy, z, 0.014));
+  // collars where the head and abdomen join
+  cage.push(ellipseTube(THORAX.rx * ell(0.56), THORAX.ry * ell(0.56), THORAX.cy, 0.56, 0.026));
+  cage.push(ellipseTube(THORAX.rx * ell(-0.57), THORAX.ry * ell(-0.57), THORAX.cy, -0.57, 0.026));
+  // longitudinal ribs over the top and under the belly, following the shell
+  for (const ang of [Math.PI / 2 - 0.3, Math.PI / 2 + 0.3, -Math.PI / 2 - 0.55, -Math.PI / 2 + 0.55]) {
+    const pts = [];
+    for (let i = 0; i <= 40; i++) {
+      const z = -0.57 + (1.13 * i) / 40, k = ell(z);
+      pts.push(V(Math.cos(ang) * THORAX.rx * k * 1.005, THORAX.cy + Math.sin(ang) * THORAX.ry * k * 1.005, z));
+    }
+    cage.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 80, 0.011, 6));
+  }
+  body.add(mesh(merge(cage), MAT.brass));
+
+  // rivets along the collars
+  const riv = [];
+  for (const z of [0.56, -0.57]) {
+    for (let i = 0; i < 18; i++) {
+      const a = (i / 18) * Math.PI * 2;
+      riv.push(sphereGeometryAt(V(Math.cos(a) * THORAX.rx * ell(z), THORAX.cy + Math.sin(a) * THORAX.ry * ell(z), z), 0.016, 8));
+    }
+  }
+  body.add(mesh(merge(riv), MAT.gold));
+}
+
+// Pilot lamp in the front of the thorax: lights the movement from inside.
+const lamp = new THREE.Group();
+lamp.position.set(0, -0.08, 0.38);
+body.add(lamp);
+lamp.add(new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), MAT.filament));
+{
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 24, 16), MAT.glass);
+  bulb.renderOrder = 3;
+  lamp.add(bulb);
+  const cage = [];
+  for (let i = 0; i < 3; i++) {
+    const t = new THREE.TorusGeometry(0.075, 0.006, 6, 32);
+    t.rotateY((i / 3) * Math.PI);
+    cage.push(t);
+  }
+  lamp.add(mesh(merge(cage), MAT.gold));
+}
+const lampLight = new THREE.PointLight(0xffa24a, 0.6, 1.6, 2);
+lamp.add(lampLight);
+
+/* --------------------------------------------------------------------------
+   MECHANISM: gear train, crank, slider, links
+   -------------------------------------------------------------------------- */
+
+const mech = {};
+{
+  const { m } = TRAIN;
+  const C = MECH.crank, I = TRAIN.I;
+
+  // Crankshaft: pinion in the gear layer, crank disc + pin in the linkage plane.
+  mech.crank = new THREE.Group();
+  mech.crank.position.set(C.x, C.y, 0);
+  body.add(mech.crank);
+  const pin = mesh(gearGeometry(TRAIN.crankN, m, 0.03, { bore: 0.008 }), MAT.steel);
+  pin.position.z = TRAIN.gearZ;
+  mech.crank.add(pin);
+  mech.crank.add(mesh(rodGeometry(V(0, 0, -0.12), V(0, 0, 0.14), 0.011), MAT.steel));
+  const disc = new THREE.Shape();
+  disc.absarc(0, 0, 0.06, 0, Math.PI * 2);
+  const discG = new THREE.ExtrudeGeometry(disc, { depth: 0.016, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 1, curveSegments: 32 });
+  const armShape = new THREE.Shape();
+  armShape.moveTo(0, -0.03); armShape.lineTo(MECH.crank.r, -0.022); armShape.absarc(MECH.crank.r, 0, 0.022, -Math.PI / 2, Math.PI / 2, false);
+  armShape.lineTo(0, 0.03); armShape.closePath();
+  const armG = new THREE.ExtrudeGeometry(armShape, { depth: 0.016, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 1 });
+  // counterweight opposite the pin
+  const cw = new THREE.Shape();
+  cw.absarc(0, 0, 0.075, Math.PI * 0.62, Math.PI * 1.38, false);
+  cw.closePath();
+  const cwG = new THREE.ExtrudeGeometry(cw, { depth: 0.016, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 1, curveSegments: 16 });
+  const crankPlate = mesh(merge([discG, armG, cwG]), MAT.brass);
+  crankPlate.position.z = 0.125;
+  mech.crank.add(crankPlate);
+  mech.crank.add(mesh(rodGeometry(V(MECH.crank.r, 0, 0.12), V(MECH.crank.r, 0, MECH.planeZ + 0.012), 0.011), MAT.steel));
+  mech.crank.add(mesh(sphereGeometryAt(V(0, 0, -0.125), 0.018), MAT.ruby, { cast: false }));
+
+  // Intermediate arbor: 30-tooth spoked wheel + 8-leaf contrate pinion.
+  mech.inter = new THREE.Group();
+  mech.inter.position.set(I.x, I.y, 0);
+  body.add(mech.inter);
+  const wheel = mesh(gearGeometry(TRAIN.wheelN, m, 0.022, { spokes: 5, bore: 0.009 }), MAT.gold);
+  wheel.position.z = TRAIN.gearZ;
+  mech.inter.add(wheel);
+  const pinion = mesh(gearGeometry(TRAIN.pinionN, m, 0.028, { bore: 0.008 }), MAT.steel);
+  pinion.position.z = TRAIN.pinionZ;
+  mech.inter.add(pinion);
+  mech.inter.add(mesh(rodGeometry(V(0, 0, -0.29), V(0, 0, -0.01), 0.009), MAT.steel));
+  mech.inter.add(mesh(sphereGeometryAt(V(0, 0, -0.005), 0.016), MAT.ruby, { cast: false }));
+  // blued screws on the wheel hub
+  const screws = [];
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2 + 0.5;
+    screws.push(new THREE.CylinderGeometry(0.008, 0.008, 0.01, 10).rotateX(Math.PI / 2).translate(Math.cos(a) * 0.03, Math.sin(a) * 0.03, TRAIN.gearZ + 0.015));
+  }
+  mech.inter.add(mesh(merge(screws), MAT.blued));
+
+  // Mainspring barrel with contrate teeth, and the winding key on its arbor.
+  const toothH = 0.03;
+  const crownTop = I.y + m * TRAIN.pinionN / 2 + toothH / 2;   // teeth straddle the pinion's pitch circle
+  mech.crownPivot = new THREE.Group();
+  mech.crownPivot.position.set(0, crownTop, TRAIN.crownZ);
+  body.add(mech.crownPivot);
+  mech.crown = new THREE.Group();
+  mech.crownPivot.add(mech.crown);
+  mech.crown.add(mesh(crownGeometry(TRAIN.crownN, TRAIN.crownR, toothH), MAT.gold));
+  mech.crown.add(mesh(new THREE.CylinderGeometry(TRAIN.crownR + 0.016, TRAIN.crownR + 0.016, 0.012, 48).translate(0, 0.006, 0), MAT.gold));
+  const drumH = 0.07;
+  mech.crown.add(mesh(new THREE.CylinderGeometry(0.1, 0.1, drumH, 48, 1, true).translate(0, 0.012 + drumH / 2, 0), MAT.brass));
+  mech.crown.add(mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.006, 48).translate(0, 0.012 + drumH, 0), MAT.brass));
+  for (const y of [0.016, 0.012 + drumH - 0.004]) {
+    mech.crown.add(mesh(new THREE.TorusGeometry(0.1, 0.006, 8, 48).rotateX(Math.PI / 2).translate(0, y, 0), MAT.copper));
+  }
+  // the spring itself, visible through slots in the barrel cover
+  const coilPts = [];
+  for (let i = 0; i <= 220; i++) {
+    const t = i / 220, a = t * Math.PI * 2 * 5.5, r = 0.02 + 0.07 * t;
+    coilPts.push(V(Math.cos(a) * r, 0.012 + drumH + 0.006, Math.sin(a) * r));
+  }
+  mech.spring = mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(coilPts), 440, 0.0035, 5), MAT.blued);
+  mech.crownPivot.add(mech.spring);
+
+  mech.key = new THREE.Group();
+  mech.crownPivot.add(mech.key);
+  const keyTop = 0.58 - crownTop + THORAX.cy;
+  mech.key.add(mesh(rodGeometry(V(0, 0.08, 0), V(0, keyTop, 0), 0.016), MAT.steel));
+  mech.key.add(mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.02, 20).translate(0, keyTop - 0.12, 0), MAT.brass));
+  const bow = new THREE.Shape();
+  bow.moveTo(0, 0);
+  bow.bezierCurveTo(-0.06, 0.0, -0.17, -0.02, -0.18, 0.09);
+  bow.bezierCurveTo(-0.19, 0.2, -0.07, 0.22, 0, 0.13);
+  bow.bezierCurveTo(0.07, 0.22, 0.19, 0.2, 0.18, 0.09);
+  bow.bezierCurveTo(0.17, -0.02, 0.06, 0.0, 0, 0);
+  for (const sx of [-1, 1]) { const h = new THREE.Path(); h.absarc(sx * 0.1, 0.1, 0.042, 0, Math.PI * 2, true); bow.holes.push(h); }
+  const bowG = new THREE.ExtrudeGeometry(bow, { depth: 0.018, bevelEnabled: true, bevelThickness: 0.006, bevelSize: 0.006, bevelSegments: 2, curveSegments: 24 });
+  bowG.translate(0, keyTop - 0.01, -0.009);
+  mech.key.add(mesh(bowG, MAT.gold));
+  // a gem set in the bow's waist
+  const keyGem = mesh(new THREE.OctahedronGeometry(0.026, 0), MAT.gem, { cast: false });
+  keyGem.position.set(0, keyTop + 0.1, 0);
+  mech.key.add(keyGem);
+
+  // Slider guide rails and slider block (midline, linkage plane).
+  const rails = [];
+  for (const x of [-0.034, 0.034]) rails.push(rodGeometry(V(x, -0.02, MECH.planeZ - 0.01), V(x, 0.3, MECH.planeZ - 0.01), 0.008));
+  rails.push(new THREE.BoxGeometry(0.1, 0.02, 0.02).translate(0, 0.3, MECH.planeZ - 0.01));
+  body.add(mesh(merge(rails), MAT.steel));
+
+  mech.slider = new THREE.Group();
+  body.add(mech.slider);
+  mech.slider.add(mesh(new THREE.BoxGeometry(0.06, 0.05, 0.03).translate(0, 0, MECH.planeZ), MAT.brass));
+  mech.slider.add(mesh(new THREE.BoxGeometry(MECH.pinX * 2 + 0.03, 0.018, 0.012).translate(0, 0, MECH.planeZ + 0.016), MAT.copper));
+  const sliderPins = [];
+  for (const x of [-MECH.pinX, 0, MECH.pinX]) sliderPins.push(new THREE.CylinderGeometry(0.011, 0.011, 0.05, 12).rotateX(Math.PI / 2).translate(x, 0, MECH.planeZ + 0.016));
+  mech.slider.add(mesh(merge(sliderPins), MAT.steel));
+
+  // Bars are unit-length boxes along x, stretched and turned in the x–y plane each frame.
+  mech.conrod = mesh(new THREE.BoxGeometry(1, 0.026, 0.01), MAT.copper);
+  mech.conrod.position.z = MECH.planeZ - 0.002;
+  body.add(mech.conrod);
+}
+
+// Place a unit bar between two points in its parent's x–y plane.
+function placeBar(bar, ax, ay, bx, by) {
+  bar.position.x = (ax + bx) / 2;
+  bar.position.y = (ay + by) / 2;
+  bar.rotation.z = Math.atan2(by - ay, bx - ax);
+  bar.scale.x = Math.hypot(bx - ax, by - ay);
+}
+
+/* --------------------------------------------------------------------------
+   WINGS, HINGES, LINKS, LEGS (built once per side; the left side is mirrored)
+   -------------------------------------------------------------------------- */
+
+const wings = [];
+for (const side of sides) {
+  const H = MECH.hinge;
+  const w = {};
+
+  // Hinge pin shared by fore- and hindwing, with a blued torsion spring between them.
+  side.add(mesh(rodGeometry(V(H.x, H.y, MECH.hindZ - 0.06), V(H.x, H.y, MECH.foreZ + 0.07), 0.012), MAT.steel));
+  side.add(mesh(helixGeometry(H.x, H.y, -0.14, 0.08, 0.026, 7, 0.0045), MAT.blued));
+  side.add(mesh(merge([sphereGeometryAt(V(H.x, H.y, MECH.foreZ + 0.075), 0.02), sphereGeometryAt(V(H.x, H.y, MECH.hindZ - 0.065), 0.02)]), MAT.ruby, { cast: false }));
+
+  // Forewing: hinge (flap) -> feather (pitch) -> membrane + frame. Lever rides on the hinge.
+  w.fore = new THREE.Group();
+  w.fore.position.set(H.x, H.y, MECH.foreZ);
+  side.add(w.fore);
+  w.foreFeather = new THREE.Group();
+  w.fore.add(w.foreFeather);
+  w.foreFeather.add(mesh(WING_DEFS.fore.membraneGeo, WING_DEFS.fore.membraneMat, { receive: false }));
+  w.foreFeather.add(mesh(WING_DEFS.fore.frameGeo, MAT.gold));
+  w.foreFeather.add(mesh(sphereGeometryAt(V(WING_DEFS.fore.prep.root.x, 0.03, WING_DEFS.fore.prep.root.z), 0.03, 12), MAT.gem, { cast: false }));
+  // inboard lever arm out to the knee, with a boss on the hinge
+  const lz = MECH.planeZ + 0.03 - MECH.foreZ;
+  const leverG = merge([
+    new THREE.BoxGeometry(MECH.lever, 0.03, 0.012).translate(-MECH.lever / 2, 0, lz),
+    new THREE.CylinderGeometry(0.03, 0.03, 0.03, 20).rotateX(Math.PI / 2).translate(0, 0, lz - 0.01),
+    new THREE.CylinderGeometry(0.016, 0.016, 0.03, 14).rotateX(Math.PI / 2).translate(-MECH.lever, 0, lz),
+  ]);
+  w.fore.add(mesh(leverG, MAT.brass));
+
+  w.foreTip = new THREE.Object3D();
+  w.foreTip.position.set(WING_DEFS.fore.tip[0], 0, WING_DEFS.fore.tip[1]);
+  w.foreFeather.add(w.foreTip);
+
+  // Hindwing: hinge on the same axis, driven through the torsion spring.
+  w.hind = new THREE.Group();
+  w.hind.position.set(H.x, H.y, MECH.hindZ);
+  side.add(w.hind);
+  w.hind.add(mesh(WING_DEFS.hind.membraneGeo, WING_DEFS.hind.membraneMat, { receive: false }));
+  w.hind.add(mesh(WING_DEFS.hind.frameGeo, MAT.gold));
+  w.hind.add(mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.05, 18).rotateX(Math.PI / 2), MAT.brass));
+  w.hindTip = new THREE.Object3D();
+  w.hindTip.position.set(WING_DEFS.hind.tip[0], 0, WING_DEFS.hind.tip[1]);
+  w.hind.add(w.hindTip);
+
+  // Link from the slider's cross-pin to the knee.
+  w.link = mesh(new THREE.BoxGeometry(1, 0.022, 0.01), MAT.steel);
+  w.link.position.z = MECH.planeZ + 0.026;
+  side.add(w.link);
+
+  // Legs: three jointed legs per side, folded under the thorax.
+  const legs = [];
+  const joints = [];
+  for (const [z, splay, reach] of [[0.28, 0.5, 0.9], [0.02, 0.0, 1.0], [-0.26, -0.45, 1.05]]) {
+    const p0 = V(0.12, THORAX.cy - 0.36, z);
+    const p1 = p0.clone().add(V(0.22, -0.06, splay * 0.18));
+    const p2 = p1.clone().add(V(0.2 * reach, 0.16, splay * 0.32));
+    const p3 = p2.clone().add(V(0.1 * reach, -0.42, splay * 0.22));
+    const p4 = p3.clone().add(V(0.06, -0.12, splay * 0.12 + 0.02));
+    const chain = [p0, p1, p2, p3, p4];
+    for (let i = 0; i < chain.length - 1; i++) legs.push(rodGeometry(chain[i], chain[i + 1], i === 0 ? 0.016 : 0.01, 8));
+    for (let i = 1; i < chain.length; i++) joints.push(sphereGeometryAt(chain[i], i === 4 ? 0.012 : 0.02, 10));
+  }
+  side.add(mesh(merge(legs), MAT.steel));
+  side.add(mesh(merge(joints), MAT.brass));
+
+  wings.push(w);
+}
+
+/* --------------------------------------------------------------------------
+   HEAD: faceted eyes, antennae, coiled proboscis
+   -------------------------------------------------------------------------- */
+
+const head = new THREE.Group();
+head.position.set(0, THORAX.cy + 0.04, 0.8);
+body.add(head);
+head.add(mesh(new THREE.SphereGeometry(0.2, 40, 28).scale(1, 0.92, 1.05), MAT.brass));
+head.add(mesh(new THREE.TorusGeometry(0.2, 0.011, 8, 48).rotateY(Math.PI / 2).scale(1, 0.92, 1.05), MAT.gold));
+head.add(mesh(new THREE.CylinderGeometry(0.12, 0.17, 0.12, 32).rotateX(Math.PI / 2).translate(0, -0.02, -0.17), MAT.dark));
+
+const antennae = [];
+for (const s of [1, -1]) {
+  const eye = mesh(new THREE.IcosahedronGeometry(0.13, 2).scale(0.82, 1, 1), MAT.eye);
+  eye.position.set(s * 0.15, 0.04, 0.06);
+  head.add(eye);
+  const bezel = mesh(new THREE.TorusGeometry(0.1, 0.012, 8, 36).rotateY(Math.PI / 2), MAT.gold);
+  bezel.position.set(s * 0.115, 0.04, 0.06);
+  head.add(bezel);
+
+  // Antennae spring at their sockets; each is one tube with bead joints and a clubbed tip.
+  const mount = new THREE.Group();
+  mount.position.set(s * 0.06, 0.16, 0.1);
+  mount.scale.x = s;
+  head.add(mount);
+  const ant = new THREE.Group();
+  mount.add(ant);
+  const curve = new THREE.CatmullRomCurve3([V(0, 0, 0), V(0.05, 0.26, 0.12), V(0.15, 0.56, 0.36), V(0.27, 0.78, 0.68), V(0.34, 0.86, 0.88)]);
+  const parts = [new THREE.TubeGeometry(curve, 64, 0.011, 6)];
+  for (let t = 0.12; t < 0.9; t += 0.08) parts.push(sphereGeometryAt(curve.getPoint(t), 0.017, 8));
+  ant.add(mesh(merge(parts), MAT.gold));
+  const club = mesh(new THREE.SphereGeometry(0.04, 16, 12).scale(1, 1, 2.2), MAT.brass);
+  club.position.copy(curve.getPoint(1));
+  club.quaternion.setFromUnitVectors(Z_FWD, curve.getTangent(1));
+  ant.add(club);
+  const tipGem = mesh(new THREE.SphereGeometry(0.022, 12, 10), MAT.gem, { cast: false });
+  tipGem.position.copy(curve.getPoint(1)).addScaledVector(curve.getTangent(1), 0.085);
+  ant.add(tipGem);
+  antennae.push(ant);
+}
+
+// Proboscis: a watch-spring coil tucked under the head.
+{
+  const pts = [V(0, -0.1, 0.16), V(0, -0.15, 0.22)];
+  const cy = -0.2, cz = 0.22;
+  for (let i = 0; i <= 160; i++) {
+    const t = i / 160, a = t * Math.PI * 2 * 3.2, r = 0.075 * (1 - t) + 0.01;
+    pts.push(V(0, cy + Math.cos(a) * r * 0.7, cz + Math.sin(a) * r));
+  }
+  head.add(mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 320, 0.007, 6), MAT.blued));
+}
+
+/* --------------------------------------------------------------------------
+   ABDOMEN: telescoping bands on a spring chain
+   -------------------------------------------------------------------------- */
+
+const abdomen = [];
+{
+  let parent = new THREE.Group();
+  parent.position.set(0, THORAX.cy - 0.04, -0.6);
+  body.add(parent);
+  const N = 8;
+  let prevLen = 0;
+  for (let i = 0; i < N; i++) {
+    const len = 0.2 - i * 0.008;
+    const r0 = 0.19 * (1 - (i / N) * 0.7);
+    const seg = new THREE.Group();
+    seg.position.z = -prevLen;
+    parent.add(seg);
+    const prof = [
+      new THREE.Vector2(r0 * 0.78, 0.0), new THREE.Vector2(r0, -0.025), new THREE.Vector2(r0 * 1.02, -len * 0.45),
+      new THREE.Vector2(r0 * 0.94, -len + 0.025), new THREE.Vector2(r0 * 0.76, -len),
+    ];
+    const g = new THREE.LatheGeometry(prof, 40).rotateX(Math.PI / 2);
+    seg.add(mesh(g, i % 2 ? MAT.copper : MAT.brass));
+    seg.add(mesh(new THREE.TorusGeometry(r0 * 1.0, 0.008, 6, 40).translate(0, 0, -0.026), MAT.gold));
+    abdomen.push({ seg, rest: -0.05 - i * 0.012 });
+    parent = seg;
+    prevLen = len;
+  }
+  const tail = mesh(new THREE.OctahedronGeometry(0.05, 0).scale(1, 1, 1.8), MAT.gem, { cast: false });
+  tail.position.z = -prevLen - 0.05;
+  parent.add(tail);
+}
+
+// Every brass part casts; the glass shell and glowing bits don't.
+flyer.traverse((o) => { if (o.isMesh && (o.material === MAT.glass || o.material === MAT.filament)) o.castShadow = false; });
+
+/* ==========================================================================
+   SPARKLE TRAIL: pollen shed from the wingtips
+   --------------------------------------------------------------------------
+   Fixed pool, typed arrays, one upload per frame. Emission scales with wing
+   speed so the trail pulses with each downstroke.
+   ========================================================================== */
+
+let sparkleColors = PALETTES[params.palette].spark.map((h) => new THREE.Color(h));
+
+const sparkles = (() => {
+  const N = 2400;
+  const pos = new Float32Array(N * 3), vel = new Float32Array(N * 3);
+  const age = new Float32Array(N).fill(1), life = new Float32Array(N), size = new Float32Array(N), col = new Float32Array(N * 3), seed = new Float32Array(N);
+  const geo = new THREE.BufferGeometry();
+  const posAttr = new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage);
+  const ageAttr = new THREE.BufferAttribute(age, 1).setUsage(THREE.DynamicDrawUsage);
+  const sizeAttr = new THREE.BufferAttribute(size, 1).setUsage(THREE.DynamicDrawUsage);
+  const colAttr = new THREE.BufferAttribute(col, 3).setUsage(THREE.DynamicDrawUsage);
+  const rnd = seededRandom(5);
+  for (let i = 0; i < N; i++) seed[i] = rnd();
+  geo.setAttribute('position', posAttr);
+  geo.setAttribute('aAge', ageAttr);
+  geo.setAttribute('aSize', sizeAttr);
+  geo.setAttribute('aColor', colAttr);
+  geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: { uTime: { value: 0 }, uScale: { value: innerHeight * DPR * 0.5 } },
+    vertexShader: /* glsl */`
+      uniform float uTime, uScale;
+      attribute float aAge, aSize, aSeed;
+      attribute vec3 aColor;
+      varying float vA;
+      varying vec3 vC;
+      void main() {
+        float t = clamp(aAge, 0.0, 1.0);
+        float twinkle = 0.55 + 0.45 * sin(uTime * (14.0 + 10.0 * aSeed) + aSeed * 50.0);
+        vA = aAge >= 1.0 ? 0.0 : (1.0 - t) * (1.0 - t) * smoothstep(0.0, 0.05, t) * twinkle;
+        vC = aColor;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = aAge >= 1.0 ? 0.0 : aSize * uScale * (1.0 - 0.6 * t) / -mv.z;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */`
+      varying float vA;
+      varying vec3 vC;
+      void main() {
+        vec2 d = gl_PointCoord - 0.5;
+        float core = exp(-dot(d, d) * 40.0);
+        // four-point glint
+        float star = max(0.0, 1.0 - abs(d.x) * 16.0) * max(0.0, 1.0 - abs(d.y) * 2.2)
+                   + max(0.0, 1.0 - abs(d.y) * 16.0) * max(0.0, 1.0 - abs(d.x) * 2.2);
+        float a = (core + 0.6 * star) * vA;
+        if (a < 0.004) discard;
+        gl_FragColor = vec4(vC * a * 2.2, a);
+      }`,
+  });
+  const points = new THREE.Points(geo, mat);
+  points.frustumCulled = false;
+  scene.add(points);
+
+  let cursor = 0;
+  function emit(p, v, spread) {
+    const i = cursor; cursor = (cursor + 1) % N;
+    pos[i * 3] = p.x + (Math.random() - 0.5) * spread;
+    pos[i * 3 + 1] = p.y + (Math.random() - 0.5) * spread;
+    pos[i * 3 + 2] = p.z + (Math.random() - 0.5) * spread;
+    vel[i * 3] = v.x * 0.15 + (Math.random() - 0.5) * 0.25;
+    vel[i * 3 + 1] = v.y * 0.15 + (Math.random() - 0.5) * 0.25;
+    vel[i * 3 + 2] = v.z * 0.15 + (Math.random() - 0.5) * 0.25;
+    age[i] = 0;
+    life[i] = 1.2 + Math.random() * 1.6;
+    size[i] = 0.05 + Math.random() * 0.09;
+    const c = sparkleColors[(Math.random() * sparkleColors.length) | 0];
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  }
+  function update(dt, time) {
+    mat.uniforms.uTime.value = time;
+    if (dt <= 0) return;
+    const drag = Math.exp(-1.6 * dt);
+    for (let i = 0; i < N; i++) {
+      if (age[i] >= 1) continue;
+      age[i] = Math.min(1, age[i] + dt / life[i]);
+      const k = i * 3;
+      vel[k] *= drag; vel[k + 1] = vel[k + 1] * drag - 0.12 * dt; vel[k + 2] *= drag;
+      pos[k] += vel[k] * dt; pos[k + 1] += vel[k + 1] * dt; pos[k + 2] += vel[k + 2] * dt;
+    }
+    posAttr.needsUpdate = true; ageAttr.needsUpdate = true; sizeAttr.needsUpdate = true; colAttr.needsUpdate = true;
+  }
+  return { emit, update, mat, points };
+})();
+
+/* ==========================================================================
+   SIMULATION STATE
+   ========================================================================== */
+
+const state = {
+  paused: false,
+  theta: -Math.PI / 2,      // crank angle
+  omega: 0,                 // crank angular velocity (rad/s)
+  tension: 1,               // mainspring, 0..1
+  winding: false,
+  windAngle: 0,             // extra key rotation from winding
+  phiPrev: 0, phiDot: 0,
+  psi: 0, psiDot: 0,        // hindwing angle (torsion-spring follower)
+  heave: 0, heaveV: 0, heaveA: 0,
+  wag: 0, wagV: 0,          // abdomen follow-through
+  antX: 0, antXV: 0, antY: 0, antYV: 0,
+  flightS: 0, yaw: 0, yawRate: 0, pathYaw: 0,
+  recenter: false,          // camera easing back home after a flight
+  time: 0,
+};
+solveLinkage(state.theta, link);
+state.phiPrev = link.phi;
+state.psi = link.phi;
+
+const NOMINAL_LIFT = 4.0 * 1.06 * SPRING.maxHz;   // mean of kLift·max(0, −φ̇) at full stroke and speed 1
+
+/* --------------------------------------------------------------------------
+   Mainspring: tension sets the crank speed; running unwinds it; winding refills it.
+   -------------------------------------------------------------------------- */
+function stepSpring(dt) {
+  if (state.winding) {
+    state.tension = Math.min(1, state.tension + dt / SPRING.windTime);
+    state.windAngle += dt * 16;
+    if (state.tension >= 1) state.winding = false;
+  } else if (params.autoWind && state.tension < 0.04) {
+    state.winding = true;
+  }
+  const drive = Math.sqrt(Math.min(1, state.tension / 0.3));
+  const target = Math.PI * 2 * SPRING.maxHz * params.speed * drive;
+  state.omega += (target - state.omega) * damp(3, dt);
+  state.tension = Math.max(0, state.tension - (state.omega * dt) / (Math.PI * 2) / SPRING.beatsPerWind);
+}
+
+/* --------------------------------------------------------------------------
+   Hindwing: rides the forewing through a stiff torsion spring (ωn ≈ 2π·14 Hz,
+   ζ ≈ 0.5), held slightly below it so the two never cross. Substepped.
+   -------------------------------------------------------------------------- */
+function stepHindwing(dt, phi) {
+  const wn = Math.PI * 2 * 14, k = wn * wn, c = 2 * 0.5 * wn;
+  const n = 8, h = dt / n;
+  for (let i = 0; i < n; i++) {
+    const a = k * (phi - 0.07 - state.psi) - c * state.psiDot;
+    state.psiDot += a * h;
+    state.psi += state.psiDot * h;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Body heave from wing lift: the downstroke pushes up, a soft "gravity" and
+   tether pull it back. When the spring runs down the butterfly sags.
+   -------------------------------------------------------------------------- */
+function stepBody(dt, phiDot) {
+  if (dt <= 0) return;
+  const lift = 4.0 * Math.max(0, -phiDot);
+  const a = lift - NOMINAL_LIFT - 16 * state.heave - 4.0 * state.heaveV;
+  state.heaveV += a * dt;
+  state.heave += state.heaveV * dt;
+  state.heaveA = a;
+
+  // abdomen and antennae: damped springs kicked by the heave acceleration and turning
+  springStep('wag', 'wagV', -a * 0.02, 1.4, 0.22, dt);
+  springStep('antX', 'antXV', -a * 0.03, 2.4, 0.18, dt);
+  springStep('antY', 'antYV', -state.yawRate * 3, 1.8, 0.3, dt);
+}
+
+// Semi-implicit damped oscillator on two fields of `state` (natural frequency f Hz, damping ratio z).
+function springStep(x, v, drive, f, z, dt) {
+  const wn = Math.PI * 2 * f;
+  state[v] += (-wn * wn * state[x] - 2 * z * wn * state[v] + drive) * dt;
+  state[x] += state[v] * dt;
+}
+
+/* --------------------------------------------------------------------------
+   Flight: hover in place, or fly a figure-eight over the floor, banking into turns.
+   -------------------------------------------------------------------------- */
+const _flyPos = new THREE.Vector3(), _ahead = new THREE.Vector3();
+const _flyQuat = new THREE.Quaternion(), _euler = new THREE.Euler(0, 0, 0, 'YXZ');
+const _prevTarget = new THREE.Vector3();
+const PATH = (s, out) => out.set(3.0 * Math.sin(s), HOVER_HEIGHT + 0.35 * Math.sin(2 * s + 0.8), 2.1 * Math.sin(2 * s));
+const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+
+function stepFlight(dt) {
+  if (dt <= 0) return;
+  let yawT, bank = 0, pitch = 0;
+  if (params.flight) {
+    const pace = state.omega / (Math.PI * 2 * SPRING.maxHz);   // flies slower as the spring runs down
+    state.flightS += dt * 0.3 * pace;
+    PATH(state.flightS, _flyPos);
+    PATH(state.flightS + 0.02, _ahead).sub(_flyPos);
+    yawT = Math.atan2(_ahead.x, _ahead.z);
+    // heading rate of the path itself drives the bank (and the antennae)
+    const rate = wrapAngle(yawT - state.pathYaw) / dt;
+    state.yawRate += (rate - state.yawRate) * damp(4, dt);
+    bank = clamp(-state.yawRate * 0.45, -0.6, 0.6);
+    pitch = clamp(-_ahead.y * 6, -0.3, 0.3);
+  } else {
+    _flyPos.set(0, HOVER_HEIGHT, 0);
+    yawT = 0.45 * Math.sin(state.time * 0.17);
+    state.yawRate += (0.45 * 0.17 * Math.cos(state.time * 0.17) - state.yawRate) * damp(4, dt);
+  }
+  state.pathYaw = yawT;
+  state.yaw += wrapAngle(yawT - state.yaw) * damp(params.flight ? 6 : 1.2, dt);
+
+  flyer.position.lerp(_flyPos, damp(params.flight ? 5 : 1.5, dt));
+  _euler.set(pitch, state.yaw, bank);
+  _flyQuat.setFromEuler(_euler);
+  flyer.quaternion.slerp(_flyQuat, damp(4, dt));
+
+  bob.position.y = state.heave;
+  bob.rotation.x = -state.heaveV * 0.05;
+}
+
+/* --------------------------------------------------------------------------
+   Pose the mechanism from the solved linkage.
+   -------------------------------------------------------------------------- */
+function poseMechanism(phiDot) {
+  const { crankN, wheelN, pinionN, crownN } = TRAIN;
+  const thC = state.theta;
+
+  // Meshing phase: driver N1 at θ1, driven N2 on the line of centres at angle α:
+  //   θ2 = α + π − π/N2 + (α − θ1)·N1/N2
+  const alpha = Math.atan2(TRAIN.I.y - MECH.crank.y, TRAIN.I.x - MECH.crank.x);
+  const thI = alpha + Math.PI - Math.PI / wheelN + (alpha - thC) * (crankN / wheelN);
+  // Contrate: pinion leaf at the top meets a crown gap at the front; crown turns at −θI·(8/24).
+  const pB = (Math.PI * 2) / crownN, pP = (Math.PI * 2) / pinionN;
+  const thB = -pB * 0.5 + (Math.PI / 2 - thI) * (pB / pP);
+
+  mech.crank.rotation.z = thC;
+  mech.inter.rotation.z = thI;
+  mech.crown.rotation.y = thB;
+  mech.key.rotation.y = thB + state.windAngle;
+  // the mainspring coil breathes with tension
+  mech.spring.scale.setScalar(0.7 + 0.3 * state.tension);
+  mech.spring.rotation.y = thB * 0.5;
+
+  mech.slider.position.y = link.sy;
+  placeBar(mech.conrod, link.px, link.py, 0, link.sy);
+
+  const pitch = clamp(phiDot * -0.022, -0.3, 0.3);   // passive feathering: pronate on the downstroke
+  for (const w of wings) {
+    w.fore.rotation.z = link.phi;
+    w.foreFeather.rotation.x = pitch;
+    w.hind.rotation.z = state.psi;
+    placeBar(w.link, MECH.pinX, link.sy, link.qx, link.qy);
+  }
+
+  for (let i = 0; i < abdomen.length; i++) abdomen[i].seg.rotation.x = abdomen[i].rest + state.wag * (0.3 + 0.1 * i);
+  for (const ant of antennae) { ant.rotation.x = -state.antX; ant.rotation.y = state.antY * 0.5; }
+}
+
+/* ==========================================================================
+   UI: lil-gui panel, HUD, keys
+   ========================================================================== */
+
+const gui = new GUI({ title: 'Workshop' });
+const fLook = gui.addFolder('Finish');
+fLook.add(params, 'palette', Object.keys(PALETTES)).name('wings').onChange(applyPalette);
+fLook.add(params, 'finish', Object.keys(FINISHES)).name('metal').onChange(applyFinish);
+fLook.add(params, 'xray', 0, 0.6, 0.01).name('glass shell').onChange((v) => { MAT.glass.opacity = v; shell.visible = v > 0.005; });
+const fMotion = gui.addFolder('Movement');
+fMotion.add(params, 'speed', 0.2, 2.0, 0.01).name('governor');
+fMotion.add(params, 'flight').name('fly figure-eight').listen().onChange(() => { state.recenter = true; });
+fMotion.add(params, 'autoWind').name('auto wind');
+fMotion.add({ wind: () => windUp() }, 'wind').name('wind the key (W)');
+const fFx = gui.addFolder('Light');
+fFx.add(params, 'sparkles').name('pollen trail');
+fFx.add(params, 'bloom', 0, 1.5, 0.01).onChange((v) => { bloom.strength = v; });
+fFx.add(params, 'exposure', 0.4, 2.0, 0.01).onChange((v) => { renderer.toneMappingExposure = v; });
+gui.add({ reset: () => resetView() }, 'reset').name('reset view (R)');
+
+function windUp() { if (state.tension < 0.995) state.winding = true; }
+function resetView() {
+  camera.position.copy(CAM_HOME);
+  controls.target.copy(TARGET_HOME);
+  controls.autoRotate = true;
+}
+
+addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+  switch (e.code) {
+    case 'Space': state.paused = !state.paused; e.preventDefault(); break;
+    case 'KeyW': windUp(); break;
+    case 'KeyF': params.flight = !params.flight; state.recenter = true; break;
+    case 'KeyX': {
+      params.xray = MAT.glass.opacity > 0.005 ? 0 : 0.12;
+      MAT.glass.opacity = params.xray; shell.visible = params.xray > 0.005;
+      gui.controllersRecursive().forEach((c) => c.updateDisplay());
+      break;
+    }
+    case 'KeyR': resetView(); break;
+    case 'KeyH': document.body.classList.toggle('clean'); break;
+  }
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+  bloom.resolution.set(innerWidth, innerHeight);
+  dust.uniforms.uScale.value = innerHeight * DPR * 0.5;
+  sparkles.mat.uniforms.uScale.value = innerHeight * DPR * 0.5;
+});
+
+const hud = {
+  hz: document.getElementById('g-hz'), stroke: document.getElementById('g-stroke'), fps: document.getElementById('g-fps'),
+  spring: document.getElementById('g-spring'), fill: document.getElementById('g-spring-fill'),
+};
+
+/* ==========================================================================
+   MAIN LOOP
+   ========================================================================== */
+
+const clock = new THREE.Clock();
+const _tipNow = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+const _tipPrev = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+const _tipVel = new THREE.Vector3(), _tipP = new THREE.Vector3();
+const tipMarkers = wings.flatMap((w) => [w.foreTip, w.hindTip]);
+let tipsPrimed = false, emitCarry = 0;
+let fpsFrames = 0, fpsTime = 0, hudTime = 0;
+let strokeMin = Infinity, strokeMax = -Infinity, strokeShown = 0;
+
+function frame() {
+  requestAnimationFrame(frame);
+  const raw = Math.min(clock.getDelta(), 1 / 30);
+  const dt = state.paused ? 0 : raw;
+  state.time += dt;
+
+  // 1. drive: spring -> crank -> linkage
+  stepSpring(dt);
+  state.theta += state.omega * dt;
+  solveLinkage(state.theta, link);
+  const phiDot = dt > 0 ? (link.phi - state.phiPrev) / dt : 0;
+  state.phiPrev = link.phi;
+
+  // 2. coupled bodies
+  if (dt > 0) stepHindwing(dt, link.phi);
+  stepBody(dt, phiDot);
+  stepFlight(dt);
+  poseMechanism(phiDot);
+  flyer.updateMatrixWorld(true);
+
+  // 3. pollen from the wingtips, interpolated along each tip's path this frame
+  for (let i = 0; i < tipMarkers.length; i++) tipMarkers[i].getWorldPosition(_tipNow[i]);
+  if (!tipsPrimed) { for (let i = 0; i < 4; i++) _tipPrev[i].copy(_tipNow[i]); tipsPrimed = true; }
+  if (params.sparkles && dt > 0) {
+    emitCarry += Math.abs(phiDot) * 60 * dt;
+    const n = Math.floor(emitCarry);
+    emitCarry -= n;
+    for (let k = 0; k < n; k++) {
+      const i = (Math.random() * 4) | 0, f = Math.random();
+      _tipP.lerpVectors(_tipPrev[i], _tipNow[i], f);
+      _tipVel.subVectors(_tipNow[i], _tipPrev[i]).divideScalar(dt);
+      sparkles.emit(_tipP, _tipVel, 0.06);
+    }
+  }
+  for (let i = 0; i < 4; i++) _tipPrev[i].copy(_tipNow[i]);
+  sparkles.update(dt, state.time);
+  dust.uniforms.uTime.value += raw;
+
+  // 4. camera follows the flyer while it travels, then eases home once (so pans aren't fought)
+  if (params.flight || state.recenter) {
+    _prevTarget.copy(controls.target);
+    controls.target.lerp(params.flight ? flyer.position : TARGET_HOME, damp(params.flight ? 2.5 : 1.2, raw));
+    camera.position.add(_prevTarget.sub(controls.target).negate());
+    state.recenter = !params.flight && controls.target.distanceToSquared(TARGET_HOME) > 1e-4;
+  }
+  controls.update();
+  sky.position.copy(camera.position);
+
+  composer.render();
+  if (!document.documentElement.dataset.running) {
+    document.documentElement.dataset.running = '1';
+    document.getElementById('stall').hidden = true;
+  }
+
+  // 5. HUD
+  strokeMin = Math.min(strokeMin, link.phi); strokeMax = Math.max(strokeMax, link.phi);
+  fpsFrames++; fpsTime += raw; hudTime += raw;
+  if (hudTime > 0.25) {
+    if (state.omega > 0.5) strokeShown = (strokeMax - strokeMin) * 180 / Math.PI;
+    strokeMin = Infinity; strokeMax = -Infinity;
+    hud.hz.textContent = (state.omega / (Math.PI * 2)).toFixed(2);
+    hud.stroke.textContent = strokeShown.toFixed(0) + '°';
+    hud.spring.textContent = state.winding ? 'winding' : state.tension > 0.995 ? 'full' : Math.round(state.tension * 100) + '%';
+    hud.fill.style.width = (state.tension * 100).toFixed(1) + '%';
+    hudTime = 0;
+  }
+  if (fpsTime > 0.5) { hud.fps.textContent = Math.round(fpsFrames / fpsTime); fpsFrames = 0; fpsTime = 0; }
+}
+
+applyFinish(params.finish);
+// handles for console tinkering
+window.butterfly = { scene, camera, controls, params, state, renderer, flyer };
+frame();
+</script>
+</body>
+</html>
