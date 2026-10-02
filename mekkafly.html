@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MEKKAFLY — Mechanical Butterfly</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#07080d; font-family:"Segoe UI", system-ui, sans-serif; }
+  #app { position:fixed; inset:0; }
+  canvas { display:block; }
+  .vignette { position:fixed; inset:0; pointer-events:none;
+    background:radial-gradient(ellipse at 50% 42%, transparent 45%, rgba(0,0,0,.55) 100%); }
+  .header {
+    position:fixed; top:28px; left:32px; pointer-events:none; z-index:10;
+    color:#f5e8c8;
+  }
+  .header h1 {
+    font-size:34px; letter-spacing:0.35em; font-weight:200;
+    background:linear-gradient(90deg,#ffe9b0,#ff9a3c 40%,#5ff2ff 80%,#c99aff);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .header h1 b { font-weight:700; }
+  .header p { margin-top:6px; font-size:12px; letter-spacing:0.32em; color:#8a90a3; text-transform:uppercase; }
+  .header p span { color:#ffbe5a; }
+  .panel {
+    position:fixed; right:22px; top:22px; width:250px; z-index:10;
+    background:rgba(12,14,22,.72); backdrop-filter:blur(14px);
+    border:1px solid rgba(255,190,90,.18); border-radius:16px; padding:16px 16px 14px;
+    color:#d8dcea; box-shadow:0 12px 40px rgba(0,0,0,.5);
+  }
+  .panel h2 { font-size:11px; letter-spacing:.28em; color:#ffbe5a; font-weight:600; margin-bottom:12px; }
+  .row { margin-bottom:10px; }
+  .row label { display:flex; justify-content:space-between; font-size:11px; letter-spacing:.08em; color:#9aa1b5; margin-bottom:5px; text-transform:uppercase; }
+  .row label em { color:#ffe9b0; font-style:normal; }
+  input[type=range] { width:100%; accent-color:#ffb84d; height:18px; cursor:pointer; }
+  .btns { display:flex; gap:8px; margin-top:12px; }
+  button {
+    flex:1; border:1px solid rgba(255,190,90,.3); background:rgba(255,184,77,.1);
+    color:#ffe9b0; border-radius:10px; padding:8px 0; font-size:11px; letter-spacing:.18em;
+    cursor:pointer; text-transform:uppercase; transition:.2s;
+  }
+  button:hover { background:rgba(255,184,77,.28); box-shadow:0 0 18px rgba(255,184,77,.35); }
+  button.active { background:#ffbe5a; color:#1a1206; font-weight:700; }
+  .footer {
+    position:fixed; left:32px; bottom:24px; z-index:10; pointer-events:none;
+    color:#6b7288; font-size:11px; letter-spacing:.22em; text-transform:uppercase;
+  }
+  .footer b { color:#5ff2ff; font-weight:600; }
+  #loader {
+    position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center;
+    background:#07080d; color:#ffbe5a; letter-spacing:.4em; font-size:13px; transition:opacity .8s;
+  }
+  @media (max-width:700px){ .panel{display:none;} .header h1{font-size:24px;} }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div class="vignette"></div>
+<div class="header">
+  <h1>MEKKA<b>FLY</b></h1>
+  <p>clockwork lepidoptera <span>— MK-IV</span></p>
+</div>
+<div class="panel">
+  <h2>CONTROL DECK</h2>
+  <div class="row"><label>Flap speed <em id="v-speed">1.0×</em></label><input id="s-speed" type="range" min="0" max="2.5" step="0.01" value="1"></div>
+  <div class="row"><label>Flap amplitude <em id="v-amp">72°</em></label><input id="s-amp" type="range" min="10" max="95" step="1" value="72"></div>
+  <div class="row"><label>Glow energy <em id="v-glow">1.2</em></label><input id="s-glow" type="range" min="0" max="3" step="0.05" value="1.2"></div>
+  <div class="row"><label>Patina / gold <em id="v-patina">0.35</em></label><input id="s-patina" type="range" min="0" max="1" step="0.01" value="0.35"></div>
+  <div class="btns">
+    <button id="b-fly" class="active">Fly</button>
+    <button id="b-hover">Hover</button>
+    <button id="b-burst">Burst</button>
+  </div>
+</div>
+<div class="footer">drag to orbit &nbsp;·&nbsp; scroll to zoom &nbsp;·&nbsp; <b>click butterfly for pulse</b></div>
+<div id="loader">WINDING&nbsp;SPRINGS…</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07080d);
+scene.fog = new THREE.FogExp2(0x07080d, 0.035);
+
+const camera = new THREE.PerspectiveCamera(42, innerWidth/innerHeight, 0.1, 200);
+camera.position.set(5.2, 3.1, 7.2);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0, 1.6, 0);
+controls.maxDistance = 20; controls.minDistance = 2.5;
+controls.maxPolarAngle = 1.52;
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const key = new THREE.DirectionalLight(0xffe0b0, 2.2);
+key.position.set(5, 8, 4); key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left=-8; key.shadow.camera.right=8;
+key.shadow.camera.top=8; key.shadow.camera.bottom=-8;
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x5ff2ff, 1.4); rim.position.set(-6, 4, -6); scene.add(rim);
+const warm = new THREE.PointLight(0xff8a2a, 18, 20, 2); warm.position.set(0, 0.6, 0); scene.add(warm);
+const cool = new THREE.PointLight(0x3adfff, 14, 18, 2); cool.position.set(0, 3.2, -2); scene.add(cool);
+scene.add(new THREE.AmbientLight(0x2a3350, 0.7));
+
+/* ---------- materials ---------- */
+const brassMat = new THREE.MeshStandardMaterial({ color:0xc9973f, metalness:1.0, roughness:0.28 });
+const copperMat = new THREE.MeshStandardMaterial({ color:0xb35a2e, metalness:1.0, roughness:0.34 });
+const darkSteel = new THREE.MeshStandardMaterial({ color:0x2b2f3a, metalness:0.95, roughness:0.42 });
+const steelMat = new THREE.MeshStandardMaterial({ color:0x9aa3b5, metalness:1.0, roughness:0.22 });
+const goldTrim = new THREE.MeshStandardMaterial({ color:0xffd27a, metalness:1.0, roughness:0.18, emissive:0x442200, emissiveIntensity:0.25 });
+const glowCyan = new THREE.MeshStandardMaterial({ color:0x0b2b33, emissive:0x36f5ff, emissiveIntensity:2.2, roughness:0.3, metalness:0.2 });
+const glowAmber = new THREE.MeshStandardMaterial({ color:0x331a05, emissive:0xff9a2a, emissiveIntensity:2.4, roughness:0.3, metalness:0.2 });
+const patinaMat = new THREE.MeshStandardMaterial({ color:0x3f8a7a, metalness:0.9, roughness:0.5 });
+
+function mixPatina(v){
+  brassMat.color.set(0xc9973f).lerp(new THREE.Color(0x4fa08e), v*0.7);
+  copperMat.color.set(0xb35a2e).lerp(new THREE.Color(0x3f7a6e), v*0.6);
+}
+
+/* ---------- helpers ---------- */
+function gearGeometry(radius, teeth, thickness, tooth=0.12){
+  const s = new THREE.Shape();
+  const inner = radius, outer = radius*(1+tooth*2.2);
+  for(let i=0;i<teeth;i++){
+    const a0=(i/teeth)*Math.PI*2, a1=((i+0.35)/teeth)*Math.PI*2,
+          a2=((i+0.5)/teeth)*Math.PI*2, a3=((i+0.85)/teeth)*Math.PI*2;
+    if(i===0) s.moveTo(Math.cos(a0)*outer, Math.sin(a0)*outer);
+    else s.lineTo(Math.cos(a0)*outer, Math.sin(a0)*outer);
+    s.lineTo(Math.cos(a1)*outer, Math.sin(a1)*outer);
+    s.lineTo(Math.cos(a2)*inner, Math.sin(a2)*inner);
+    s.lineTo(Math.cos(a3)*inner, Math.sin(a3)*inner);
+  }
+  s.closePath();
+  const hole = new THREE.Path();
+  hole.absarc(0,0,radius*0.32,0,Math.PI*2,true);
+  s.holes.push(hole);
+  const g = new THREE.ExtrudeGeometry(s,{depth:thickness,bevelEnabled:true,bevelThickness:0.015,bevelSize:0.015,bevelSegments:1});
+  g.center();
+  return g;
+}
+function tube(points, r, mat, seg=32){
+  const curve = new THREE.CatmullRomCurve3(points);
+  const m = new THREE.Mesh(new THREE.TubeGeometry(curve, seg, r, 8, false), mat);
+  m.castShadow = true;
+  return m;
+}
+
+/* ---------- wing texture ---------- */
+function wingTexture(forewing=true){
+  const c = document.createElement('canvas'); c.width=c.height=1024;
+  const x = c.getContext('2d');
+  x.clearRect(0,0,1024,1024);
+  const g = x.createRadialGradient(300,512,50,512,512,720);
+  g.addColorStop(0,'rgba(48,52,70,0.96)');
+  g.addColorStop(0.5,'rgba(26,28,42,0.92)');
+  g.addColorStop(1,'rgba(12,13,22,0.55)');
+  x.fillStyle=g;
+  x.beginPath();
+  if(forewing){ x.moveTo(60,540); x.bezierCurveTo(220,180,640,120,960,260); x.bezierCurveTo(990,520,760,760,420,820); x.bezierCurveTo(220,830,90,700,60,540); }
+  else { x.moveTo(60,500); x.bezierCurveTo(260,420,700,420,930,560); x.bezierCurveTo(880,820,480,940,180,800); x.bezierCurveTo(80,720,40,600,60,500); }
+  x.closePath(); x.fill();
+  x.save(); x.clip();
+  x.strokeStyle='rgba(255,190,90,0.5)'; x.lineWidth=3;
+  for(let i=0;i<14;i++){
+    x.beginPath();
+    const y0=200+i*48;
+    x.moveTo(40,y0); x.bezierCurveTo(350,y0+30,650,y0-40,1000,y0+60);
+    x.stroke();
+  }
+  x.strokeStyle='rgba(95,242,255,0.85)'; x.lineWidth=5; x.shadowColor='#36f5ff'; x.shadowBlur=18;
+  const veins = forewing?
+    [[[60,540],[300,420],[620,300],[940,270]],[[60,540],[320,540],[650,500],[900,480]],[[60,540],[300,660],[600,720],[820,700]],[[320,540],[420,400],[520,240]],[[320,540],[480,660],[560,800]]]:
+    [[[60,500],[350,520],[650,540],[910,570]],[[60,500],[300,620],[550,720],[760,760]],[[350,520],[420,640],[460,800]]];
+  veins.forEach(v=>{ x.beginPath(); x.moveTo(v[0][0],v[0][1]); x.bezierCurveTo(v[1][0],v[1][1],v[2][0],v[2][1],v[3][0],v[3][1]); x.stroke(); });
+  x.shadowBlur=0;
+  x.fillStyle='rgba(255,210,122,0.95)';
+  for(let i=0;i<90;i++){
+    const px=Math.random()*1024, py=Math.random()*1024;
+    x.beginPath(); x.arc(px,py,Math.random()*3+1.2,0,7); x.fill();
+    x.strokeStyle='rgba(0,0,0,0.5)'; x.lineWidth=1; x.stroke();
+  }
+  x.fillStyle='rgba(255,154,42,0.16)';
+  for(let i=0;i<6;i++){ x.beginPath(); x.arc(200+i*130, 300+(i%3)*180, 90, 0, 7); x.fill(); }
+  x.strokeStyle='rgba(255,233,176,0.9)'; x.lineWidth=14; x.stroke();
+  x.restore();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+const foreTex = wingTexture(true), hindTex = wingTexture(false);
+
+/* ---------- butterfly ---------- */
+const fly = new THREE.Group();
+scene.add(fly);
+const bodyGroup = new THREE.Group();
+fly.add(bodyGroup);
+fly.position.y = 2.1;
+
+/* abdomen — stacked clockwork segments */
+const abdomen = new THREE.Group();
+for(let i=0;i<6;i++){
+  const r = 0.30 - i*0.038;
+  const seg = new THREE.Mesh(new THREE.CylinderGeometry(r*0.92, r, 0.26, 24), i%2? copperMat : brassMat);
+  seg.rotation.x = Math.PI/2;
+  seg.position.z = -0.35 - i*0.24;
+  seg.castShadow = true;
+  abdomen.add(seg);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(r+0.015, 0.028, 10, 32), darkSteel);
+  ring.position.z = seg.position.z + 0.12;
+  abdomen.add(ring);
+  if(i<5){
+    const jewel = new THREE.Mesh(new THREE.SphereGeometry(0.045,12,12), glowCyan);
+    jewel.position.set(0, r*0.85, seg.position.z);
+    abdomen.add(jewel);
+  }
+}
+const stinger = new THREE.Mesh(new THREE.ConeGeometry(0.07,0.28,16), goldTrim);
+stinger.rotation.x = -Math.PI/2; stinger.position.z = -1.95;
+abdomen.add(stinger);
+bodyGroup.add(abdomen);
+
+/* thorax */
+const thorax = new THREE.Mesh(new THREE.SphereGeometry(0.42, 32, 24), brassMat);
+thorax.scale.set(1,0.95,1.35); thorax.castShadow=true;
+bodyGroup.add(thorax);
+const chestPlate = new THREE.Mesh(new THREE.SphereGeometry(0.30,24,18,0,Math.PI*2,0,1.2), copperMat);
+chestPlate.position.set(0,-0.18,0.1); chestPlate.rotation.x=Math.PI; bodyGroup.add(chestPlate);
+const core = new THREE.Mesh(new THREE.CapsuleGeometry(0.11,0.28,8,16), glowAmber);
+core.rotation.x=Math.PI/2; core.position.set(0,-0.05,0.15);
+bodyGroup.add(core);
+const coreLight = new THREE.PointLight(0xff9a2a, 6, 4, 2); coreLight.position.copy(core.position); bodyGroup.add(coreLight);
+
+/* exposed gears on back */
+const gears=[];
+function addGear(r, teeth, x,y,z, axis='x', mat=steelMat){
+  const m = new THREE.Mesh(gearGeometry(r,teeth,0.07), mat);
+  m.position.set(x,y,z); m.castShadow=true;
+  if(axis==='x') m.rotation.y=Math.PI/2;
+  bodyGroup.add(m); gears.push({m, speed:(0.6+Math.random()*1.4)*(Math.random()<0.5?-1:1)});
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(r*0.18,r*0.18,0.12,12), copperMat);
+  hub.rotation.z=Math.PI/2; hub.position.set(x,y,z); bodyGroup.add(hub);
+  return m;
+}
+addGear(0.20,14, 0,0.38,-0.1,'x',steelMat);
+addGear(0.14,10, 0.16,0.34,-0.32,'x',brassMat);
+addGear(0.14,10, -0.16,0.34,-0.32,'x',brassMat);
+addGear(0.10,9, 0,0.30,-0.55,'x',copperMat);
+
+/* head */
+const head = new THREE.Group(); head.position.set(0,0.12,0.72); bodyGroup.add(head);
+const skull = new THREE.Mesh(new THREE.SphereGeometry(0.24,28,22), darkSteel);
+skull.castShadow=true; head.add(skull);
+const eyeGeo = new THREE.SphereGeometry(0.11,20,16);
+const eyeL = new THREE.Mesh(eyeGeo, glowCyan); eyeL.position.set(-0.15,0.05,0.14); eyeL.scale.set(1,1.3,0.8); head.add(eyeL);
+const eyeR = eyeL.clone(); eyeR.position.x=0.15; head.add(eyeR);
+const mandL = new THREE.Mesh(new THREE.ConeGeometry(0.045,0.22,10), brassMat);
+mandL.position.set(-0.08,-0.14,0.18); mandL.rotation.x=2.4; head.add(mandL);
+const mandR = mandL.clone(); mandR.position.x=0.08; head.add(mandR);
+function antenna(side){
+  const pts=[new THREE.Vector3(side*0.08,0.14,0.1), new THREE.Vector3(side*0.3,0.45,0.25),
+             new THREE.Vector3(side*0.5,0.75,0.15), new THREE.Vector3(side*0.58,1.0,-0.05)];
+  const a = tube(pts, 0.018, brassMat); head.add(a);
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.055,14,12), glowAmber);
+  tip.position.copy(pts[3]); head.add(tip);
+  return {a, tip};
+}
+const antL = antenna(-1), antR = antenna(1);
+
+/* legs */
+function leg(side, z, spread){
+  const hip = new THREE.Vector3(side*0.25,-0.25,z);
+  const knee = new THREE.Vector3(side*(0.5+spread),-0.65,z+0.05);
+  const foot = new THREE.Vector3(side*(0.55+spread),-1.05,z+0.15);
+  bodyGroup.add(tube([hip,knee,foot],0.028,darkSteel,12));
+  const claw = new THREE.Mesh(new THREE.SphereGeometry(0.04,10,8), goldTrim);
+  claw.position.copy(foot); bodyGroup.add(claw);
+}
+leg(-1,0.25,0.05); leg(1,0.25,0.05); leg(-1,-0.1,0.15); leg(1,-0.1,0.15); leg(-1,-0.4,0.2); leg(1,-0.4,0.2);
+
+/* ---------- wings ---------- */
+function wingShape(fore){
+  const s = new THREE.Shape();
+  if(fore){
+    s.moveTo(0,0.1);
+    s.bezierCurveTo(0.6,-0.9, 2.2,-1.4, 3.6,-0.9);
+    s.bezierCurveTo(4.1,-0.2, 3.4,0.9, 2.2,1.25);
+    s.bezierCurveTo(1.2,1.5, 0.3,1.0, 0,0.1);
+  } else {
+    s.moveTo(0,0);
+    s.bezierCurveTo(0.7,-0.6, 2.0,-1.0, 2.7,-0.5);
+    s.bezierCurveTo(2.9,0.2, 2.0,0.9, 1.0,0.85);
+    s.bezierCurveTo(0.4,0.8, 0.05,0.4, 0,0);
+  }
+  return s;
+}
+function buildWing(fore, tex){
+  const g = new THREE.Group();
+  const shape = wingShape(fore);
+  const memGeo = new THREE.ShapeGeometry(shape, 24);
+  const memMat = new THREE.MeshPhysicalMaterial({
+    map:tex, transparent:true, side:THREE.DoubleSide,
+    metalness:0.55, roughness:0.35,
+    emissive:0xffffff, emissiveMap:tex, emissiveIntensity:0.55,
+    clearcoat:1, clearcoatRoughness:0.25, opacity:0.96
+  });
+  const mem = new THREE.Mesh(memGeo, memMat);
+  mem.rotation.x = -Math.PI/2;
+  mem.castShadow = true;
+  g.add(mem); g.userData.memMat = memMat;
+
+  const outline = shape.getPoints(60).map(p=>new THREE.Vector3(p.x,0,-p.y));
+  outline.push(outline[0].clone());
+  const frame = tube(outline, fore?0.045:0.038, brassMat, 80);
+  g.add(frame);
+
+  const ribs = fore?5:3;
+  for(let i=0;i<ribs;i++){
+    const t=(i+1)/(ribs+1);
+    const ex = fore? (1.0+t*2.4) : (0.5+t*1.9);
+    const ez = fore? (0.9-t*1.9) : (0.7-t*1.3);
+    g.add(tube([new THREE.Vector3(0.05,0,0.05), new THREE.Vector3(ex*0.55,0.02,(0.05+ez)/2), new THREE.Vector3(ex,0,ez)], 0.022, copperMat, 16));
+    const node = new THREE.Mesh(new THREE.SphereGeometry(0.045,10,8), goldTrim);
+    node.position.set(ex*0.55,0.03,(0.05+ez)/2); g.add(node);
+  }
+  const wg = new THREE.Mesh(gearGeometry(fore?0.16:0.12, fore?12:10, 0.06), steelMat);
+  wg.rotation.x=Math.PI/2; wg.position.set(0.02,0.06,0); g.add(wg);
+  g.userData.gear = wg;
+  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.05,12,10), glowCyan);
+  lamp.position.set(fore?2.3:1.7, 0.04, fore?-0.4:0); g.add(lamp);
+  g.userData.lamp = lamp;
+  return g;
+}
+
+const wingR_F = buildWing(true, foreTex);
+const wingR_H = buildWing(false, hindTex);
+const wingL_F = buildWing(true, foreTex);
+const wingL_H = buildWing(false, hindTex);
+
+const pivotRF = new THREE.Group(), pivotRH = new THREE.Group();
+const pivotLF = new THREE.Group(), pivotLH = new THREE.Group();
+pivotRF.position.set(0.28,0.15,0.35); pivotRH.position.set(0.26,0.1,-0.1);
+pivotLF.position.set(-0.28,0.15,0.35); pivotLH.position.set(-0.26,0.1,-0.1);
+pivotRF.add(wingR_F); pivotRH.add(wingR_H);
+pivotLF.add(wingL_F); pivotLH.add(wingL_H);
+wingL_F.rotation.y = Math.PI; wingL_H.rotation.y = Math.PI;
+bodyGroup.add(pivotRF,pivotRH,pivotLF,pivotLH);
+
+/* shoulder pistons */
+function piston(pivot){
+  const p = new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.035,0.4,10), steelMat);
+  p.position.set(pivot.position.x*0.5, -0.15, pivot.position.z);
+  p.rotation.z = pivot.position.x>0?0.5:-0.5;
+  bodyGroup.add(p);
+}
+piston(pivotRF); piston(pivotRH); piston(pivotLF); piston(pivotLH);
+
+/* ---------- pedestal & environment ---------- */
+const ground = new THREE.Mesh(new THREE.CircleGeometry(16,64),
+  new THREE.MeshStandardMaterial({color:0x0b0d14, metalness:0.7, roughness:0.5}));
+ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
+
+const ped = new THREE.Group(); scene.add(ped);
+const base = new THREE.Mesh(new THREE.CylinderGeometry(1.5,1.8,0.35,48), darkSteel);
+base.position.y=0.175; base.receiveShadow=true; base.castShadow=true; ped.add(base);
+const brassRing = new THREE.Mesh(new THREE.TorusGeometry(1.5,0.06,12,72), brassMat);
+brassRing.rotation.x=Math.PI/2; brassRing.position.y=0.36; ped.add(brassRing);
+const glowRingMat = new THREE.MeshStandardMaterial({color:0x061014, emissive:0x36f5ff, emissiveIntensity:2.5});
+const glowRing = new THREE.Mesh(new THREE.TorusGeometry(1.15,0.03,10,72), glowRingMat);
+glowRing.rotation.x=Math.PI/2; glowRing.position.y=0.38; ped.add(glowRing);
+const glowRing2 = new THREE.Mesh(new THREE.TorusGeometry(0.7,0.022,10,64),
+  new THREE.MeshStandardMaterial({color:0x140b02, emissive:0xff9a2a, emissiveIntensity:2.2}));
+glowRing2.rotation.x=Math.PI/2; glowRing2.position.y=0.38; ped.add(glowRing2);
+const beamMat = new THREE.MeshBasicMaterial({color:0x36f5ff, transparent:true, opacity:0.10, side:THREE.DoubleSide, depthWrite:false});
+const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.9,1.25,2.4,32,1,true), beamMat);
+beam.position.y=1.5; ped.add(beam);
+
+const cogs=[];
+for(let i=0;i<7;i++){
+  const r=0.12+Math.random()*0.2;
+  const cg = new THREE.Mesh(gearGeometry(r, 10+Math.floor(Math.random()*6), 0.08), i%2?brassMat:darkSteel);
+  const a=i/7*Math.PI*2;
+  cg.position.set(Math.cos(a)*1.05, 0.42, Math.sin(a)*1.05);
+  cg.rotation.x=-Math.PI/2;
+  ped.add(cg); cogs.push({m:cg, s:(i%2?-1:1)*(0.4+Math.random())});
+}
+
+/* dust particles */
+function makeParticles(n, color, size, spread){
+  const pos = new Float32Array(n*3);
+  for(let i=0;i<n;i++){ pos[i*3]=(Math.random()-0.5)*spread; pos[i*3+1]=Math.random()*7; pos[i*3+2]=(Math.random()-0.5)*spread; }
+  const g=new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  const m=new THREE.PointsMaterial({color, size, transparent:true, opacity:0.7, depthWrite:false, blending:THREE.AdditiveBlending});
+  const p=new THREE.Points(g,m); scene.add(p); return p;
+}
+const dust = makeParticles(350, 0xffd27a, 0.035, 18);
+const sparks = makeParticles(200, 0x36f5ff, 0.045, 10);
+const dustVel = new Float32Array(350).map(()=>0.1+Math.random()*0.35);
+
+/* ---------- post ---------- */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.75, 0.6, 0.15);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+/* ---------- state / UI ---------- */
+const state = { speed:1, amp:72*Math.PI/180, glow:1.2, flying:true, burst:0, pulse:0 };
+const $ = id=>document.getElementById(id);
+$('s-speed').oninput=e=>{ state.speed=+e.target.value; $('v-speed').textContent=(+e.target.value).toFixed(2)+'×'; };
+$('s-amp').oninput=e=>{ state.amp=+e.target.value*Math.PI/180; $('v-amp').textContent=e.target.value+'°'; };
+$('s-glow').oninput=e=>{ state.glow=+e.target.value; $('v-glow').textContent=(+e.target.value).toFixed(2); };
+$('s-patina').oninput=e=>{ mixPatina(+e.target.value); $('v-patina').textContent=(+e.target.value).toFixed(2); };
+$('b-fly').onclick=()=>{ state.flying=true; $('b-fly').classList.add('active'); $('b-hover').classList.remove('active'); };
+$('b-hover').onclick=()=>{ state.flying=false; $('b-hover').classList.add('active'); $('b-fly').classList.remove('active'); };
+$('b-burst').onclick=()=>{ state.burst=1; };
+mixPatina(0.35);
+
+const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
+addEventListener('pointerdown', e=>{
+  ptr.set(e.clientX/innerWidth*2-1, -(e.clientY/innerHeight)*2+1);
+  ray.setFromCamera(ptr, camera);
+  if(ray.intersectObject(fly,true).length){ state.pulse=1; state.burst=Math.max(state.burst,0.6); }
+});
+
+addEventListener('resize', ()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight); composer.setSize(innerWidth,innerHeight);
+});
+
+/* ---------- animate ---------- */
+const clock = new THREE.Clock();
+let flapPhase = 0;
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  state.burst = Math.max(0, state.burst - dt*0.8);
+  state.pulse = Math.max(0, state.pulse - dt*1.2);
+  const boost = 1 + state.burst*2.2;
+
+  flapPhase += dt * (6.5*state.speed*boost + (state.flying?0:1.2));
+  const flap = Math.sin(flapPhase);
+  const amp = state.amp * (state.flying?1:0.35) * (1+state.burst*0.25);
+  const hindLag = 0.45;
+
+  const R = amp*(0.15+0.85*Math.abs(flap))*Math.sign(flap||1);
+  const Rf = R, Rh = amp*(0.15+0.85*Math.abs(Math.sin(flapPhase-hindLag)))*Math.sign(Math.sin(flapPhase-hindLag)||1);
+  pivotRF.rotation.z =  Rf; pivotRH.rotation.z =  Rh*0.9;
+  pivotLF.rotation.z = -Rf; pivotLH.rotation.z = -Rh*0.9;
+  pivotRF.rotation.y = -0.25*flap - state.burst*0.3; pivotLF.rotation.y = 0.25*flap + state.burst*0.3;
+  pivotRH.rotation.y = -0.2*Math.sin(flapPhase-hindLag); pivotLH.rotation.y = 0.2*Math.sin(flapPhase-hindLag);
+  wingR_F.userData.gear.rotation.z = flapPhase*0.8; wingL_F.userData.gear.rotation.z = -flapPhase*0.8;
+
+  gears.forEach(g=>{ g.m.rotation.x += dt*g.speed*2; });
+  cogs.forEach(c=>{ c.m.rotation.z += dt*c.s; });
+  glowRing.rotation.z += dt*0.5; glowRing2.rotation.z -= dt*0.8;
+  beam.rotation.y += dt*0.4;
+  beamMat.opacity = 0.08+0.04*Math.sin(t*2)+state.pulse*0.15;
+
+  if(state.flying){
+    const px = Math.sin(t*0.35)*2.4, pz = Math.sin(t*0.7)*1.6, py = 2.1+Math.sin(t*1.3)*0.45+state.burst*0.8;
+    fly.position.set(px,py,pz);
+    fly.rotation.y = Math.cos(t*0.35)*0.5 + Math.sin(flapPhase*0.5)*0.04;
+    fly.rotation.x = Math.cos(t*0.7)*0.18 - state.burst*0.25;
+    fly.rotation.z = Math.sin(t*0.5)*0.12;
+  } else {
+    fly.position.lerp(new THREE.Vector3(0,1.7,0), dt*1.5);
+    fly.rotation.y += dt*0.6; fly.rotation.x*=0.95; fly.rotation.z = Math.sin(t*2)*0.05;
+  }
+  bodyGroup.position.y = Math.sin(flapPhase)*0.03;
+  bodyGroup.rotation.x = flap*0.05;
+
+  const gi = state.glow + state.pulse*2 + state.burst;
+  glowCyan.emissiveIntensity = 1.6*gi;
+  glowAmber.emissiveIntensity = 1.8*gi;
+  glowRingMat.emissiveIntensity = 1.5*gi;
+  coreLight.intensity = 4*gi;
+  bloom.strength = 0.45 + state.glow*0.25 + state.pulse*0.8 + state.burst*0.5;
+  [wingR_F,wingR_H,wingL_F,wingL_H].forEach(w=>{
+    w.userData.memMat.emissiveIntensity = 0.35*gi;
+    w.userData.lamp.scale.setScalar(1+state.pulse*1.5+Math.sin(t*6)*0.12);
+  });
+  antL.tip.position.y += Math.sin(t*3)*0.0006; antR.tip.position.y += Math.cos(t*3.2)*0.0006;
+
+  const dp = dust.geometry.attributes.position;
+  for(let i=0;i<350;i++){ let y=dp.getY(i)+dustVel[i]*dt; if(y>7) y=0; dp.setY(i,y); }
+  dp.needsUpdate=true;
+  sparks.rotation.y += dt*0.05;
+
+  controls.update();
+  composer.render();
+  const loader=document.getElementById('loader');
+  if(loader){ loader.style.opacity='0'; setTimeout(()=>loader.remove(), 900); }
+}
+animate();
+</script>
+</body>
+</html>

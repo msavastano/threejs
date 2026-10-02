@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wooden Toy Train</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #7c8286; font-family: system-ui, sans-serif; }
+  #info { position: fixed; left: 16px; bottom: 14px; color: #f2f2f2; font-size: 13px; opacity: .8; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="info">Drag to orbit · Right-drag to pan · Scroll to zoom · Space to pause</div>
+
+<!-- Modern Three.js via importmap -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+// ---------- renderer / scene ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.AgXToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x7c8286);
+scene.fog = new THREE.Fog(0x7c8286, 18, 40);
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.5;
+
+const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(-2.5, 4.5, 13);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.8, 0);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.49;
+
+// ---------- lights (mirrors the Blender key / fill / top setup) ----------
+scene.add(new THREE.HemisphereLight(0xffffff, 0x6a6e70, 0.9));
+const key = new THREE.DirectionalLight(0xfff1e0, 2.6);
+key.position.set(-4, 7, 7);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+Object.assign(key.shadow.camera, { left: -8, right: 8, top: 5, bottom: -5, near: 1, far: 30 });
+key.shadow.radius = 4;
+key.shadow.bias = -0.0005;
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xe8f0ff, 0.8);
+fill.position.set(6, 3, 7);
+scene.add(fill);
+
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80),
+  new THREE.MeshStandardMaterial({ color: 0x9a9fa2, roughness: 0.9 }));
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// ---------- procedural wood (the Blender node materials don't survive glTF export) ----------
+// Growth rings around the local X axis + fine streaks, driven by object-space position.
+const NOISE = /* glsl */`
+  varying vec3 vObjPos;
+  uniform vec3 uLight, uDark;
+  uniform float uRing, uLo, uHi;
+  float h3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+  float vnoise(vec3 x){
+    vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(h3(i), h3(i + vec3(1,0,0)), f.x), mix(h3(i + vec3(0,1,0)), h3(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(h3(i + vec3(0,0,1)), h3(i + vec3(1,0,1)), f.x), mix(h3(i + vec3(0,1,1)), h3(i + vec3(1,1,1)), f.x), f.y), f.z);
+  }`;
+
+function wood(light, dark, ring, lo = 0.2, hi = 0.9) {
+  const m = new THREE.MeshStandardMaterial({ roughness: 0.55 });
+  m.onBeforeCompile = (s) => {
+    Object.assign(s.uniforms, {
+      uLight: { value: new THREE.Color(light) }, uDark: { value: new THREE.Color(dark) },
+      uRing: { value: ring }, uLo: { value: lo }, uHi: { value: hi },
+    });
+    s.vertexShader = 'varying vec3 vObjPos;\n' + s.vertexShader
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n vObjPos = position;');
+    s.fragmentShader = s.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + NOISE)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+      vec3 p = vObjPos;
+      float warp = vnoise(p * vec3(0.6, 5.0, 5.0)) * 2.5;
+      float rings = 0.5 + 0.5 * sin(length(p.yz) * uRing * 20.0 + warp);
+      float streak = vnoise(p * vec3(1.5, 28.0, 28.0));
+      float f = smoothstep(uLo, uHi, rings * 0.6 + streak * 0.45);
+      diffuseColor.rgb = mix(uDark, uLight, f);`);
+  };
+  return m;
+}
+
+const MATS = {
+  Wood_HoneyPine:  wood('#E6B06A', '#C98A48', 1.2),
+  Wood_WheelPine:  wood('#F0C487', '#D9A263', 0.8, 0.1, 0.95),
+  Wood_BoilerPine: wood('#EBBA7A', '#CF9352', 1.2),
+  Wood_PalePine:   wood('#EFDAAA', '#DEC088', 1.0),
+  Wood_RoofOak:    wood('#CF9154', '#A9693A', 1.2),
+  Wood_Walnut:     wood('#6C3B1F', '#45230F', 1.5),
+  Wood_CabooseFir: wood('#E2AA68', '#B4723C', 2.0, 0.3, 0.8),
+  Metal_Steel:     new THREE.MeshStandardMaterial({ color: 0xcfcfcf, metalness: 1, roughness: 0.25 }),
+};
+
+// ---------- load the Blender export ----------
+const WHEEL_R = 0.27;
+const train = new THREE.Group();
+scene.add(train);
+const wheels = [];
+
+new GLTFLoader().load('blender/train.glb', (gltf) => {
+  const model = gltf.scene;
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    o.castShadow = o.receiveShadow = true;
+    const replacement = MATS[o.material.name];
+    if (replacement) o.material = replacement;
+    if (o.name.includes('_Wheel_')) wheels.push(o);
+  });
+  // Blender exported the train mid-animation; center it on the origin.
+  const box = new THREE.Box3().setFromObject(model);
+  model.position.x -= (box.min.x + box.max.x) / 2;
+  model.position.z -= (box.min.z + box.max.z) / 2;
+  train.add(model);
+}, undefined, (err) => console.error('Failed to load train.glb', err));
+
+// ---------- animate: shuttle back and forth, wheels roll without slipping ----------
+let paused = false, t = 0;
+addEventListener('keydown', (e) => { if (e.code === 'Space') paused = !paused; });
+
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  if (!paused) t += dt;
+  const x = 3 * Math.sin(t * 0.45);
+  train.position.x = x;
+  for (const w of wheels) w.rotation.z = -x / WHEEL_R;
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

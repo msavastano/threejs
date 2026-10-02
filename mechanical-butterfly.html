@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Clockwork Swallowtail</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,500;1,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: full-bleed WebGL display case; specimen tag top-left, winding console bottom-centre.
+   Single deliberate dark look: a midnight-blue watch dial with brass, rose gold and blued steel. */
+:root{
+  --case:#070b1c;
+  --panel:rgba(9,14,34,.66);
+  --hairline:rgba(216,181,99,.30);
+  --brass:#d8b563;
+  --brass-hi:#f1d897;
+  --brass-dim:#9c8547;
+  --brass-wash:rgba(216,181,99,.14);
+  --brass-glow:rgba(241,216,151,.35);
+  --blued:#8fa6e6;
+  --paper:#ece4cf;
+  --muted:#8e97b8;
+  --shadow:rgba(0,0,0,.65);
+  --display:"Cormorant Garamond","Iowan Old Style",Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+html,body{height:100%;margin:0;overflow:hidden;background:var(--case);color:var(--paper);}
+#stage{position:fixed;inset:0;}
+#stage canvas{display:block;width:100%;height:100%;touch-action:none;}
+.status{position:absolute;inset:0;display:grid;place-items:center;margin:0;font:500 12px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted);}
+
+.tag{position:fixed;top:calc(env(safe-area-inset-top,0px) + 22px);left:24px;max-width:min(380px,calc(100vw - 48px));pointer-events:none;text-shadow:0 1px 14px var(--shadow);}
+.eyebrow{margin:0 0 10px;font:500 11px/1.2 var(--mono);letter-spacing:.22em;text-transform:uppercase;color:var(--brass);}
+.tag h1{margin:0;font:italic 600 clamp(30px,4.4vw,48px)/.95 var(--display);color:var(--paper);letter-spacing:.005em;text-wrap:balance;}
+.sub{margin:8px 0 16px;font:italic 500 18px/1.35 var(--display);color:var(--muted);}
+.spec{display:grid;grid-template-columns:auto 1fr;gap:5px 16px;margin:0;font:400 12px/1.5 var(--mono);font-variant-numeric:tabular-nums;}
+.spec div{display:contents;}
+.spec dt{align-self:center;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);}
+.spec dd{margin:0;color:var(--paper);}
+
+.console{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 18px);
+  display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:12px 14px;
+  width:max-content;max-width:calc(100vw - 32px);box-sizing:border-box;padding:10px 12px 10px 14px;
+  background:var(--panel);border:1px solid var(--hairline);border-radius:16px;
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);}
+.reserve{display:flex;align-items:center;gap:10px;}
+.reserve svg{width:78px;height:auto;display:block;}
+.reserve .track{fill:none;stroke:var(--hairline);stroke-width:4;stroke-linecap:round;}
+.reserve .fill{fill:none;stroke:var(--brass);stroke-width:4;stroke-linecap:round;}
+.reserve .tick{stroke:var(--muted);stroke-width:1;}
+.reserve .needle{stroke:var(--paper);stroke-width:1.6;stroke-linecap:round;}
+.reserve .hub{fill:var(--brass);}
+.reserve-text{display:grid;gap:3px;font:400 12px/1.2 var(--mono);font-variant-numeric:tabular-nums;min-width:92px;}
+.reserve-text .k{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);}
+.reserve-text .v{color:var(--paper);}
+.toggles{display:flex;gap:8px;}
+
+button{font:500 11.5px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;padding:12px 14px;border-radius:10px;
+  border:1px solid var(--hairline);background:transparent;color:var(--paper);cursor:pointer;
+  transition:background-color .2s,border-color .2s,color .2s,box-shadow .2s,filter .2s;}
+button:hover{border-color:var(--brass);}
+button:focus-visible{outline:2px solid var(--blued);outline-offset:2px;}
+button[aria-pressed="true"]{background:var(--brass-wash);border-color:var(--brass);color:var(--brass-hi);}
+.wind{min-width:152px;font-weight:600;color:var(--case);border-color:transparent;
+  background:linear-gradient(180deg,var(--brass-hi),var(--brass) 55%,var(--brass-dim));
+  user-select:none;-webkit-user-select:none;touch-action:none;-webkit-touch-callout:none;}
+.wind:hover{border-color:transparent;filter:brightness(1.06);}
+.wind.active{filter:brightness(1.14);box-shadow:0 0 0 3px var(--brass-wash),0 0 26px var(--brass-glow);}
+
+.hint{position:fixed;right:22px;bottom:calc(env(safe-area-inset-bottom,0px) + 26px);margin:0;max-width:280px;text-align:right;
+  font:400 10.5px/1.6 var(--mono);letter-spacing:.08em;color:var(--muted);pointer-events:none;}
+.hint kbd{font:inherit;color:var(--paper);}
+
+@media (max-width:1100px){.hint{display:none;}}
+@media (max-width:640px){
+  .tag{left:16px;top:calc(env(safe-area-inset-top,0px) + 16px);}
+  .sub{display:none;}
+  .eyebrow{margin-bottom:6px;}
+  .tag h1{margin-bottom:10px;}
+  .spec{font-size:11px;gap:2px 12px;}
+  .console{bottom:calc(env(safe-area-inset-bottom,0px) + 12px);padding:10px;gap:10px;}
+  .wind{min-width:0;flex:1 1 auto;}
+  button{padding:11px 11px;letter-spacing:.08em;}
+}
+@media (prefers-reduced-motion:reduce){button{transition:none;}}
+</style>
+</head>
+<body>
+<div id="stage" role="img" aria-label="A clockwork butterfly of brass gears and iridescent glass wings flying in front of a giant watch dial">
+  <p class="status" id="status">Setting the balance…</p>
+</div>
+
+<header class="tag">
+  <p class="eyebrow">Automaton · Calibre <span id="jewels">—</span>J</p>
+  <h1>Papilio horologium</h1>
+  <p class="sub">A clockwork swallowtail in brass, rose gold and blued steel</p>
+  <dl class="spec">
+    <div><dt>Balance</dt><dd>3 Hz · 21,600 A/h</dd></div>
+    <div><dt>Amplitude</dt><dd id="amp">—</dd></div>
+    <div><dt>Wingbeat</dt><dd id="beat">—</dd></div>
+  </dl>
+</header>
+
+<div class="console">
+  <div class="reserve">
+    <svg viewBox="0 0 88 50" aria-hidden="true">
+      <path class="track" d="M10 44 A34 34 0 0 1 78 44"/>
+      <path class="fill" id="reserveArc" d="M10 44 A34 34 0 0 1 78 44" pathLength="100" stroke-dasharray="100" stroke-dashoffset="30"/>
+      <g id="ticks"></g>
+      <line class="needle" id="needle" x1="44" y1="44" x2="16" y2="44"/>
+      <circle class="hub" cx="44" cy="44" r="3"/>
+    </svg>
+    <div class="reserve-text"><span class="k">Power reserve</span><span class="v" id="reserve">—</span></div>
+  </div>
+  <button id="wind" class="wind" type="button">Hold to wind</button>
+  <div class="toggles">
+    <button id="fly" type="button" aria-pressed="true">Flight</button>
+    <button id="explode" type="button" aria-pressed="false">Exploded</button>
+  </div>
+</div>
+
+<p class="hint">Drag to orbit · scroll to zoom<br>Hold <kbd>W</kbd> to wind · <kbd>E</kbd> explode · <kbd>F</kbd> flight</p>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const $ = (id) => document.getElementById(id);
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+const V2 = (x = 0, y = 0) => new THREE.Vector2(x, y);
+const TAU = Math.PI * 2;
+
+/* ------------------------------------------------------------------ renderer */
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+} catch (err) {
+  $('status').textContent = 'This view needs WebGL, which is turned off in this browser.';
+  throw err;
+}
+const PR = Math.min(devicePixelRatio, 2);
+renderer.setPixelRatio(PR);
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.95;
+$('stage').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x070b1c);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.8;
+
+const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.05, 200);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.enablePan = false;
+controls.minDistance = 1.6;
+controls.maxDistance = 14;
+
+scene.add(new THREE.HemisphereLight(0x3a4c96, 0x0a0a14, 0.5));
+const keyLight = new THREE.DirectionalLight(0xffe2b0, 2.6); keyLight.position.set(3, 5, 4); scene.add(keyLight);
+const rimLight = new THREE.DirectionalLight(0x7fa2ff, 1.8); rimLight.position.set(-4, 2, -5); scene.add(rimLight);
+const underLight = new THREE.DirectionalLight(0x4de0d0, 0.45); underLight.position.set(0, -4, 1); scene.add(underLight);
+
+/* ------------------------------------------------------------------ materials */
+const M = {
+  brass: new THREE.MeshPhysicalMaterial({ color: 0xd9ad55, metalness: 1, roughness: 0.26, clearcoat: 0.35, clearcoatRoughness: 0.2 }),
+  brassDS: new THREE.MeshPhysicalMaterial({ color: 0xd9ad55, metalness: 1, roughness: 0.3, clearcoat: 0.3, side: THREE.DoubleSide }),
+  brassDark: new THREE.MeshStandardMaterial({ color: 0xa27a36, metalness: 1, roughness: 0.36 }),
+  rose: new THREE.MeshStandardMaterial({ color: 0xe6a784, metalness: 1, roughness: 0.28 }),
+  roseDS: new THREE.MeshStandardMaterial({ color: 0xe6a784, metalness: 1, roughness: 0.32, side: THREE.DoubleSide }),
+  steel: new THREE.MeshStandardMaterial({ color: 0xd2d8e2, metalness: 1, roughness: 0.16 }),
+  blued: new THREE.MeshPhysicalMaterial({ color: 0x2e52c4, metalness: 1, roughness: 0.22, iridescence: 0.5, iridescenceIOR: 1.8 }),
+  ruby: new THREE.MeshPhysicalMaterial({ color: 0xd01434, emissive: 0x7a0016, emissiveIntensity: 1, roughness: 0.04, clearcoat: 1, flatShading: true }),
+  eye: new THREE.MeshPhysicalMaterial({ color: 0xffa632, emissive: 0xff7a14, emissiveIntensity: 0.9, roughness: 0.12, clearcoat: 1, flatShading: true }),
+};
+
+/* ------------------------------------------------------------------ helpers */
+const _up = V(0, 1, 0);
+const rodGeo = new THREE.CylinderGeometry(1, 1, 1, 10);
+function rod(r, mat) { const m = new THREE.Mesh(rodGeo, mat); m.userData.r = r; return m; }
+function placeRod(mesh, a, b) {
+  const d = b.clone().sub(a); const L = d.length();
+  mesh.position.copy(a).addScaledVector(d, 0.5);
+  mesh.quaternion.setFromUnitVectors(_up, d.normalize());
+  const r = mesh.userData.r; mesh.scale.set(r, L, r);
+  return mesh;
+}
+function tube(curve, r, mat, seg = 48, radial = 8, closed = false) {
+  return new THREE.Mesh(new THREE.TubeGeometry(curve, seg, r, radial, closed), mat);
+}
+const sphereGeo = new THREE.SphereGeometry(1, 20, 14);
+function ball(r, mat, pos) { const m = new THREE.Mesh(sphereGeo, mat); m.scale.setScalar(r); if (pos) m.position.copy(pos); return m; }
+
+let jewelCount = 0;
+const jewelGeo = new THREE.IcosahedronGeometry(1, 1);
+function jewel(size, pos) {
+  jewelCount++;
+  const m = new THREE.Mesh(jewelGeo, M.ruby);
+  m.scale.set(size, size * 0.55, size);
+  if (pos) m.position.copy(pos);
+  return m;
+}
+
+const parts = [];
+function explodable(obj, off) { parts.push({ obj, base: obj.position.clone(), off }); }
+
+function gearGeometry({ R = 0.1, teeth = 20, depth = 0.018, thick = 0.02, hub = 0.022, spokes = 5, bore = 0.008, phase = 0 }) {
+  const s = new THREE.Shape();
+  const p = TAU / teeth, Rr = R - depth;
+  for (let i = 0; i < teeth; i++) {
+    const a = i * p + phase;
+    [[Rr, a], [R, a + p * 0.22], [R, a + p * 0.46], [Rr, a + p * 0.68]].forEach(([r, ang], j) => {
+      const x = r * Math.cos(ang), y = r * Math.sin(ang);
+      if (i === 0 && j === 0) s.moveTo(x, y); else s.lineTo(x, y);
+    });
+  }
+  s.closePath();
+  if (spokes > 0) {
+    const ro = Rr - Math.max(0.01, R * 0.16), ri = hub + 0.008, w = R * 0.17;
+    for (let k = 0; k < spokes; k++) {
+      const c0 = k * TAU / spokes + phase, c1 = (k + 1) * TAU / spokes + phase;
+      const ao = w / (2 * ro), ai = w / (2 * ri);
+      const h = new THREE.Path();
+      h.absarc(0, 0, ro, c0 + ao, c1 - ao, false);
+      h.absarc(0, 0, ri, c1 - ai, c0 + ai, true);
+      h.closePath();
+      s.holes.push(h);
+    }
+  }
+  if (bore > 0) { const b = new THREE.Path(); b.absarc(0, 0, bore, 0, TAU, true); s.holes.push(b); }
+  const g = new THREE.ExtrudeGeometry(s, { depth: thick, bevelEnabled: true, bevelThickness: thick * 0.18, bevelSize: 0.0016, bevelSegments: 2, curveSegments: 8 });
+  g.translate(0, 0, -thick / 2);
+  return g;
+}
+
+/* ------------------------------------------------------------------ wings */
+const FORE = {
+  pts: [[0.02, 0.06], [0.5, 0.42], [1.1, 0.78], [1.7, 1.05], [2.15, 1.13], [2.32, 0.96], [2.24, 0.56], [2.02, 0.12],
+        [1.76, -0.18], [1.36, -0.32], [0.82, -0.29], [0.36, -0.17], [0.05, -0.06]],
+  root: [0.06, 0.0], veins: 8, farFrac: 0.5, bow: 1, arcs: [0.4, 0.7],
+  stops: [[0, [8, 14, 52]], [0.22, [18, 36, 118]], [0.46, [22, 78, 190]], [0.64, [24, 150, 200]], [0.75, [70, 205, 196]],
+          [0.81, [236, 188, 80]], [0.87, [190, 92, 30]], [0.915, [40, 18, 9]], [1, [14, 7, 4]]],
+};
+const HIND = {
+  pts: [[0.03, 0.05], [0.55, 0.12], [1.1, 0.02], [1.5, -0.2], [1.66, -0.5], [1.56, -0.84], [1.36, -1.05], [1.16, -1.18],
+        [1.02, -1.34], [0.97, -1.84], [0.83, -1.9], [0.78, -1.42], [0.6, -1.22], [0.36, -0.86], [0.15, -0.46], [0.02, -0.12]],
+  root: [0.05, -0.02], veins: 7, farFrac: 0.45, bow: -1, arcs: [0.42, 0.72],
+  eyespot: [0.86, -1.07],
+  stops: [[0, [8, 16, 56]], [0.26, [20, 52, 140]], [0.5, [24, 118, 192]], [0.66, [40, 186, 196]], [0.76, [110, 214, 190]],
+          [0.82, [238, 186, 78]], [0.88, [192, 90, 30]], [0.93, [38, 17, 8]], [1, [14, 7, 4]]],
+};
+
+function colAt(stops, t) {
+  for (let i = 1; i < stops.length; i++) {
+    if (t <= stops[i][0]) {
+      const [t0, c0] = stops[i - 1], [t1, c1] = stops[i];
+      const f = (t - t0) / (t1 - t0);
+      return `rgb(${c0.map((v, k) => Math.round(v + (c1[k] - v) * f)).join(',')})`;
+    }
+  }
+  return `rgb(${stops[stops.length - 1][1].join(',')})`;
+}
+
+function prepareWing(def) {
+  const root = V2(...def.root);
+  const curve2 = new THREE.CatmullRomCurve3(def.pts.map(([x, y]) => V(x, y, 0)), true, 'centripetal');
+  const outline = curve2.getSpacedPoints(240).slice(0, -1).map((p) => V2(p.x, p.y));
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, maxD = 0;
+  for (const p of outline) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    maxD = Math.max(maxD, p.distanceTo(root));
+  }
+  const pad = 0.03; minX -= pad; maxX += pad; minY -= pad; maxY += pad;
+  const bw = maxX - minX, bh = maxY - minY;
+  const to3 = (p) => V(p.x, 0, p.y);
+
+  // Radial veins from the root to the far margin, chosen evenly by angle.
+  const far = outline.map((p) => ({ p, a: Math.atan2(p.y - root.y, p.x - root.x), d: p.distanceTo(root) }))
+                     .filter((o) => o.d > maxD * def.farFrac);
+  const aMax = Math.max(...far.map((o) => o.a)), aMin = Math.min(...far.map((o) => o.a));
+  const veins2 = [];
+  for (let k = 0; k < def.veins; k++) {
+    const target = THREE.MathUtils.lerp(aMax - 0.05, aMin + 0.05, k / (def.veins - 1));
+    let best = far[0];
+    for (const o of far) if (Math.abs(o.a - target) < Math.abs(best.a - target)) best = o;
+    const dir = best.p.clone().sub(root); const len = dir.length(); dir.normalize();
+    const a = root.clone().addScaledVector(dir, 0.075);
+    const b = root.clone().addScaledVector(dir, len * 0.985);
+    const perp = V2(-dir.y, dir.x);
+    const c = a.clone().lerp(b, 0.5).addScaledVector(perp, len * 0.05 * def.bow);
+    veins2.push([a, c, b]);
+  }
+  const veinCurves = veins2.map(([a, c, b]) => new THREE.QuadraticBezierCurve3(to3(a), to3(c), to3(b)));
+  const arcCurves = def.arcs.map((f) => new THREE.CatmullRomCurve3(veinCurves.map((v) => v.getPoint(f)), false, 'centripetal'));
+  const arcs2 = arcCurves.map((c) => c.getPoints(60).map((p) => V2(p.x, p.z)));
+
+  // Painted membrane: bands follow the wing's own outline, then guilloché, veins and margin spots.
+  const W = 1024, s = W / bw, H = Math.round(bh * s);
+  const cvs = document.createElement('canvas'); cvs.width = W; cvs.height = H;
+  const g = cvs.getContext('2d');
+  const X = (x) => (x - minX) * s, Y = (y) => (maxY - y) * s;
+  const scaled = (t, wob = 0, freq = 0, ph = 0) => {
+    g.beginPath();
+    outline.forEach((p, i) => {
+      const k = t + (wob ? wob * Math.sin(i * freq + ph) : 0);
+      const x = root.x + (p.x - root.x) * k, y = root.y + (p.y - root.y) * k;
+      if (i) g.lineTo(X(x), Y(y)); else g.moveTo(X(x), Y(y));
+    });
+    g.closePath();
+  };
+  g.save();
+  scaled(1); g.clip();
+  for (let i = 120; i >= 1; i--) { const t = i / 120; scaled(t); g.fillStyle = colAt(def.stops, t); g.fill(); }
+  // soleil rays
+  g.lineWidth = Math.max(1, s * 0.0025); g.strokeStyle = 'rgba(190,225,255,0.07)';
+  for (let k = 0; k < outline.length; k += 2) {
+    const p = outline[k];
+    g.beginPath(); g.moveTo(X(root.x), Y(root.y));
+    g.lineTo(X(root.x + (p.x - root.x) * 0.86), Y(root.y + (p.y - root.y) * 0.86)); g.stroke();
+  }
+  // engine-turned rings
+  g.lineWidth = Math.max(1, s * 0.0032); g.strokeStyle = 'rgba(255,238,200,0.16)';
+  for (let t = 0.07; t < 0.9; t += 0.024) { scaled(t, 0.007, 0.9, t * 40); g.stroke(); }
+  // eyespot
+  if (def.eyespot) {
+    const [ex, ey] = def.eyespot;
+    [[0.17, '#0b0706'], [0.14, '#ff8a2a'], [0.105, '#16100c'], [0.085, '#3aa2ff'], [0.05, '#0b0706']].forEach(([r, c]) => {
+      g.beginPath(); g.arc(X(ex), Y(ey), r * s, 0, TAU); g.fillStyle = c; g.fill();
+    });
+  }
+  // shadows under the brass veins
+  g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = 'rgba(4,6,18,0.55)'; g.lineWidth = s * 0.042;
+  for (const [a, c, b] of veins2) { g.beginPath(); g.moveTo(X(a.x), Y(a.y)); g.quadraticCurveTo(X(c.x), Y(c.y), X(b.x), Y(b.y)); g.stroke(); }
+  g.lineWidth = s * 0.034;
+  for (const pts of arcs2) { g.beginPath(); pts.forEach((p, i) => (i ? g.lineTo(X(p.x), Y(p.y)) : g.moveTo(X(p.x), Y(p.y)))); g.stroke(); }
+  // cream margin spots
+  g.fillStyle = 'rgba(246,232,196,0.95)';
+  outline.forEach((p, i) => {
+    if (i % 9) return;
+    const dx = p.x - root.x, dy = p.y - root.y;
+    if (Math.hypot(dx, dy) < maxD * 0.45) return;
+    g.beginPath();
+    g.ellipse(X(root.x + dx * 0.94), Y(root.y + dy * 0.94), s * 0.03, s * 0.021, Math.atan2(-dy, dx), 0, TAU);
+    g.fill();
+  });
+  g.lineWidth = s * 0.05; g.strokeStyle = 'rgba(4,6,18,0.6)'; scaled(1); g.stroke();
+  g.restore();
+
+  const tex = new THREE.CanvasTexture(cvs);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+  const shape = new THREE.Shape(outline);
+  const membraneGeo = new THREE.ShapeGeometry(shape, 1);
+  const pos = membraneGeo.attributes.position, uv = membraneGeo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) - minX) / bw, (pos.getY(i) - minY) / bh);
+  membraneGeo.rotateX(Math.PI / 2);
+
+  const membraneMat = new THREE.MeshPhysicalMaterial({
+    map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.2,
+    metalness: 0.1, roughness: 0.38, iridescence: 1, iridescenceIOR: 1.35, iridescenceThicknessRange: [180, 640],
+    clearcoat: 0.3, clearcoatRoughness: 0.3, transparent: true, opacity: 0.93, side: THREE.DoubleSide,
+  });
+
+  const frameCurve = new THREE.CatmullRomCurve3(def.pts.map(([x, y]) => V(x, 0, y)), true, 'centripetal');
+  const jewels = arcCurves[0] ? veinCurves.map((v) => v.getPoint(def.arcs[0])).filter((_, i) => i % 2 === 1) : [];
+  return {
+    membraneGeo, membraneMat,
+    frameGeo: new THREE.TubeGeometry(frameCurve, 320, 0.018, 8, true),
+    veinGeos: veinCurves.map((c) => new THREE.TubeGeometry(c, 28, 0.0105, 6, false)),
+    arcGeos: arcCurves.map((c) => new THREE.TubeGeometry(c, 64, 0.0085, 6, false)),
+    root3: to3(root), jewels, eyespot: def.eyespot ? V(def.eyespot[0], 0, def.eyespot[1]) : null,
+  };
+}
+
+const bossGeo = new THREE.CylinderGeometry(0.062, 0.072, 0.03, 28);
+const bezelGeo = new THREE.TorusGeometry(0.172, 0.012, 8, 56).rotateX(Math.PI / 2);
+function buildWing(W) {
+  const g = new THREE.Group();
+  const membrane = new THREE.Mesh(W.membraneGeo, W.membraneMat);
+  membrane.renderOrder = 1;
+  g.add(membrane);
+  g.add(new THREE.Mesh(W.frameGeo, M.brass));
+  W.veinGeos.forEach((geo) => g.add(new THREE.Mesh(geo, M.brass)));
+  W.arcGeos.forEach((geo) => g.add(new THREE.Mesh(geo, M.rose)));
+  const boss = new THREE.Mesh(bossGeo, M.rose); boss.position.copy(W.root3); g.add(boss);
+  g.add(jewel(0.03, W.root3.clone().add(V(0, 0.018, 0))));
+  W.jewels.forEach((p) => g.add(jewel(0.022, p.clone().add(V(0, 0.012, 0)))));
+  if (W.eyespot) {
+    const bezel = new THREE.Mesh(bezelGeo, M.brass); bezel.position.copy(W.eyespot); g.add(bezel);
+    g.add(jewel(0.045, W.eyespot.clone().add(V(0, 0.014, 0))));
+  }
+  return g;
+}
+
+const foreW = prepareWing(FORE);
+const hindW = prepareWing(HIND);
+
+/* ------------------------------------------------------------------ drive kinematics
+   Two meshing spur gears counter-rotate inside the thorax. A crank pin on each drives a
+   connecting rod to a bell-crank lever on the forewing hinge, so the flap is real four-bar motion. */
+const P = V2(0.16, 0.12);     // forewing hinge
+const G = V2(0.077, -0.04);   // gear centre
+const RC = 0.055, LL = 0.075, LR = 0.165;
+function leverAngle(phi) {
+  const px = G.x + RC * Math.cos(phi), py = G.y + RC * Math.sin(phi);
+  const dx = px - P.x, dy = py - P.y, d = Math.hypot(dx, dy);
+  const ca = THREE.MathUtils.clamp((LL * LL + d * d - LR * LR) / (2 * LL * d), -1, 1);
+  return Math.atan2(dy, dx) - Math.acos(ca);
+}
+let bMin = Infinity, bMax = -Infinity;
+for (let i = 0; i < 360; i++) { const b = leverAngle(i / 360 * TAU); bMin = Math.min(bMin, b); bMax = Math.max(bMax, b); }
+const LEVER_C = (bMin + bMax) / 2 - 0.3;           // lever direction in the wing's hinge frame
+const wingAngle = (phi) => leverAngle(phi) - LEVER_C;
+
+/* ------------------------------------------------------------------ butterfly */
+const bf = new THREE.Group(); scene.add(bf);         // flight transform
+const rig = new THREE.Group(); bf.add(rig);          // stroke bob
+
+// Thorax: an open cage of rings and ribs so the movement shows through.
+const thorax = new THREE.Group(); rig.add(thorax);
+const rings = [[-0.22, 0.12], [-0.12, 0.19], [0.0, 0.22], [0.12, 0.2], [0.22, 0.13]];
+rings.forEach(([z, r], i) => {
+  const t = new THREE.Mesh(new THREE.TorusGeometry(r, i === 2 ? 0.014 : 0.0095, 10, 64), i === 2 ? M.rose : M.brass);
+  t.position.z = z; thorax.add(t);
+});
+for (let k = 0; k < 10; k++) {
+  const a = (k / 10) * TAU;
+  const pts = [V(0, 0, -0.27), ...rings.map(([z, r]) => V(r * Math.cos(a), r * Math.sin(a), z)), V(0, 0, 0.28)];
+  thorax.add(tube(new THREE.CatmullRomCurve3(pts), 0.0055, M.brassDark, 40, 6));
+}
+const heart = new THREE.PointLight(0xffb060, 0.25, 1.2); thorax.add(heart);
+
+// Mainspring barrel, ratchet and winding key.
+const barrel = new THREE.Group(); barrel.position.set(0, 0.1, -0.06); thorax.add(barrel);
+const drum = new THREE.Group(); barrel.add(drum);
+drum.add(new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.05, 40), M.brassDark));
+const drumTeeth = new THREE.Mesh(gearGeometry({ R: 0.085, teeth: 36, depth: 0.01, thick: 0.012, spokes: 0, bore: 0 }).rotateX(-Math.PI / 2), M.brass);
+drumTeeth.position.y = -0.018; drum.add(drumTeeth);
+const ratchet = new THREE.Mesh(gearGeometry({ R: 0.062, teeth: 28, depth: 0.01, thick: 0.012, spokes: 0, bore: 0 }).rotateX(-Math.PI / 2), M.steel);
+ratchet.position.y = 0.034; barrel.add(ratchet);
+explodable(barrel, V(0, 0.28, 0));
+
+function keyBowGeometry() {
+  const s = new THREE.Shape(); const a = 0.9, cx = 0.075, r = 0.062;
+  const px = cx - r * Math.cos(a), py = r * Math.sin(a);
+  s.moveTo(-px, py);
+  s.quadraticCurveTo(0, py * 0.55, px, py);
+  s.absarc(cx, 0, r, Math.PI - a, -(Math.PI - a), true);
+  s.quadraticCurveTo(0, -py * 0.55, -px, -py);
+  s.absarc(-cx, 0, r, -a, a, true);
+  for (const x of [cx, -cx]) { const h = new THREE.Path(); h.absarc(x, 0, r * 0.48, 0, TAU, true); s.holes.push(h); }
+  const g = new THREE.ExtrudeGeometry(s, { depth: 0.016, bevelEnabled: true, bevelThickness: 0.005, bevelSize: 0.004, bevelSegments: 3, curveSegments: 28 });
+  g.translate(0, 0, -0.008);
+  return g;
+}
+const key = new THREE.Group(); key.position.set(0, 0.14, -0.06); thorax.add(key);
+key.add(placeRod(rod(0.013, M.brass), V(0, -0.03, 0), V(0, 0.3, 0)));
+const collar = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.009, 10, 28).rotateX(Math.PI / 2), M.rose); collar.position.y = 0.2; key.add(collar);
+key.add(ball(0.022, M.brass, V(0, 0.31, 0)));
+const bow = new THREE.Mesh(keyBowGeometry(), M.brass); bow.position.y = 0.39; key.add(bow);
+explodable(key, V(0, 0.55, 0));
+
+// Head, eyes, antennae and the coiled proboscis.
+const head = new THREE.Group(); head.position.set(0, 0.02, 0.3); rig.add(head);
+const neck = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.016, 10, 40), M.rose); neck.position.z = -0.03; head.add(neck);
+const skull = ball(0.115, M.brass, V(0, 0, 0.07)); skull.scale.z = 0.121; head.add(skull);
+const eyeGeo = new THREE.IcosahedronGeometry(0.068, 1);
+for (const s of [1, -1]) { const e = new THREE.Mesh(eyeGeo, M.eye); e.position.set(0.085 * s, 0.03, 0.12); head.add(e); }
+head.add(jewel(0.02, V(0, 0.118, 0.07)));
+const antennae = [];
+for (const s of [1, -1]) {
+  const ag = new THREE.Group(); ag.position.set(0.03 * s, 0.075, 0.1); head.add(ag);
+  const c = new THREE.CatmullRomCurve3([V(0, 0, 0), V(0.05 * s, 0.15, 0.16), V(0.15 * s, 0.31, 0.4), V(0.27 * s, 0.41, 0.68)]);
+  ag.add(tube(c, 0.0065, M.brass, 40, 6));
+  const club = ball(0.028, M.rose, c.getPoint(1)); club.scale.set(0.022, 0.022, 0.05);
+  club.quaternion.setFromUnitVectors(V(0, 0, 1), c.getTangent(1));
+  ag.add(club);
+  antennae.push({ g: ag, s });
+}
+{
+  const pts = []; const turns = 3.5, n = 160;
+  for (let i = 0; i <= n; i++) { const th = (i / n) * turns * TAU; const r = 0.005 + 0.036 * (i / n); pts.push(V(0, r * Math.sin(th), r * Math.cos(th))); }
+  const coil = tube(new THREE.CatmullRomCurve3(pts), 0.0042, M.blued, 220, 6);
+  coil.position.set(0, -0.09, 0.15); head.add(coil);
+}
+explodable(head, V(0, 0.08, 0.5));
+
+// Abdomen: nested segments so the sway travels down the body.
+const segs = [];
+{
+  const abd = new THREE.Group(); abd.position.set(0, -0.01, -0.24); rig.add(abd);
+  let par = abd;
+  for (let i = 0; i < 8; i++) {
+    const r = 0.035 + 0.125 * Math.pow(1 - i / 8, 0.9);
+    const len = 0.155 - i * 0.006;
+    const seg = new THREE.Group();
+    seg.position.z = i === 0 ? 0 : -segs[i - 1].len * 0.9;
+    par.add(seg);
+    const prof = [[r * 0.78, 0], [r * 0.98, 0.012], [r * 1.04, len * 0.45], [r * 0.96, len * 0.85], [r * 0.8, len * 1.02]].map(([a, b]) => V2(a, b));
+    seg.add(new THREE.Mesh(new THREE.LatheGeometry(prof, 44).rotateX(-Math.PI / 2), i % 2 ? M.roseDS : M.brassDS));
+    const joint = new THREE.Mesh(new THREE.TorusGeometry(r * 0.86, 0.0075, 8, 40), M.blued); joint.position.z = -0.004; seg.add(joint);
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * TAU + i * 0.2;
+      seg.add(ball(0.007, M.steel, V(Math.cos(a) * r * 1.05, Math.sin(a) * r * 1.05, -len * 0.5)));
+    }
+    segs.push({ g: seg, len, r });
+    explodable(seg, V(0, 0, i === 0 ? -0.2 : -0.1));
+    par = seg;
+  }
+  const last = segs[segs.length - 1];
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(last.r * 0.8, 0.13, 20).rotateX(-Math.PI / 2), M.steel);
+  tip.position.z = -last.len - 0.05; last.g.add(tip);
+  const tj = jewel(0.016, V(0, 0, -last.len - 0.12)); tj.rotation.x = Math.PI / 2; last.g.add(tj);
+}
+
+// Balance wheel with blued hairspring on the first segment; escape wheel on the second.
+const balanceG = new THREE.Group();
+const balance = new THREE.Group();
+const hairspring = new THREE.Group();
+const escape = new THREE.Group();
+{
+  const r0 = segs[0].r;
+  balanceG.position.set(0, r0 + 0.02, -0.075); segs[0].g.add(balanceG);
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.012, 0.034), M.brassDark); balanceG.add(bridge);
+  for (const s of [1, -1]) balanceG.add(placeRod(rod(0.008, M.brassDark), V(0.13 * s, 0, 0), V(0.12 * s, -0.05, 0)));
+  balance.position.y = 0.035; balanceG.add(balance);
+  balance.add(new THREE.Mesh(new THREE.TorusGeometry(0.078, 0.008, 10, 64).rotateX(Math.PI / 2), M.rose));
+  for (let k = 0; k < 3; k++) {
+    const a = (k / 3) * TAU; const sp = rod(0.0045, M.rose);
+    placeRod(sp, V(0, 0, 0), V(Math.cos(a) * 0.078, 0, Math.sin(a) * 0.078)); balance.add(sp);
+  }
+  for (let k = 0; k < 10; k++) { const a = (k / 10) * TAU; balance.add(ball(0.0065, M.blued, V(Math.cos(a) * 0.086, 0, Math.sin(a) * 0.086))); }
+  balance.add(placeRod(rod(0.006, M.steel), V(0, -0.03, 0), V(0, 0.02, 0)));
+  balanceG.add(jewel(0.014, V(0, 0.06, 0)));
+  const hs = []; const turns = 7, n = 300;
+  for (let i = 0; i <= n; i++) { const th = (i / n) * turns * TAU; const r = 0.008 + 0.052 * (i / n); hs.push(V(r * Math.cos(th), 0, r * Math.sin(th))); }
+  hairspring.add(tube(new THREE.CatmullRomCurve3(hs), 0.0018, M.blued, 500, 4));
+  hairspring.position.y = 0.018; balanceG.add(hairspring);
+  explodable(balanceG, V(0, 0.35, 0));
+
+  const r1 = segs[1].r;
+  escape.position.set(0, r1 + 0.03, -0.07); segs[1].g.add(escape);
+  const ew = new THREE.Mesh(gearGeometry({ R: 0.048, teeth: 15, depth: 0.014, thick: 0.008, hub: 0.01, spokes: 3, bore: 0 }).rotateX(-Math.PI / 2), M.steel);
+  escape.add(ew);
+  escape.userData.wheel = ew;
+  escape.add(placeRod(rod(0.004, M.steel), V(0, -0.04, 0), V(0, 0.01, 0)));
+  escape.add(jewel(0.01, V(0, 0.014, 0)));
+  explodable(escape, V(0, 0.28, 0));
+}
+
+// Mirrored sides: gear train, wings, rods and legs.
+const gearGeoA = gearGeometry({ R: 0.085, teeth: 18, depth: 0.016, thick: 0.02, hub: 0.02, spokes: 5 });
+const gearGeoB = gearGeometry({ R: 0.085, teeth: 18, depth: 0.016, thick: 0.02, hub: 0.02, spokes: 5, phase: TAU / 36 });
+const knuckleGeo = new THREE.CylinderGeometry(0.024, 0.024, 0.11, 20).rotateX(Math.PI / 2);
+const sides = [];
+for (const sign of [1, -1]) {
+  const side = new THREE.Group(); side.scale.x = sign; rig.add(side);
+
+  const gearG = new THREE.Group(); gearG.position.set(G.x, G.y, 0.02); side.add(gearG);
+  const rotor = new THREE.Group(); gearG.add(rotor);
+  rotor.add(new THREE.Mesh(sign > 0 ? gearGeoA : gearGeoB, M.brass));
+  const pin = new THREE.Group(); pin.position.set(RC, 0, 0.02); rotor.add(pin);
+  pin.add(placeRod(rod(0.009, M.blued), V(0, 0, -0.012), V(0, 0, 0.02)));
+  gearG.add(placeRod(rod(0.011, M.steel), V(0, 0, -0.06), V(0, 0, 0)));
+  const gj = jewel(0.016, V(0, 0, 0.016)); gj.rotation.x = Math.PI / 2; gearG.add(gj);
+  explodable(gearG, V(0.26, -0.3, 0.3));
+
+  const makePivot = (x, y, z) => {
+    const p = new THREE.Group(); p.position.set(x, y, z); side.add(p);
+    p.add(new THREE.Mesh(knuckleGeo, M.brass));
+    for (const e of [0.058, -0.058]) { const cap = ball(0.018, M.blued, V(0, 0, e)); cap.scale.z = 0.009; p.add(cap); }
+    return p;
+  };
+  const fp = makePivot(P.x, P.y, 0.08);
+  const tipLocal = V(LL * Math.cos(LEVER_C), LL * Math.sin(LEVER_C), -0.035);
+  fp.add(placeRod(rod(0.011, M.rose), V(0, 0, -0.035), tipLocal));
+  const tip = new THREE.Group(); tip.position.copy(tipLocal); fp.add(tip);
+  tip.add(ball(0.014, M.steel));
+  const fwing = buildWing(foreW); fwing.rotation.y = -0.05; fp.add(fwing);
+  explodable(fp, V(0.6, 0.32, 0.3));
+
+  const hp = makePivot(0.15, 0.085, -0.12);
+  const hwing = buildWing(hindW); hwing.rotation.y = 0.14; hwing.position.y = -0.012; hp.add(hwing);
+  explodable(hp, V(0.6, 0.18, -0.42));
+
+  const conrod = rod(0.0075, M.steel); side.add(conrod);
+
+  const legs = new THREE.Group(); side.add(legs);
+  [[0.12, 0.13], [0.0, 0.0], [-0.12, -0.14]].forEach(([z, dz]) => {
+    const hip = V(0.07, -0.16, z), knee = V(0.2, -0.2, z + dz * 0.6 + 0.03), ankle = V(0.21, -0.37, z + dz), foot = V(0.18, -0.45, z + dz * 1.3);
+    legs.add(placeRod(rod(0.0085, M.blued), hip, knee));
+    legs.add(placeRod(rod(0.0065, M.blued), knee, ankle));
+    legs.add(placeRod(rod(0.0045, M.steel), ankle, foot));
+    [hip, knee, ankle].forEach((p) => legs.add(ball(0.013, M.brass, p)));
+  });
+  explodable(legs, V(0.12, -0.34, 0));
+
+  sides.push({ side, rotor, pin, tip, fp, hp, fwing, hwing, conrod });
+}
+
+$('jewels').textContent = jewelCount;
+
+/* ------------------------------------------------------------------ backdrop dial */
+function dialTexture() {
+  const S = 2048, C = S / 2, R = S / 2;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  const bg = g.createRadialGradient(C, C, 0, C, C, R);
+  bg.addColorStop(0, '#223578'); bg.addColorStop(0.5, '#152258'); bg.addColorStop(1, '#0a1130');
+  g.fillStyle = bg; g.fillRect(0, 0, S, S);
+  g.lineWidth = 2; g.strokeStyle = 'rgba(170,195,255,0.04)';
+  for (let i = 0; i < 720; i++) {
+    const a = (i / 720) * TAU;
+    g.beginPath(); g.moveTo(C + Math.cos(a) * R * 0.05, C + Math.sin(a) * R * 0.05);
+    g.lineTo(C + Math.cos(a) * R * 0.68, C + Math.sin(a) * R * 0.68); g.stroke();
+  }
+  g.lineWidth = 1.8; g.strokeStyle = 'rgba(160,185,255,0.08)';
+  for (let k = 0; k < 26; k++) {
+    const r0 = R * (0.08 + k * 0.021);
+    g.beginPath();
+    for (let i = 0; i <= 720; i++) {
+      const a = (i / 720) * TAU, r = r0 + R * 0.012 * Math.sin(a * 24 + k * 0.5);
+      const x = C + Math.cos(a) * r, y = C + Math.sin(a) * r;
+      if (i) g.lineTo(x, y); else g.moveTo(x, y);
+    }
+    g.stroke();
+  }
+  g.strokeStyle = 'rgba(216,181,99,0.24)'; g.lineWidth = 3;
+  for (const rr of [0.72, 0.865]) { g.beginPath(); g.arc(C, C, R * rr, 0, TAU); g.stroke(); }
+  for (let i = 0; i < 60; i++) {
+    const a = (i / 60) * TAU, hour = i % 5 === 0;
+    g.lineWidth = hour ? 16 : 3; g.strokeStyle = hour ? 'rgba(216,181,99,0.38)' : 'rgba(216,181,99,0.22)';
+    const r1 = R * (hour ? 0.745 : 0.8), r2 = R * 0.845;
+    const off = i === 0 ? [-0.012, 0.012] : [0];
+    for (const o of off) {
+      g.beginPath(); g.moveTo(C + Math.cos(a + o) * r1, C + Math.sin(a + o) * r1);
+      g.lineTo(C + Math.cos(a + o) * r2, C + Math.sin(a + o) * r2); g.stroke();
+    }
+  }
+  g.globalCompositeOperation = 'destination-in';
+  const fade = g.createRadialGradient(C, C, R * 0.6, C, C, R);
+  fade.addColorStop(0, 'rgba(0,0,0,1)'); fade.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = fade; g.fillRect(0, 0, S, S);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const dialPivot = new THREE.Group(); scene.add(dialPivot);
+const dial = new THREE.Mesh(new THREE.PlaneGeometry(30, 30),
+  new THREE.MeshBasicMaterial({ map: dialTexture(), transparent: true, depthWrite: false, fog: false }));
+dial.rotation.z = -Math.PI / 2;
+dial.renderOrder = -1;
+dialPivot.add(dial);
+
+/* ------------------------------------------------------------------ brass dust */
+const MOTES = 420;
+const motePos = new Float32Array(MOTES * 3), moteVel = new Float32Array(MOTES);
+for (let i = 0; i < MOTES; i++) {
+  motePos[i * 3] = (Math.random() - 0.5) * 14; motePos[i * 3 + 1] = Math.random() * 7 - 3; motePos[i * 3 + 2] = (Math.random() - 0.5) * 12;
+  moteVel[i] = 0.03 + Math.random() * 0.08;
+}
+const moteGeo = new THREE.BufferGeometry(); moteGeo.setAttribute('position', new THREE.BufferAttribute(motePos, 3));
+const spr = document.createElement('canvas'); spr.width = spr.height = 64;
+{ const g = spr.getContext('2d'); const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,240,210,1)'); gr.addColorStop(0.35, 'rgba(255,210,140,0.45)'); gr.addColorStop(1, 'rgba(255,200,120,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64); }
+const sprTex = new THREE.CanvasTexture(spr); sprTex.colorSpace = THREE.SRGBColorSpace;
+const motes = new THREE.Points(moteGeo, new THREE.PointsMaterial({
+  size: 0.05, map: sprTex, color: 0xffd79a, transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true,
+}));
+scene.add(motes);
+
+/* ------------------------------------------------------------------ post */
+const composer = new EffectComposer(renderer);
+composer.setPixelRatio(PR);
+composer.setSize(innerWidth, innerHeight);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.42, 0.5, 0.9);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+/* ------------------------------------------------------------------ state + UI */
+const state = {
+  tension: 0.72, winding: false, fly: !reduceMotion, explode: false, e: 0,
+  flyBlend: reduceMotion ? 0 : 1, phi: 0, pathT: 0, t: 0, keyAngle: 0, lastClick: 0, uiT: 0,
+};
+const FLOOR = 0.08, DECAY = 0.011, WIND_RATE = 0.42;
+
+let actx = null;
+function ensureAudio() {
+  if (actx) return;
+  try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; }
+}
+function ratchetClick() {
+  if (!actx) return;
+  const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+  o.type = 'square';
+  o.frequency.setValueAtTime(2300 + Math.random() * 500, t);
+  o.frequency.exponentialRampToValueAtTime(700, t + 0.02);
+  g.gain.setValueAtTime(0.035, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.04);
+}
+
+const windBtn = $('wind'), flyBtn = $('fly'), expBtn = $('explode');
+function startWind() { ensureAudio(); if (actx && actx.state === 'suspended') actx.resume(); state.winding = true; windBtn.classList.add('active'); }
+function stopWind() { state.winding = false; windBtn.classList.remove('active'); }
+windBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); try { windBtn.setPointerCapture(e.pointerId); } catch (_) {} startWind(); });
+['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => windBtn.addEventListener(ev, stopWind));
+windBtn.addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); startWind(); } });
+windBtn.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') stopWind(); });
+windBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+addEventListener('blur', stopWind);
+
+function setFly(v) { state.fly = v; flyBtn.setAttribute('aria-pressed', String(v)); }
+function setExplode(v) { state.explode = v; expBtn.setAttribute('aria-pressed', String(v)); }
+flyBtn.addEventListener('click', () => setFly(!state.fly));
+expBtn.addEventListener('click', () => setExplode(!state.explode));
+setFly(state.fly);
+
+addEventListener('keydown', (e) => {
+  if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.code === 'KeyW') startWind();
+  else if (e.code === 'KeyE') setExplode(!state.explode);
+  else if (e.code === 'KeyF') setFly(!state.fly);
+});
+addEventListener('keyup', (e) => { if (e.code === 'KeyW') stopWind(); });
+
+// power-reserve ticks
+{
+  const ticks = $('ticks'); const NS = 'http://www.w3.org/2000/svg';
+  for (let i = 0; i <= 10; i++) {
+    const a = Math.PI + (i / 10) * Math.PI, r1 = i % 5 ? 27 : 24, r2 = 29.5;
+    const l = document.createElementNS(NS, 'line');
+    l.setAttribute('x1', 44 + Math.cos(a) * r1); l.setAttribute('y1', 44 + Math.sin(a) * r1);
+    l.setAttribute('x2', 44 + Math.cos(a) * r2); l.setAttribute('y2', 44 + Math.sin(a) * r2);
+    l.setAttribute('class', 'tick'); ticks.appendChild(l);
+  }
+}
+const ui = { amp: $('amp'), beat: $('beat'), reserve: $('reserve'), arc: $('reserveArc'), needle: $('needle') };
+function updateUI(T, freq, ampDeg) {
+  ui.amp.textContent = `${Math.round(ampDeg)}°`;
+  ui.beat.textContent = `${freq.toFixed(2)} Hz`;
+  const secs = Math.max(0, (T - FLOOR) / DECAY);
+  ui.reserve.textContent = `${Math.round(T * 100)}% · ${secs >= 60 ? Math.floor(secs / 60) + 'm ' + String(Math.round(secs % 60)).padStart(2, '0') + 's' : Math.round(secs) + 's'}`;
+  ui.arc.setAttribute('stroke-dashoffset', (100 - T * 100).toFixed(1));
+  ui.needle.setAttribute('transform', `rotate(${(T * 180).toFixed(1)} 44 44)`);
+  windBtn.textContent = state.winding ? (T >= 0.999 ? 'Fully wound' : 'Winding…') : 'Hold to wind';
+}
+
+/* ------------------------------------------------------------------ flight */
+const pathPos = (t, out) => out.set(2.4 * Math.sin(t * 0.23), 0.35 + 0.55 * Math.sin(t * 0.41 + 0.7), 1.6 * Math.sin(t * 0.31 + 1.3));
+const pA = V(), pB = V(), pC = V(), vel = V(), vel2 = V(), hoverPos = V(0, 0.25, 0), tgtPos = V();
+const qFly = new THREE.Quaternion(), qHover = new THREE.Quaternion(), qT = new THREE.Quaternion(), eul = new THREE.Euler();
+const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+const smooth = (x) => x * x * (3 - 2 * x);
+
+pathPos(0, pA);
+bf.position.copy(state.flyBlend ? pA : hoverPos);
+controls.target.copy(bf.position).add(V(0, 0.1, 0));
+const camOffset = V(5.4, 2.6, 7.4).multiplyScalar(innerWidth / innerHeight < 1 ? 1.7 : 1);
+camera.position.copy(controls.target).add(camOffset);
+controls.update();
+
+const w1 = V(), w2 = V(), camDir = V(), follow = V();
+const clock = new THREE.Clock();
+let first = true;
+
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  state.t += dt;
+  const t = state.t;
+
+  // mainspring
+  if (state.winding) {
+    const before = state.tension;
+    state.tension = Math.min(1, state.tension + dt * WIND_RATE);
+    if (state.tension > before) {
+      state.keyAngle += dt * 7;
+      if (t - state.lastClick > 0.075) { ratchetClick(); state.lastClick = t; }
+    }
+  } else {
+    state.tension = Math.max(FLOOR, state.tension - dt * DECAY);
+  }
+  const T = state.tension;
+  const freq = (0.5 + 2.3 * Math.pow(T, 0.85)) * (reduceMotion ? 0.45 : 1);
+  state.phi += dt * freq * TAU;
+  const phi = state.phi;
+
+  // wings + gear train
+  const thF = wingAngle(phi), thH = wingAngle(phi - 0.4) * 0.94 + 0.03;
+  for (const s of sides) {
+    s.rotor.rotation.z = phi;
+    s.fp.rotation.z = thF;
+    s.hp.rotation.z = thH;
+    s.fwing.rotation.x = 0.1 * Math.cos(phi);
+    s.hwing.rotation.x = 0.07 * Math.cos(phi - 0.4);
+  }
+  rig.position.y = -0.045 * Math.sin(phi + 0.6) * (0.4 + T);
+  rig.rotation.x = 0.05 * Math.sin(phi + 1.2);
+
+  // movement: balance at 3 Hz, amplitude falls as the spring runs down
+  const ampDeg = 175 + 135 * T;
+  const bal = THREE.MathUtils.degToRad(ampDeg) * Math.sin(TAU * 3 * t * (reduceMotion ? 0.25 : 1));
+  balance.rotation.y = bal;
+  hairspring.rotation.y = bal * 0.35;
+  const beats = t * 6 * (reduceMotion ? 0.25 : 1), bk = Math.floor(beats), bfr = beats - bk;
+  escape.userData.wheel.rotation.y = -(bk + Math.min(1, bfr / 0.14)) * (TAU / 30);
+  drum.rotation.y -= dt * 0.12 * freq;
+  key.rotation.y = state.keyAngle;
+  ratchet.rotation.y = state.keyAngle;
+
+  // body sway
+  segs.forEach((s, i) => {
+    s.g.rotation.y = 0.035 * Math.sin(t * 1.6 - i * 0.55);
+    s.g.rotation.x = -0.018 + 0.03 * Math.sin(phi - i * 0.35) + 0.02 * Math.sin(t * 1.1 - i * 0.4);
+  });
+  for (const a of antennae) {
+    a.g.rotation.x = 0.07 * Math.sin(t * 1.7 + a.s) + 0.03 * Math.sin(phi);
+    a.g.rotation.z = 0.05 * Math.sin(t * 1.3 + a.s * 1.5) * a.s;
+  }
+
+  // exploded view
+  state.e += ((state.explode ? 1 : 0) - state.e) * (1 - Math.exp(-dt * 3));
+  const ee = smooth(THREE.MathUtils.clamp(state.e, 0, 1));
+  for (const p of parts) p.obj.position.copy(p.base).addScaledVector(p.off, ee);
+
+  // flight path
+  const flyTarget = state.fly && !state.explode ? 1 : 0;
+  state.flyBlend += (flyTarget - state.flyBlend) * (1 - Math.exp(-dt * 0.8));
+  state.pathT += dt * (0.22 + 0.75 * T) * (reduceMotion ? 0.4 : 1);
+  pathPos(state.pathT, pA); pathPos(state.pathT + 0.05, pB); pathPos(state.pathT + 0.1, pC);
+  vel.subVectors(pB, pA); vel2.subVectors(pC, pB);
+  const yaw = Math.atan2(vel.x, vel.z), yaw2 = Math.atan2(vel2.x, vel2.z);
+  const pitch = -Math.atan2(vel.y, Math.hypot(vel.x, vel.z)) * 0.7;
+  const roll = THREE.MathUtils.clamp(-wrap(yaw2 - yaw) * 14, -0.55, 0.55);
+  qFly.setFromEuler(eul.set(pitch, yaw, roll, 'YXZ'));
+  qHover.setFromEuler(eul.set(-0.1, 0.45 + 0.5 * Math.sin(t * 0.13), 0, 'YXZ'));
+  const fb = smooth(THREE.MathUtils.clamp(state.flyBlend, 0, 1));
+  tgtPos.lerpVectors(hoverPos, pA, fb);
+  bf.position.copy(tgtPos);
+  qT.copy(qHover).slerp(qFly, fb);
+  bf.quaternion.slerp(qT, 1 - Math.exp(-dt * 4));
+
+  // connecting rods (hidden once the movement is pulled apart)
+  bf.updateMatrixWorld(true);
+  for (const s of sides) {
+    s.conrod.visible = ee < 0.02;
+    if (!s.conrod.visible) continue;
+    s.pin.getWorldPosition(w1); s.tip.getWorldPosition(w2);
+    s.side.worldToLocal(w1); s.side.worldToLocal(w2);
+    placeRod(s.conrod, w1, w2);
+  }
+
+  // camera follows the butterfly
+  follow.copy(bf.position).add(V(0, 0.1, 0)).sub(controls.target).multiplyScalar(1 - Math.exp(-dt * 2.2));
+  controls.target.add(follow); camera.position.add(follow);
+  controls.update();
+
+  // backdrop dial, always behind the subject
+  camera.getWorldDirection(camDir);
+  dialPivot.position.copy(controls.target).addScaledVector(camDir, 18);
+  dialPivot.quaternion.copy(camera.quaternion);
+  dial.rotation.z = -Math.PI / 2 - t * 0.02;
+
+  // dust
+  const pa = moteGeo.attributes.position;
+  for (let i = 0; i < MOTES; i++) {
+    let y = pa.array[i * 3 + 1] + moteVel[i] * dt;
+    if (y > 4) y = -3;
+    pa.array[i * 3 + 1] = y;
+    pa.array[i * 3] += Math.sin(t * 0.3 + i) * dt * 0.02;
+  }
+  pa.needsUpdate = true;
+
+  state.uiT -= dt;
+  if (state.uiT <= 0) { updateUI(T, freq, ampDeg); state.uiT = 0.1; }
+
+  composer.render();
+  if (first) { first = false; $('status').remove(); }
+}
+renderer.setAnimationLoop(frame);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+  bloom.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
