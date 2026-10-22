@@ -1,0 +1,2527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Human Skeleton Explorer</title>
+<!--
+  Human Skeleton Explorer
+  An interactive 3D skeleton for high school anatomy lessons.
+
+  Every bone is sculpted at load time from signed distance fields (spheres,
+  capsules, ellipsoids and plates blended together) and turned into a mesh
+  with a small surface-nets polygonizer. Nothing is downloaded except
+  three.js itself.
+
+  Features: hover/click any bone for its name and facts, colour by body
+  region / bone type / axial vs appendicular, hide regions, exploded view,
+  floating labels, search, and a two-mode quiz.
+-->
+<style>
+  :root {
+    --bg-top: #1c2a45;
+    --bg-bottom: #0a101c;
+    --panel: rgba(14, 21, 36, 0.84);
+    --panel-solid: #111a2c;
+    --line: rgba(150, 180, 230, 0.16);
+    --line-strong: rgba(150, 180, 230, 0.3);
+    --text: #e8eef8;
+    --muted: #9babc4;
+    --accent: #4fd1ff;
+    --accent-soft: rgba(79, 209, 255, 0.14);
+    --warm: #ffc66e;
+    --good: #5ee6a0;
+    --bad: #ff6b7a;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: radial-gradient(ellipse at 50% 30%, var(--bg-top) 0%, var(--bg-bottom) 72%);
+    color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  #stage { position: fixed; inset: 0; touch-action: none; }
+  #stage canvas { display: block; outline: none; }
+  #label-layer { position: fixed; inset: 0; pointer-events: none; }
+
+  .panel {
+    position: fixed; z-index: 5;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
+  }
+
+  /* ---------- left control panel ---------- */
+  #side {
+    top: 12px; left: 12px; bottom: 12px; width: 300px;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #side header { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+  #side h1 { margin: 0; font-size: 17px; letter-spacing: 0.2px; }
+  #side h1 span { color: var(--accent); }
+  #side .sub { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .tabs { display: flex; gap: 6px; margin-top: 10px; }
+  .tab {
+    flex: 1; padding: 7px 0; border-radius: 9px; border: 1px solid var(--line);
+    background: transparent; cursor: pointer; font-weight: 600; font-size: 13px;
+  }
+  .tab.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  #side .scroll { overflow-y: auto; padding: 4px 16px 16px; flex: 1; }
+  .sec { margin-top: 14px; }
+  .sec h3 {
+    margin: 0 0 7px; font-size: 11px; text-transform: uppercase; letter-spacing: 1.1px;
+    color: var(--muted); font-weight: 700;
+  }
+  .search { position: relative; }
+  .search input {
+    width: 100%; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-strong);
+    background: rgba(0, 0, 0, 0.25); outline: none;
+  }
+  .search input:focus { border-color: var(--accent); }
+  #search-results {
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 3;
+    background: var(--panel-solid); border: 1px solid var(--line-strong); border-radius: 10px;
+    overflow: hidden; display: none;
+  }
+  #search-results button {
+    display: block; width: 100%; text-align: left; padding: 7px 11px; border: 0;
+    background: transparent; cursor: pointer;
+  }
+  #search-results button:hover, #search-results button.hi { background: var(--accent-soft); }
+  #search-results small { color: var(--muted); margin-left: 6px; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .seg button {
+    padding: 7px 6px; border-radius: 9px; border: 1px solid var(--line); background: transparent;
+    cursor: pointer; font-size: 12.5px;
+  }
+  .seg button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .regions { display: flex; flex-direction: column; gap: 2px; }
+  .region {
+    display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px;
+  }
+  .region:hover { background: rgba(255, 255, 255, 0.04); }
+  .region input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; cursor: pointer; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+  .region .name { flex: 1; cursor: pointer; }
+  .region .name:hover { color: var(--accent); }
+  .region .count { color: var(--muted); font-size: 12px; }
+  .row-btns { display: flex; gap: 6px; margin-top: 6px; }
+  .btn {
+    padding: 7px 11px; border-radius: 9px; border: 1px solid var(--line-strong);
+    background: rgba(255, 255, 255, 0.04); cursor: pointer; font-size: 12.5px;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #04121c; border-color: var(--accent); font-weight: 700; }
+  .btn.small { padding: 4px 9px; font-size: 12px; }
+  .toggle { display: flex; align-items: center; justify-content: space-between; padding: 5px 2px; cursor: pointer; }
+  .toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
+  .slider { display: flex; align-items: center; gap: 10px; }
+  .slider input { flex: 1; accent-color: var(--accent); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .quiz-pick p { color: var(--muted); margin: 0 0 10px; font-size: 13px; }
+  .quiz-card {
+    border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 8px; cursor: pointer;
+    background: rgba(255, 255, 255, 0.025);
+  }
+  .quiz-card:hover { border-color: var(--accent); }
+  .quiz-card b { display: block; margin-bottom: 2px; }
+  .quiz-card span { color: var(--muted); font-size: 12.5px; }
+  #best { color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+  /* ---------- right info panel ---------- */
+  #info { top: 12px; right: 12px; width: 330px; max-height: calc(100% - 24px); overflow-y: auto; padding: 16px 18px 18px; }
+  #info h2 { margin: 6px 0 2px; font-size: 21px; line-height: 1.2; }
+  #info .aka { color: var(--warm); font-size: 13.5px; margin-bottom: 8px; }
+  #info p { margin: 8px 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip {
+    font-size: 11.5px; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--line-strong);
+    display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  }
+  .chip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .note { border-left: 3px solid var(--accent); padding: 4px 0 4px 10px; color: #cfe9f5; margin: 10px 0; }
+  .fact {
+    background: rgba(255, 198, 110, 0.08); border: 1px solid rgba(255, 198, 110, 0.25);
+    border-radius: 10px; padding: 9px 11px; margin: 10px 0;
+  }
+  .fact b { color: var(--warm); }
+  .meta { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 13px; margin: 10px 0; }
+  .meta dt { color: var(--muted); }
+  .meta dd { margin: 0; }
+  .counts { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0 4px; }
+  .counts td { padding: 3px 0; border-bottom: 1px solid var(--line); }
+  .counts td:last-child { text-align: right; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .counts tr.total td { border-bottom: 0; font-weight: 700; color: var(--text); }
+  .types { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; }
+  .types li { margin: 5px 0; display: flex; gap: 8px; }
+  .types li i { width: 10px; height: 10px; border-radius: 3px; margin-top: 5px; flex: none; }
+  .muted { color: var(--muted); }
+  kbd {
+    font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 5px; border-radius: 4px;
+    border: 1px solid var(--line-strong); background: rgba(255, 255, 255, 0.05);
+  }
+
+  /* ---------- quiz bar ---------- */
+  #quizbar {
+    top: 12px; left: 50%; transform: translateX(-50%); width: min(520px, calc(100% - 24px));
+    padding: 12px 16px; text-align: center; display: none;
+  }
+  #quizbar .top { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+  #quizbar .prompt { font-size: 18px; margin: 6px 0 4px; }
+  #quizbar .prompt b { color: var(--accent); }
+  #quiz-options { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 8px; }
+  #quiz-options button {
+    padding: 9px; border-radius: 10px; border: 1px solid var(--line-strong);
+    background: rgba(255, 255, 255, 0.04); cursor: pointer; font-weight: 600;
+  }
+  #quiz-options button:hover:not(:disabled) { border-color: var(--accent); }
+  #quiz-options button.right { background: rgba(94, 230, 160, 0.18); border-color: var(--good); }
+  #quiz-options button.wrong { background: rgba(255, 107, 122, 0.18); border-color: var(--bad); }
+  #quiz-feedback { margin-top: 8px; font-size: 13.5px; min-height: 0; }
+  #quiz-feedback .ok { color: var(--good); font-weight: 700; }
+  #quiz-feedback .no { color: var(--bad); font-weight: 700; }
+  #quiz-actions { margin-top: 10px; display: flex; justify-content: center; gap: 8px; }
+  .progress-dots { display: flex; gap: 4px; justify-content: center; margin-top: 8px; }
+  .progress-dots i { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.14); }
+  .progress-dots i.ok { background: var(--good); }
+  .progress-dots i.no { background: var(--bad); }
+  .progress-dots i.now { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* ---------- tooltip, labels, loader, hints ---------- */
+  #tip {
+    position: fixed; z-index: 8; pointer-events: none; padding: 5px 10px; border-radius: 8px;
+    background: rgba(5, 10, 20, 0.88); border: 1px solid var(--line-strong); font-size: 13px;
+    white-space: nowrap; transform: translate(14px, 14px); display: none;
+  }
+  #tip small { color: var(--muted); margin-left: 6px; }
+  .lbl {
+    display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600;
+    white-space: nowrap; color: #f2f6fc; text-shadow: 0 1px 3px #000;
+  }
+  .lbl.flip { flex-direction: row-reverse; }
+  .lbl .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5); flex: none; }
+  .lbl .bar { width: 16px; height: 1px; background: rgba(255, 255, 255, 0.55); flex: none; }
+  .lbl .txt { background: rgba(6, 12, 24, 0.78); padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line); }
+  #loader {
+    left: 50%; bottom: 22px; transform: translateX(-50%); width: min(360px, calc(100% - 24px));
+    padding: 12px 16px; text-align: center; font-size: 13px;
+  }
+  #loader .track { height: 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.08); margin-top: 8px; overflow: hidden; }
+  #loader .fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), #8ff0ff); transition: width 0.2s; }
+  #hint {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 4;
+    color: var(--muted); font-size: 12px; background: rgba(5, 10, 20, 0.55); padding: 5px 12px; border-radius: 20px;
+    white-space: nowrap; display: none;
+  }
+  #menu-btn { display: none; }
+  #fail {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 20;
+    text-align: center; padding: 24px; background: var(--bg-bottom);
+  }
+  #fail div { max-width: 460px; }
+
+  /* ---------- small screens ---------- */
+  @media (max-width: 860px) {
+    #side { bottom: auto; max-height: calc(100% - 24px); width: min(300px, calc(100% - 24px)); transform: translateX(calc(-100% - 20px)); transition: transform 0.25s; }
+    #side.open { transform: none; }
+    #menu-btn {
+      display: block; position: fixed; top: 12px; left: 12px; z-index: 6; padding: 8px 12px; border-radius: 10px;
+      border: 1px solid var(--line-strong); background: var(--panel); cursor: pointer; font-weight: 700;
+    }
+    #side.open + #menu-btn { left: auto; right: 12px; }
+    #info { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; max-height: 42%; }
+    #info.collapsed { max-height: 54px; overflow: hidden; }
+    #quizbar { top: 58px; }
+    #hint { display: none !important; }
+  }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="label-layer"></div>
+
+<aside id="side" class="panel">
+  <header>
+    <h1>Human <span>Skeleton</span> Explorer</h1>
+    <p class="sub">Click any bone to learn about it</p>
+    <div class="tabs">
+      <button class="tab on" data-tab="explore">Explore</button>
+      <button class="tab" data-tab="quiz">Quiz</button>
+    </div>
+  </header>
+  <div class="scroll">
+    <div id="tab-explore">
+      <div class="sec search">
+        <input id="search" type="search" placeholder="Search bones (e.g. femur, T7, cheekbone)" autocomplete="off">
+        <div id="search-results"></div>
+      </div>
+      <div class="sec">
+        <h3>Colour by</h3>
+        <div class="seg" id="color-modes">
+          <button data-mode="natural" class="on">Natural bone</button>
+          <button data-mode="region">Body region</button>
+          <button data-mode="type">Bone type</button>
+          <button data-mode="division">Axial / Appendicular</button>
+        </div>
+        <div class="legend" id="legend" style="margin-top:8px"></div>
+      </div>
+      <div class="sec">
+        <h3>Regions</h3>
+        <div class="regions" id="regions"></div>
+        <div class="row-btns">
+          <button class="btn small" id="show-all">Show all</button>
+          <button class="btn small" id="only-axial">Axial only</button>
+          <button class="btn small" id="only-app">Appendicular only</button>
+        </div>
+      </div>
+      <div class="sec">
+        <h3>View</h3>
+        <label class="toggle">Bone labels <input type="checkbox" id="opt-labels"></label>
+        <label class="toggle">Cartilage &amp; discs <input type="checkbox" id="opt-cartilage" checked></label>
+        <label class="toggle">Slowly rotate <input type="checkbox" id="opt-rotate"></label>
+        <div class="slider" style="margin-top:6px"><span class="muted">Explode</span><input type="range" id="explode" min="0" max="1" step="0.01" value="0"></div>
+        <div class="row-btns" style="margin-top:10px">
+          <button class="btn small" data-view="front">Front</button>
+          <button class="btn small" data-view="side">Side</button>
+          <button class="btn small" data-view="back">Back</button>
+          <button class="btn small" data-view="reset">Reset</button>
+        </div>
+      </div>
+    </div>
+    <div id="tab-quiz" style="display:none">
+      <div class="sec quiz-pick">
+        <h3>Test yourself</h3>
+        <p>Ten questions per round. Bones on both sides count, so either femur is a correct answer.</p>
+        <div class="quiz-card" data-quiz="find"><b>Find the bone</b><span>You get a name. Click that bone on the skeleton.</span></div>
+        <div class="quiz-card" data-quiz="name"><b>Name the bone</b><span>A bone glows. Pick its name from four choices.</span></div>
+        <label class="toggle" style="margin-top:6px">Include small bones (wrist, ankle, vertebrae) <input type="checkbox" id="quiz-hard"></label>
+        <div id="best"></div>
+      </div>
+    </div>
+  </div>
+</aside>
+<button id="menu-btn" aria-label="Menu">☰ Menu</button>
+
+<section id="info" class="panel"></section>
+
+<section id="quizbar" class="panel">
+  <div class="top"><span id="quiz-mode"></span><span id="quiz-score"></span></div>
+  <div class="prompt" id="quiz-prompt"></div>
+  <div id="quiz-options"></div>
+  <div id="quiz-feedback"></div>
+  <div class="progress-dots" id="quiz-dots"></div>
+  <div id="quiz-actions"></div>
+</section>
+
+<div id="tip"></div>
+<div id="loader" class="panel"><div id="loader-text">Sculpting bones…</div><div class="track"><div class="fill" id="loader-fill"></div></div></div>
+<div id="hint">Drag to rotate · Scroll to zoom · Right-drag to pan · <kbd>Esc</kbd> clears</div>
+<div id="fail"><div><h2>3D view unavailable</h2><p class="muted" id="fail-msg">This page needs WebGL. Try a recent version of Chrome, Edge, Firefox or Safari, and make sure hardware acceleration is turned on.</p></div></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+/* =====================================================================
+   1. Vector helpers (plain arrays keep the distance fields fast)
+   ===================================================================== */
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const length = a => Math.sqrt(dot(a, a));
+const unit = a => mul(a, 1 / (length(a) || 1));
+const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp01 = t => (t < 0 ? 0 : t > 1 ? 1 : t);
+const flipX = p => [-p[0], p[1], p[2]];
+
+/* =====================================================================
+   2. Signed distance field toolkit
+   Each primitive is a function (x, y, z) -> distance, carrying a bounding
+   box in .bb so a bone can work out how big its sampling grid must be.
+   ===================================================================== */
+const { sqrt, abs, min, max } = Math;
+
+function smoothMin(a, b, k) {
+  if (k <= 0) return a < b ? a : b;
+  const h = max(k - abs(a - b), 0) / k;
+  return (a < b ? a : b) - h * h * k * 0.25;
+}
+const smoothMax = (a, b, k) => -smoothMin(-a, -b, k);
+const withBox = (f, bb) => { f.bb = bb; return f; };
+const boxAround = (pts, pad) => {
+  const bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+  for (const p of pts) for (let i = 0; i < 3; i++) {
+    bb[i] = min(bb[i], p[i] - pad); bb[i + 3] = max(bb[i + 3], p[i] + pad);
+  }
+  return bb;
+};
+
+const SD = {
+  sphere(c, r) {
+    const [cx, cy, cz] = c;
+    return withBox((x, y, z) => {
+      const dx = x - cx, dy = y - cy, dz = z - cz;
+      return sqrt(dx * dx + dy * dy + dz * dz) - r;
+    }, boxAround([c], r));
+  },
+
+  // Ellipsoid with radii r; optional orthonormal basis [e1, e2, e3] rotates it.
+  ellipsoid(c, r, basis) {
+    const [cx, cy, cz] = c, [rx, ry, rz] = r;
+    const rMin = min(rx, ry, rz);
+    const e1 = basis ? basis[0] : [1, 0, 0], e2 = basis ? basis[1] : [0, 1, 0], e3 = basis ? basis[2] : [0, 0, 1];
+    const f = (x, y, z) => {
+      const dx = x - cx, dy = y - cy, dz = z - cz;
+      const lx = (dx * e1[0] + dy * e1[1] + dz * e1[2]) / rx;
+      const ly = (dx * e2[0] + dy * e2[1] + dz * e2[2]) / ry;
+      const lz = (dx * e3[0] + dy * e3[1] + dz * e3[2]) / rz;
+      const k0 = sqrt(lx * lx + ly * ly + lz * lz);
+      const qx = lx / rx, qy = ly / ry, qz = lz / rz;
+      const k1 = sqrt(qx * qx + qy * qy + qz * qz);
+      return k1 < 1e-12 ? -rMin : k0 * (k0 - 1) / k1;
+    };
+    const bb = basis ? boxAround([c], max(rx, ry, rz)) : [cx - rx, cy - ry, cz - rz, cx + rx, cy + ry, cz + rz];
+    return withBox(f, bb);
+  },
+
+  // Capsule from a to b whose radius tapers from ra to rb.
+  capsule(a, b, ra, rb = ra) {
+    const [ax, ay, az] = a;
+    const bx = b[0] - ax, by = b[1] - ay, bz = b[2] - az;
+    const l2 = bx * bx + by * by + bz * bz || 1e-12;
+    return withBox((x, y, z) => {
+      const px = x - ax, py = y - ay, pz = z - az;
+      let t = (px * bx + py * by + pz * bz) / l2;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const dx = px - bx * t, dy = py - by * t, dz = pz - bz * t;
+      return sqrt(dx * dx + dy * dy + dz * dz) - (ra + (rb - ra) * t);
+    }, boxAround([a, b], max(ra, rb)));
+  },
+
+  // A run of capsules through several points; radii can be one number or a list.
+  chain(points, radii) {
+    const r = i => (Array.isArray(radii) ? radii[i] : radii);
+    const out = [];
+    for (let i = 0; i < points.length - 1; i++) out.push(SD.capsule(points[i], points[i + 1], r(i), r(i + 1)));
+    return out;
+  },
+
+  // A flat plate: distance to triangle abc, thickened by th.
+  plate(a, b, c, th) {
+    const ba = sub(b, a), cb = sub(c, b), ac = sub(a, c), nor = cross(ba, ac);
+    const n2 = dot(nor, nor);
+    const s1 = cross(ba, nor), s2 = cross(cb, nor), s3 = cross(ac, nor);
+    const ba2 = dot(ba, ba), cb2 = dot(cb, cb), ac2 = dot(ac, ac);
+    const edge = (ex, ey, ez, e2, px, py, pz) => {
+      let t = (ex * px + ey * py + ez * pz) / e2;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const dx = ex * t - px, dy = ey * t - py, dz = ez * t - pz;
+      return dx * dx + dy * dy + dz * dz;
+    };
+    return withBox((x, y, z) => {
+      const pax = x - a[0], pay = y - a[1], paz = z - a[2];
+      const pbx = x - b[0], pby = y - b[1], pbz = z - b[2];
+      const pcx = x - c[0], pcy = y - c[1], pcz = z - c[2];
+      const inside = Math.sign(s1[0] * pax + s1[1] * pay + s1[2] * paz)
+        + Math.sign(s2[0] * pbx + s2[1] * pby + s2[2] * pbz)
+        + Math.sign(s3[0] * pcx + s3[1] * pcy + s3[2] * pcz);
+      let d2;
+      if (inside < 2) {
+        d2 = min(edge(ba[0], ba[1], ba[2], ba2, pax, pay, paz),
+          edge(cb[0], cb[1], cb[2], cb2, pbx, pby, pbz),
+          edge(ac[0], ac[1], ac[2], ac2, pcx, pcy, pcz));
+      } else {
+        const q = nor[0] * pax + nor[1] * pay + nor[2] * paz;
+        d2 = q * q / n2;
+      }
+      return sqrt(d2) - th;
+    }, boxAround([a, b, c], th));
+  },
+
+  // Rounded cylinder centred on c, running along axis, half-height hh.
+  cylinder(c, axis, r, hh, round = 0) {
+    const [ux, uy, uz] = unit(axis);
+    return withBox((x, y, z) => {
+      const px = x - c[0], py = y - c[1], pz = z - c[2];
+      const h = px * ux + py * uy + pz * uz;
+      const qx = px - ux * h, qy = py - uy * h, qz = pz - uz * h;
+      const dx = sqrt(qx * qx + qy * qy + qz * qz) - r + round, dy = abs(h) - hh + round;
+      const ox = max(dx, 0), oy = max(dy, 0);
+      return min(max(dx, dy), 0) + sqrt(ox * ox + oy * oy) - round;
+    }, boxAround([c], max(r, hh)));
+  },
+
+  // Ring of tube radius r around axis, ring radius R.
+  torus(c, axis, R, r) {
+    const [ux, uy, uz] = unit(axis);
+    return withBox((x, y, z) => {
+      const px = x - c[0], py = y - c[1], pz = z - c[2];
+      const h = px * ux + py * uy + pz * uz;
+      const qx = px - ux * h, qy = py - uy * h, qz = pz - uz * h;
+      const rad = sqrt(qx * qx + qy * qy + qz * qz) - R;
+      return sqrt(rad * rad + h * h) - r;
+    }, boxAround([c], R + r));
+  },
+
+  // Upright cylinder with an elliptical cross-section (vertebral bodies, discs).
+  ovalCylinder(c, rx, rz, hh, round) {
+    const rm = min(rx, rz);
+    return withBox((x, y, z) => {
+      const px = (x - c[0]) / rx, pz = (z - c[2]) / rz;
+      const dx = (sqrt(px * px + pz * pz) - 1) * rm + round, dy = abs(y - c[1]) - hh + round;
+      const ox = max(dx, 0), oy = max(dy, 0);
+      return min(max(dx, dy), 0) + sqrt(ox * ox + oy * oy) - round;
+    }, [c[0] - rx, c[1] - hh, c[2] - rz, c[0] + rx, c[1] + hh, c[2] + rz]);
+  },
+
+  // Keep only the side of f where n·(p - point) < 0 (smoothly).
+  clip(f, n, point, k) {
+    const [nx, ny, nz] = unit(n);
+    const d = nx * point[0] + ny * point[1] + nz * point[2];
+    return withBox((x, y, z) => smoothMax(f(x, y, z), nx * x + ny * y + nz * z - d, k), f.bb);
+  },
+};
+
+// Build an orthonormal basis whose first axis is `a` and second leans toward `hint`.
+function basisFrom(a, hint) {
+  const e1 = unit(a);
+  const e3 = unit(cross(e1, hint));
+  const e2 = cross(e3, e1);
+  return [e1, e2, e3];
+}
+
+/* =====================================================================
+   3. Surface nets polygonizer
+   Samples the field on a grid (skipping blocks that are clearly far from
+   the surface), drops one vertex in every cell the surface crosses, and
+   joins neighbouring cells with quads.
+   ===================================================================== */
+function polygonize(f, bb, h, localField = null) {
+  const x0 = bb[0], y0 = bb[1], z0 = bb[2];
+  const nx = Math.ceil((bb[3] - x0) / h) + 1, ny = Math.ceil((bb[4] - y0) / h) + 1, nz = Math.ceil((bb[5] - z0) / h) + 1;
+  const NXY = nx * ny;
+  const vals = new Float32Array(NXY * nz);
+  const done = new Uint8Array(NXY * nz);
+
+  // Coarse pass on every 4th node finds the blocks that can hold surface.
+  // A block whose corners are all farther than its diagonal from the surface
+  // has one sign throughout, so its inside is never sampled.
+  const B = 4;
+  const bxN = Math.ceil((nx - 1) / B), byN = Math.ceil((ny - 1) / B), bzN = Math.ceil((nz - 1) / B);
+  const cnx = bxN + 1, cny = byN + 1, cnz = bzN + 1;
+  const coarse = new Float32Array(cnx * cny * cnz);
+  for (let k = 0; k < cnz; k++) for (let j = 0; j < cny; j++) for (let i = 0; i < cnx; i++) {
+    coarse[i + cnx * (j + cny * k)] = f(x0 + i * B * h, y0 + j * B * h, z0 + k * B * h);
+  }
+  const reach = B * h * 1.9;
+  const cx = nx - 1, cy = ny - 1, cz = nz - 1;
+  const cellVert = new Int32Array(cx * cy * cz);
+  const corner = [0, 1, nx, nx + 1, NXY, NXY + 1, NXY + nx, NXY + nx + 1];
+  const EDGES = [0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 4, 6, 5, 7, 0, 4, 1, 5, 2, 6, 3, 7];
+  const v8 = new Float32Array(8);
+  const pos = [];
+  const vfun = [];          // the (block-local) field used near each vertex
+  const active = [];
+  for (let K = 0; K < bzN; K++) for (let J = 0; J < byN; J++) for (let I = 0; I < bxN; I++) {
+    let near = false, neg = 0;
+    for (let c = 0; c < 8; c++) {
+      const v = coarse[(I + (c & 1)) + cnx * ((J + ((c >> 1) & 1)) + cny * (K + (c >> 2)))];
+      if (v < 0) neg++;
+      if (abs(v) < reach) near = true;
+    }
+    if (!near && neg !== 0 && neg !== 8) near = true;
+    if (!near) continue;
+    const i0 = I * B, j0 = J * B, k0 = K * B;
+    const i1 = min(i0 + B, cx), j1 = min(j0 + B, cy), k1 = min(k0 + B, cz);
+    let g = f;
+    if (localField) {
+      let minCorner = Infinity;
+      for (let c = 0; c < 8; c++) minCorner = min(minCorner, coarse[(I + (c & 1)) + cnx * ((J + ((c >> 1) & 1)) + cny * (K + (c >> 2)))]);
+      g = localField([x0 + i0 * h, y0 + j0 * h, z0 + k0 * h], [x0 + (i0 + B) * h, y0 + (j0 + B) * h, z0 + (k0 + B) * h], minCorner, B * h * 1.75);
+    }
+    // sample every node of the block (including its far faces)
+    for (let k = k0; k <= k1; k++) for (let j = j0; j <= j1; j++) {
+      let idx = i0 + j * nx + k * NXY;
+      for (let i = i0; i <= i1; i++, idx++) {
+        if (!done[idx]) { vals[idx] = g(x0 + i * h, y0 + j * h, z0 + k * h); done[idx] = 1; }
+      }
+    }
+    // one vertex per crossed cell, at the average of its edge crossings
+    for (let k = k0; k < k1; k++) for (let j = j0; j < j1; j++) for (let i = i0; i < i1; i++) {
+      const base = i + j * nx + k * NXY;
+      let mask = 0;
+      for (let c = 0; c < 8; c++) { const v = vals[base + corner[c]]; v8[c] = v; if (v < 0) mask |= 1 << c; }
+      if (mask === 0 || mask === 255) continue;
+      let sx = 0, sy = 0, sz = 0, cnt = 0;
+      for (let e = 0; e < 24; e += 2) {
+        const a = EDGES[e], b = EDGES[e + 1], va = v8[a], vb = v8[b];
+        if ((va < 0) === (vb < 0)) continue;
+        const t = va / (va - vb);
+        sx += (a & 1) + ((b & 1) - (a & 1)) * t;
+        sy += ((a >> 1) & 1) + (((b >> 1) & 1) - ((a >> 1) & 1)) * t;
+        sz += (a >> 2) + ((b >> 2) - (a >> 2)) * t;
+        cnt++;
+      }
+      cellVert[i + cx * (j + cy * k)] = pos.length / 3;
+      pos.push(x0 + (i + sx / cnt) * h, y0 + (j + sy / cnt) * h, z0 + (k + sz / cnt) * h);
+      vfun.push(g);
+      active.push(i, j, k);
+    }
+  }
+
+  // Each grid edge belongs to the cell at its lower corner. Where the surface
+  // crosses it, join the four cells around that edge with a quad.
+  const cell = (i, j, k) => cellVert[i + cx * (j + cy * k)];
+  const tris = [];
+  const quad = (a, b, c, d, flip) => {
+    if (flip) tris.push(a, b, c, a, c, d); else tris.push(a, c, b, a, d, c);
+  };
+  for (let q = 0; q < active.length; q += 3) {
+    const i = active[q], j = active[q + 1], k = active[q + 2];
+    const n0 = i + j * nx + k * NXY;
+    const inside = vals[n0] < 0;
+    if (j > 0 && k > 0 && inside !== (vals[n0 + 1] < 0)) {
+      quad(cell(i, j - 1, k - 1), cell(i, j, k - 1), cell(i, j, k), cell(i, j - 1, k), inside);
+    }
+    if (i > 0 && k > 0 && inside !== (vals[n0 + nx] < 0)) {
+      quad(cell(i - 1, j, k - 1), cell(i - 1, j, k), cell(i, j, k), cell(i, j, k - 1), inside);
+    }
+    if (i > 0 && j > 0 && inside !== (vals[n0 + NXY] < 0)) {
+      quad(cell(i - 1, j - 1, k), cell(i, j - 1, k), cell(i, j, k), cell(i - 1, j, k), inside);
+    }
+  }
+
+  // Make sure triangles wind outward (positive enclosed volume).
+  let vol = 0;
+  for (let t = 0; t < tris.length; t += 3) {
+    const a = tris[t] * 3, b = tris[t + 1] * 3, c = tris[t + 2] * 3;
+    vol += pos[a] * (pos[b + 1] * pos[c + 2] - pos[b + 2] * pos[c + 1])
+      - pos[a + 1] * (pos[b] * pos[c + 2] - pos[b + 2] * pos[c])
+      + pos[a + 2] * (pos[b] * pos[c + 1] - pos[b + 1] * pos[c]);
+  }
+  if (vol < 0) for (let t = 0; t < tris.length; t += 3) { const s = tris[t + 1]; tris[t + 1] = tris[t + 2]; tris[t + 2] = s; }
+  return { pos: new Float32Array(pos), idx: new Uint32Array(tris), vfun };
+}
+
+/* =====================================================================
+   4. Turning a field into bone meshes
+   parts: [{ id, f, k? }]  shapes that are blended together
+   carve: [f]               shapes cut away (sockets, holes, notches)
+   relabel(id, x, y, z)     optional: split one shape into several bones
+   Returns a Map from bone id to BufferGeometry.
+   ===================================================================== */
+function sculpt({ parts, carve = [], k = 0.004, ck = 0.0015, h = 0.0015, relabel = null, ao = 0.0035 }) {
+  const fs = parts.map(p => p.f), ks = parts.map(p => (p.k ?? k));
+  const n = fs.length, nc = carve.length;
+  // Distance to a shape's bounding box is a lower bound on the distance to
+  // the shape, so shapes whose box is far away can't change the blend and are
+  // skipped. Deep inside the bone the sign is already settled, so those are
+  // skipped too.
+  const pb = new Float64Array(n * 6), cb = new Float64Array(nc * 6);
+  fs.forEach((f, i) => pb.set(f.bb, i * 6));
+  carve.forEach((f, i) => cb.set(f.bb, i * 6));
+  const gap2 = (b, o, x, y, z) => {
+    const dx = b[o] - x > 0 ? b[o] - x : x - b[o + 3] > 0 ? x - b[o + 3] : 0;
+    const dy = b[o + 1] - y > 0 ? b[o + 1] - y : y - b[o + 4] > 0 ? y - b[o + 4] : 0;
+    const dz = b[o + 2] - z > 0 ? b[o + 2] - z : z - b[o + 5] > 0 ? z - b[o + 5] : 0;
+    return dx * dx + dy * dy + dz * dz;
+  };
+  const field = (x, y, z) => {
+    let d = fs[0](x, y, z);
+    for (let i = 1; i < n; i++) {
+      const lim = d + ks[i];
+      if (lim <= 0 || gap2(pb, i * 6, x, y, z) >= lim * lim) continue;
+      d = smoothMin(d, fs[i](x, y, z), ks[i]);
+    }
+    for (let i = 0; i < nc; i++) {
+      const lim = ck - d;
+      if (lim <= 0 || gap2(cb, i * 6, x, y, z) >= lim * lim) continue;
+      d = smoothMax(d, -carve[i](x, y, z), ck);
+    }
+    return d;
+  };
+  // For one block of the sampling grid, keep only the shapes that can matter
+  // there. minCorner is the smallest field value at the block's corners and
+  // diag its diagonal, which bound the field anywhere inside the block.
+  const boxGap = (b, o, lo, hi) => {
+    const dx = max(b[o] - hi[0], lo[0] - b[o + 3], 0);
+    const dy = max(b[o + 1] - hi[1], lo[1] - b[o + 4], 0);
+    const dz = max(b[o + 2] - hi[2], lo[2] - b[o + 5], 0);
+    return sqrt(dx * dx + dy * dy + dz * dz);
+  };
+  const localField = (lo, hi, minCorner, diag) => {
+    const pi = [], ci = [];
+    for (let i = 0; i < n; i++) if (boxGap(pb, i * 6, lo, hi) < minCorner + diag + ks[i]) pi.push(i);
+    for (let i = 0; i < nc; i++) if (boxGap(cb, i * 6, lo, hi) < ck - minCorner + diag) ci.push(i);
+    if (!pi.length) return field;
+    const np = pi.length, ncc = ci.length;
+    const f0 = fs[pi[0]];
+    return (x, y, z) => {
+      let d = f0(x, y, z);
+      for (let q = 1; q < np; q++) { const i = pi[q]; d = smoothMin(d, fs[i](x, y, z), ks[i]); }
+      for (let q = 0; q < ncc; q++) d = smoothMax(d, -carve[ci[q]](x, y, z), ck);
+      return d;
+    };
+  };
+  const bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+  for (const f of fs) for (let i = 0; i < 3; i++) { bb[i] = min(bb[i], f.bb[i]); bb[i + 3] = max(bb[i + 3], f.bb[i + 3]); }
+  const pad = 2 * h + k;
+  for (let i = 0; i < 3; i++) { bb[i] -= pad; bb[i + 3] += pad; }
+
+  const { pos, idx, vfun } = polygonize(field, bb, h, localField);
+  const nv = pos.length / 3;
+  const nor = new Float32Array(pos.length), col = new Float32Array(pos.length);
+  const e = h * 0.35;
+  const g = [0, 0, 0];
+  const gradient = (fl, x, y, z) => {      // four-tap tetrahedral gradient
+    const a = fl(x + e, y - e, z - e), b = fl(x - e, y - e, z + e);
+    const c = fl(x - e, y + e, z - e), d = fl(x + e, y + e, z + e);
+    g[0] = a - b - c + d; g[1] = -a - b + c + d; g[2] = -a + b - c + d;
+    const l = sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]) || 1;
+    g[0] /= l; g[1] /= l; g[2] /= l;
+  };
+  for (let v = 0; v < nv; v++) {
+    let x = pos[v * 3], y = pos[v * 3 + 1], z = pos[v * 3 + 2];
+    const fl = vfun[v];
+    gradient(fl, x, y, z);
+    const d = fl(x, y, z);
+    x -= g[0] * d; y -= g[1] * d; z -= g[2] * d;          // snap onto the surface
+    pos[v * 3] = x; pos[v * 3 + 1] = y; pos[v * 3 + 2] = z;
+    nor[v * 3] = g[0]; nor[v * 3 + 1] = g[1]; nor[v * 3 + 2] = g[2];
+    // Cheap ambient occlusion: how much closer is the bone than open space?
+    let occ = 0;
+    if (ao > 0) {
+      const w = [0.5, 0.3, 0.2];
+      for (let s = 1; s <= 3; s++) {
+        const dd = ao * s;
+        occ += w[s - 1] * clamp01((dd - field(x + g[0] * dd, y + g[1] * dd, z + g[2] * dd)) / dd);
+      }
+    }
+    const shade = 1 - 0.55 * occ;
+    col[v * 3] = shade; col[v * 3 + 1] = shade * 0.985; col[v * 3 + 2] = shade * 0.96;
+  }
+
+  // Decide which bone each triangle belongs to.
+  const ids = [...new Set(parts.map(p => p.id))];
+  const triLabel = new Array(idx.length / 3);
+  const needsLabel = ids.length > 1 || relabel;
+  for (let t = 0; t < idx.length; t += 3) {
+    let label = ids[0];
+    if (needsLabel) {
+      const a = idx[t] * 3, b = idx[t + 1] * 3, c = idx[t + 2] * 3;
+      const x = (pos[a] + pos[b] + pos[c]) / 3, y = (pos[a + 1] + pos[b + 1] + pos[c + 1]) / 3, z = (pos[a + 2] + pos[b + 2] + pos[c + 2]) / 3;
+      let best = Infinity;
+      for (let i = 0; i < n; i++) { const d = fs[i](x, y, z); if (d < best) { best = d; label = parts[i].id; } }
+      if (relabel) label = relabel(label, x, y, z);
+    }
+    triLabel[t / 3] = label;
+  }
+  return splitByLabel(pos, nor, col, idx, triLabel);
+}
+
+function splitByLabel(pos, nor, col, idx, triLabel) {
+  const groups = new Map();
+  for (let t = 0; t < triLabel.length; t++) {
+    const l = triLabel[t];
+    if (!groups.has(l)) groups.set(l, []);
+    groups.get(l).push(t);
+  }
+  const out = new Map();
+  for (const [label, list] of groups) {
+    const remap = new Map();
+    const P = [], Nn = [], C = [], I = [];
+    for (const t of list) for (let c = 0; c < 3; c++) {
+      const v = idx[t * 3 + c];
+      let nvI = remap.get(v);
+      if (nvI === undefined) {
+        nvI = P.length / 3; remap.set(v, nvI);
+        P.push(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]);
+        Nn.push(nor[v * 3], nor[v * 3 + 1], nor[v * 3 + 2]);
+        C.push(col[v * 3], col[v * 3 + 1], col[v * 3 + 2]);
+      }
+      I.push(nvI);
+    }
+    out.set(label, makeGeometry(P, Nn, C, I));
+  }
+  return out;
+}
+
+function makeGeometry(P, Nn, C, I) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(Nn, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+  g.setIndex(I.length > 65535 ? new THREE.Uint32BufferAttribute(I, 1) : new THREE.Uint16BufferAttribute(I, 1));
+  g.computeBoundingSphere(); g.computeBoundingBox();
+  return g;
+}
+
+// Single-bone shortcut: sculpt and return the one geometry.
+const sculptOne = spec => sculpt(spec).values().next().value;
+
+// Mirror a left-side geometry across the body's midline to get the right side.
+function mirrorGeometry(src) {
+  const g = src.clone();
+  const p = g.attributes.position.array, n = g.attributes.normal.array;
+  for (let i = 0; i < p.length; i += 3) { p[i] = -p[i]; n[i] = -n[i]; }
+  const ix = g.index.array;
+  for (let i = 0; i < ix.length; i += 3) { const s = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = s; }
+  g.computeBoundingSphere(); g.computeBoundingBox();
+  return g;
+}
+
+// Sweep an elliptical cross-section along a curve (ribs, cartilage, sternum).
+// a(t): half-width along the side axis, b(t): half-height along the "up" side.
+function sweep(points, { seg = 48, ring = 12, a, b, up = [0, 1, 0] }) {
+  const curve = new THREE.CatmullRomCurve3(points.map(p => new THREE.Vector3(...p)), false, 'centripetal');
+  const U = new THREE.Vector3(...up);
+  const P = [], Nn = [], C = [], I = [];
+  const side = new THREE.Vector3(), upv = new THREE.Vector3(), tmp = new THREE.Vector3();
+  const tangents = [];
+  for (let i = 0; i <= seg; i++) {
+    const t = i / seg;
+    const p = curve.getPointAt(t), T = curve.getTangentAt(t);
+    tangents.push(T.clone());
+    side.crossVectors(T, U);
+    if (side.lengthSq() < 1e-8) side.set(1, 0, 0);
+    side.normalize();
+    upv.crossVectors(side, T).normalize();
+    const ra = a(t), rb = b(t);
+    for (let j = 0; j < ring; j++) {
+      const th = (j / ring) * Math.PI * 2, c = Math.cos(th), s = Math.sin(th);
+      P.push(p.x + side.x * ra * c + upv.x * rb * s, p.y + side.y * ra * c + upv.y * rb * s, p.z + side.z * ra * c + upv.z * rb * s);
+      tmp.copy(side).multiplyScalar(c / ra).addScaledVector(upv, s / rb).normalize();
+      Nn.push(tmp.x, tmp.y, tmp.z);
+      C.push(1, 0.985, 0.96);
+    }
+  }
+  for (let i = 0; i < seg; i++) for (let j = 0; j < ring; j++) {
+    const j1 = (j + 1) % ring;
+    const A = i * ring + j, Bv = i * ring + j1, Cv = (i + 1) * ring + j1, D = (i + 1) * ring + j;
+    I.push(A, Cv, Bv, A, D, Cv);
+  }
+  // end caps
+  const capAt = (i, sign) => {
+    const p = curve.getPointAt(i / seg), T = tangents[i];
+    const c = P.length / 3;
+    P.push(p.x, p.y, p.z); Nn.push(T.x * sign, T.y * sign, T.z * sign); C.push(0.92, 0.9, 0.88);
+    for (let j = 0; j < ring; j++) {
+      const j1 = (j + 1) % ring;
+      if (sign < 0) I.push(c, i * ring + j, i * ring + j1); else I.push(c, i * ring + j1, i * ring + j);
+    }
+  };
+  capAt(0, -1); capAt(seg, 1);
+  return makeGeometry(P, Nn, C, I);
+}
+
+// Give a stock three.js geometry the attributes every bone mesh expects.
+function prepStock(g) {
+  if (g.index === null) g = g.toNonIndexed();
+  g.deleteAttribute('uv');
+  const n = g.attributes.position.count;
+  g.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(n * 3).fill(1), 3));
+  g.computeBoundingSphere(); g.computeBoundingBox();
+  return g;
+}
+
+function mergeGeometries(list) {
+  const P = [], Nn = [], C = [], I = [];
+  for (const g of list) {
+    const off = P.length / 3;
+    const p = g.attributes.position.array, n = g.attributes.normal.array;
+    const c = g.attributes.color ? g.attributes.color.array : null;
+    for (let i = 0; i < p.length; i++) { P.push(p[i]); Nn.push(n[i]); C.push(c ? c[i] : 1); }
+    if (g.index) for (const v of g.index.array) I.push(v + off);
+    else for (let v = 0; v < p.length / 3; v++) I.push(v + off);
+  }
+  return makeGeometry(P, Nn, C, I);
+}
+
+/* =====================================================================
+   5. What students read: names, groups and facts
+   ===================================================================== */
+const REGIONS = {
+  skull:    { name: 'Skull & hyoid',     color: '#ff8c69', division: 'axial' },
+  spine:    { name: 'Vertebral column',  color: '#ffd166', division: 'axial' },
+  thorax:   { name: 'Rib cage',          color: '#f472b6', division: 'axial' },
+  shoulder: { name: 'Shoulder girdle',   color: '#c084fc', division: 'appendicular' },
+  arm:      { name: 'Arms',              color: '#60a5fa', division: 'appendicular' },
+  hand:     { name: 'Hands',             color: '#2dd4bf', division: 'appendicular' },
+  pelvis:   { name: 'Pelvic girdle',     color: '#a3e635', division: 'appendicular' },
+  leg:      { name: 'Legs',              color: '#818cf8', division: 'appendicular' },
+  foot:     { name: 'Feet',              color: '#34d399', division: 'appendicular' },
+};
+const TYPES = {
+  long:      { name: 'Long bone',      color: '#ff8a5b', about: 'Longer than they are wide. They work as levers for movement (femur, humerus, finger bones).' },
+  short:     { name: 'Short bone',     color: '#3fd0a6', about: 'Roughly cube-shaped. They give stability with a little sliding movement (wrist and ankle bones).' },
+  flat:      { name: 'Flat bone',      color: '#5aa9e6', about: 'Thin and often curved. They protect organs and give muscles a broad place to attach (skull roof, ribs, sternum, scapula).' },
+  irregular: { name: 'Irregular bone', color: '#b48ef0', about: 'Complex shapes that fit no other group (vertebrae, hip bones, many face bones).' },
+  sesamoid:  { name: 'Sesamoid bone',  color: '#f2c14e', about: 'Small bones that grow inside a tendon (kneecap, pisiform).' },
+  cartilage: { name: 'Cartilage',      color: '#8fc9e8', about: 'Not bone: tough, flexible tissue that cushions and connects bones.' },
+  notbone:   { name: 'Not a bone',     color: '#f3efe4', about: '' },
+};
+const DIVISIONS = {
+  axial:        { name: 'Axial skeleton',        color: '#f08a5d', about: 'The central axis: skull, hyoid, spine, ribs and sternum (80 bones). It protects the brain, spinal cord and organs of the chest.' },
+  appendicular: { name: 'Appendicular skeleton', color: '#56a8e0', about: 'The limbs plus the girdles that attach them: shoulders, arms, hands, pelvis, legs and feet (126 bones). It is built for movement.' },
+};
+
+const GROUPS = {
+  cervical: { name: 'Cervical vertebrae', count: '7 (C1–C7)',
+    info: 'The seven neck vertebrae are the smallest and most mobile part of the spine. Each one has holes in its transverse processes (transverse foramina) that carry arteries up to the brain.',
+    fact: 'Almost every mammal, giraffes included, has exactly seven neck vertebrae. A giraffe’s are just much longer.' },
+  thoracic: { name: 'Thoracic vertebrae', count: '12 (T1–T12)',
+    info: 'Twelve mid-back vertebrae. Each one forms joints with a pair of ribs, and their long spinous processes point downward and overlap like roof shingles.',
+    fact: 'Because they are locked to the rib cage, the thoracic vertebrae are the least flexible part of the spine.' },
+  lumbar: { name: 'Lumbar vertebrae', count: '5 (L1–L5)',
+    info: 'The five vertebrae of the lower back carry the most body weight, so they have the largest and thickest bodies of the whole column.',
+    fact: 'Most lower back pain starts in the lumbar region, which takes the biggest load when you bend and lift.' },
+  ribs: { name: 'Ribs', count: '24 (12 pairs)',
+    info: 'Twelve pairs of curved flat bones that protect the heart and lungs. Every rib joins a thoracic vertebra at the back.',
+    fact: 'Men and women have the same number of ribs. The idea that men have one fewer is a myth.' },
+  carpals: { name: 'Carpals (wrist bones)', count: '8 per wrist, 16 total',
+    info: 'Eight short bones in two rows of four form the wrist. They glide against each other so the hand can bend and tilt.',
+    fact: 'Memory trick for the eight carpals, thumb side first: “Some Lovers Try Positions That They Can’t Handle” = Scaphoid, Lunate, Triquetrum, Pisiform, Trapezium, Trapezoid, Capitate, Hamate.' },
+  tarsals: { name: 'Tarsals (ankle bones)', count: '7 per foot, 14 total',
+    info: 'Seven short bones form the ankle and the back half of the foot. The talus links the leg to the foot and the calcaneus forms the heel.',
+    fact: 'Tarsals and carpals are cousins: both are short bones packed together so they can make small sliding movements.' },
+  hipbone: { name: 'Hip bone (os coxae)', count: '2 hip bones, each fused from 3 parts',
+    info: 'Each hip bone starts as three separate bones (ilium, ischium and pubis) that fuse together at the hip socket, the acetabulum.',
+    fact: 'In children the three parts are still separate. They fuse into one hip bone during the teenage years. Drag the Explode slider to see the three parts.' },
+};
+
+const BONES = {
+  // ---- skull ----
+  frontal:   { name: 'Frontal bone', aka: 'Forehead bone', region: 'skull', type: 'flat', count: '1',
+    info: 'Forms the forehead and the roofs of the eye sockets. It protects the frontal lobes of the brain, which handle planning, decisions and personality.',
+    fact: 'At birth the frontal bone is in two halves. They usually fuse in the first year or two; when they don’t, the leftover seam is called a metopic suture.' },
+  parietal:  { name: 'Parietal bone', region: 'skull', type: 'flat', count: '2',
+    info: 'A pair of curved plates that make the top and upper sides of the cranium. They meet each other along the midline at the sagittal suture.',
+    fact: 'A baby’s soft spot (the anterior fontanelle) is the gap where the two parietal bones and the frontal bone haven’t met yet. It closes by about age 2.' },
+  temporal:  { name: 'Temporal bone', region: 'skull', type: 'irregular', count: '2',
+    info: 'Forms the lower sides of the skull around the ears. It holds the middle and inner ear and forms the jaw joint (temporomandibular joint, TMJ) with the mandible.',
+    fact: 'Inside it are the three smallest bones in the body: the malleus, incus and stapes (ear ossicles). They are too tiny to show on this model.' },
+  occipital: { name: 'Occipital bone', region: 'skull', type: 'flat', count: '1',
+    info: 'Forms the back and base of the skull. The spinal cord passes through its large opening, the foramen magnum.',
+    fact: '“Foramen magnum” is Latin for “great hole”. The two knobs beside it rock on the atlas when you nod “yes”.' },
+  sphenoid:  { name: 'Sphenoid bone', region: 'skull', type: 'irregular', count: '1',
+    info: 'A butterfly-shaped bone in the base of the skull, visible at the temples. It touches every other cranial bone, so it is called the keystone of the cranium.',
+    fact: 'The pituitary gland, the “master gland” of the endocrine system, sits in a saddle-shaped dip of the sphenoid called the sella turcica (Turkish saddle).' },
+  nasal:     { name: 'Nasal bones', region: 'skull', type: 'flat', count: '2',
+    info: 'Two small bones that form the bridge of the nose. The rest of the nose is cartilage, which is why a skull has a hole where the nose was.',
+    fact: 'The nasal bones are the most commonly broken bones of the face.' },
+  maxilla:   { name: 'Maxilla', aka: 'Upper jaw', region: 'skull', type: 'irregular', count: '2 (fused)',
+    info: 'Two maxillae join to form the upper jaw. They hold the upper teeth and form the floor of the eye sockets and most of the hard palate.',
+    fact: 'The maxilla never moves when you chew. All the motion comes from the mandible below it.' },
+  zygomatic: { name: 'Zygomatic bone', aka: 'Cheekbone', region: 'skull', type: 'irregular', count: '2',
+    info: 'Forms the point of the cheek and the outer wall of the eye socket. Its arch reaches back to join the temporal bone.',
+    fact: 'Run a finger from your cheek back toward your ear and you can feel the zygomatic arch.' },
+  mandible:  { name: 'Mandible', aka: 'Lower jaw', region: 'skull', type: 'irregular', count: '1',
+    info: 'The only skull bone that moves (apart from the tiny ear bones). It holds the lower teeth and hinges at the temporomandibular joint in front of each ear.',
+    fact: 'The mandible is the largest and strongest bone of the face.' },
+  teeth:     { name: 'Teeth', aka: 'Not bones!', region: 'skull', type: 'notbone', count: '32 in most adults',
+    info: 'Teeth sit in sockets in the maxilla and mandible, but they are not bones. They are made of enamel, dentin and cementum and cannot heal themselves the way bone can.',
+    fact: 'Tooth enamel is the hardest substance in the human body, even harder than bone.' },
+  hyoid:     { name: 'Hyoid bone', region: 'skull', type: 'irregular', count: '1',
+    info: 'A small U-shaped bone in the front of the neck. It anchors the tongue and helps with swallowing and speaking.',
+    fact: 'The hyoid is the only bone that doesn’t form a joint with any other bone. Muscles and ligaments hold it in place.' },
+
+  // ---- spine ----
+  atlas:    { name: 'Atlas (C1)', region: 'spine', type: 'irregular', group: 'cervical', count: '1',
+    info: 'The first cervical vertebra holds up the skull. Unlike other vertebrae it has no body and no spinous process, just a ring of bone.',
+    fact: 'It is named after Atlas, the Titan of Greek myth who held up the sky.' },
+  axis:     { name: 'Axis (C2)', region: 'spine', type: 'irregular', group: 'cervical', count: '1',
+    info: 'The second cervical vertebra has a tooth-like peg, the dens, that points up into the ring of the atlas and acts as a pivot.',
+    fact: 'When you shake your head “no”, the atlas spins around the dens. It is a textbook pivot joint.' },
+  cervical: { name: 'Cervical vertebra', region: 'spine', type: 'irregular', group: 'cervical', count: '7 in the neck' },
+  thoracic: { name: 'Thoracic vertebra', region: 'spine', type: 'irregular', group: 'thoracic', count: '12 in the upper back' },
+  lumbar:   { name: 'Lumbar vertebra', region: 'spine', type: 'irregular', group: 'lumbar', count: '5 in the lower back' },
+  sacrum:   { name: 'Sacrum', region: 'spine', type: 'irregular', count: '1 (5 fused vertebrae)',
+    info: 'Five vertebrae that fuse during the late teens and twenties into one triangular bone. It wedges between the hip bones at the sacroiliac joints.',
+    fact: 'The rows of holes on its front (sacral foramina) let nerves pass out to the legs and pelvic organs.' },
+  coccyx:   { name: 'Coccyx', aka: 'Tailbone', region: 'spine', type: 'irregular', count: '1 (3–5 fused pieces)',
+    info: 'Three to five tiny vertebrae fused at the bottom of the spine. Several pelvic muscles and ligaments attach to it.',
+    fact: 'It is what remains of a tail. Human embryos have a visible tail for a few weeks before it is mostly absorbed.' },
+  disc:     { name: 'Intervertebral disc', aka: 'Cartilage, not bone', region: 'spine', type: 'cartilage', count: '23',
+    info: 'Pads of fibrocartilage between the vertebrae. Each has a tough outer ring and a gel-like centre that absorbs shock and lets the spine bend.',
+    fact: 'You are about 1–2 cm taller in the morning. Your discs soak up fluid overnight and get squeezed a little during the day.' },
+
+  // ---- rib cage ----
+  sternum:     { name: 'Sternum', aka: 'Breastbone', region: 'thorax', type: 'flat', count: '1 (3 parts)',
+    info: 'A flat bone in the centre of the chest made of three parts: the manubrium (top), the body (middle) and the xiphoid process (tip). Most ribs join it through cartilage.',
+    fact: 'The sternum is full of red marrow that makes blood cells, and doctors can take marrow samples from it.' },
+  trueRib:     { name: 'True rib', region: 'thorax', type: 'flat', group: 'ribs', count: '7 pairs (ribs 1–7)',
+    info: 'Ribs 1–7 are “true” ribs: each joins the sternum directly through its own strip of costal cartilage.',
+    fact: 'With every breath your ribs swing up and out, a bit like the handle of a bucket, to make room for your lungs.' },
+  falseRib:    { name: 'False rib', region: 'thorax', type: 'flat', group: 'ribs', count: '3 pairs (ribs 8–10)',
+    info: 'Ribs 8–10 are “false” ribs: they reach the sternum only indirectly, because their cartilage joins the cartilage of the rib above.',
+    fact: 'The joined cartilages of ribs 7–10 make the curved lower edge of the rib cage, the costal margin. You can feel it below your chest.' },
+  floatingRib: { name: 'Floating rib', region: 'thorax', type: 'flat', group: 'ribs', count: '2 pairs (ribs 11–12)',
+    info: 'Ribs 11 and 12 don’t attach to the sternum at all. Their front ends are free, tucked into the muscles of the abdominal wall.',
+    fact: 'Floating ribs still join the spine at the back, so they are only “floating” at the front.' },
+  costal:      { name: 'Costal cartilage', aka: 'Cartilage, not bone', region: 'thorax', type: 'cartilage', count: '10 pairs',
+    info: 'Bars of flexible hyaline cartilage connect the ribs to the sternum. Their springiness lets the chest expand when you breathe in.',
+    fact: 'Costal cartilage slowly hardens (calcifies) with age, which makes the chest wall stiffer.' },
+
+  // ---- shoulder girdle ----
+  clavicle: { name: 'Clavicle', aka: 'Collarbone', region: 'shoulder', type: 'long', count: '2',
+    info: 'An S-shaped bone that props the shoulder out to the side. It is the only bony link between the arm and the trunk: sternum to clavicle to scapula.',
+    fact: 'It is one of the most commonly broken bones, often from a fall onto an outstretched hand. It is also the first bone to start hardening before birth.' },
+  scapula:  { name: 'Scapula', aka: 'Shoulder blade', region: 'shoulder', type: 'flat', count: '2',
+    info: 'A flat triangular bone on the upper back. Its shallow socket, the glenoid cavity, holds the head of the humerus, and the acromion forms the top of the shoulder.',
+    fact: 'The scapula has no joint with the ribs. It slides over them held only by muscle, which gives the shoulder its huge range of motion.' },
+
+  // ---- arm ----
+  humerus: { name: 'Humerus', aka: 'Upper arm bone', region: 'arm', type: 'long', count: '2',
+    info: 'The long bone of the upper arm. Its round head fits the scapula in a ball-and-socket joint, and its lower end forms the elbow hinge with the radius and ulna.',
+    fact: 'The “funny bone” isn’t a bone. It is the ulnar nerve, which runs right past a bump on the humerus (the medial epicondyle).' },
+  radius:  { name: 'Radius', region: 'arm', type: 'long', count: '2',
+    info: 'The forearm bone on the thumb side. It rolls around the ulna so you can turn your palm up or down.',
+    fact: 'A broken wrist is usually a break near the lower end of the radius. It is one of the most common fractures of all.' },
+  ulna:    { name: 'Ulna', region: 'arm', type: 'long', count: '2',
+    info: 'The forearm bone on the little-finger side. Its hooked top, the olecranon, is the point of your elbow.',
+    fact: 'When you lean on your elbow, you are resting on the olecranon of your ulna.' },
+
+  // ---- hand ----
+  scaphoid:   { name: 'Scaphoid', region: 'hand', type: 'short', group: 'carpals', count: '2', note: 'Boat-shaped, on the thumb side. It is the carpal broken most often.' },
+  lunate:     { name: 'Lunate', region: 'hand', type: 'short', group: 'carpals', count: '2', note: 'Named for its crescent-moon shape (luna = moon).' },
+  triquetrum: { name: 'Triquetrum', region: 'hand', type: 'short', group: 'carpals', count: '2', note: 'A three-cornered (triangular) bone on the little-finger side.' },
+  pisiform:   { name: 'Pisiform', region: 'hand', type: 'sesamoid', group: 'carpals', count: '2', note: 'Pea-shaped, and a sesamoid bone that grows inside a tendon. Feel it as the bump at the heel of your hand.' },
+  trapezium:  { name: 'Trapezium', region: 'hand', type: 'short', group: 'carpals', count: '2', note: 'Forms a saddle joint with the thumb, the joint that lets you oppose your thumb.' },
+  trapezoid:  { name: 'Trapezoid', region: 'hand', type: 'short', group: 'carpals', count: '2', note: 'The smallest carpal of the lower row, wedged beside the trapezium.' },
+  capitate:   { name: 'Capitate', region: 'hand', type: 'short', group: 'carpals', count: '2', note: 'The largest carpal, sitting right in the centre of the wrist.' },
+  hamate:     { name: 'Hamate', region: 'hand', type: 'short', group: 'carpals', count: '2', note: 'Has a little hook (hamulus) on its palm side that you can feel near the base of your little finger.' },
+  metacarpal: { name: 'Metacarpal', region: 'hand', type: 'long', count: '5 per hand',
+    info: 'Five long bones form the palm, numbered I (thumb) to V (little finger). Their rounded heads are your knuckles.',
+    fact: 'A “boxer’s fracture” is a break of the 5th metacarpal, usually from punching something hard.' },
+  phalanxHand: { name: 'Phalanx (finger bone)', region: 'hand', type: 'long', count: '14 per hand',
+    info: 'Each finger has three phalanges (proximal, middle and distal) and the thumb has two, for 14 per hand.',
+    fact: 'There are no muscles inside your fingers. Tendons pull on the phalanges from muscles in the forearm and palm.' },
+
+  // ---- pelvis ----
+  ilium:     { name: 'Ilium', region: 'pelvis', type: 'irregular', group: 'hipbone', count: '2 (part of each hip bone)',
+    info: 'The large wing-shaped top part of the hip bone. Its upper edge is the iliac crest, the ridge you feel when you put your hands on your hips.',
+    fact: 'The iliac crest is the most common place for doctors to take bone marrow samples.' },
+  ischium:   { name: 'Ischium', region: 'pelvis', type: 'irregular', group: 'hipbone', count: '2 (part of each hip bone)',
+    info: 'The lower back part of the hip bone. Its thick ischial tuberosities are your “sit bones”: they carry your weight when you sit.',
+    fact: 'Sit on your hands and the two hard knobs you feel are your ischial tuberosities.' },
+  pubis:     { name: 'Pubis', region: 'pelvis', type: 'irregular', group: 'hipbone', count: '2 (part of each hip bone)',
+    info: 'The front part of the hip bone. The left and right pubic bones meet at a cartilage joint called the pubic symphysis.',
+    fact: 'Forensic scientists use the pelvis to estimate sex: female pelvises are usually wider with a rounder opening, an adaptation for childbirth.' },
+  symphysis: { name: 'Pubic symphysis', aka: 'Cartilage joint', region: 'pelvis', type: 'cartilage', count: '1',
+    info: 'A pad of fibrocartilage joining the two pubic bones at the front of the pelvis. It allows only a tiny bit of movement.',
+    fact: 'Hormones loosen the pubic symphysis slightly during pregnancy so the pelvis can widen for birth.' },
+
+  // ---- leg ----
+  femur:   { name: 'Femur', aka: 'Thigh bone', region: 'leg', type: 'long', count: '2',
+    info: 'The longest, heaviest and strongest bone in the body. Its ball-shaped head fits the hip socket and its lower end forms the top of the knee.',
+    fact: 'A femur is roughly a quarter of a person’s height, so forensic scientists can estimate height from one thigh bone.' },
+  patella: { name: 'Patella', aka: 'Kneecap', region: 'leg', type: 'sesamoid', count: '2',
+    info: 'A sesamoid bone that grows inside the quadriceps tendon. It shields the front of the knee and gives the thigh muscles better leverage.',
+    fact: 'Babies are born with kneecaps made of cartilage. They begin turning to bone at about 3–5 years old.' },
+  tibia:   { name: 'Tibia', aka: 'Shinbone', region: 'leg', type: 'long', count: '2',
+    info: 'The larger lower-leg bone, which carries almost all of the body’s weight to the foot. The bump on the inside of your ankle is its medial malleolus.',
+    fact: 'The front edge of the tibia sits right under the skin, which is why a kick to the shin hurts so much.' },
+  fibula:  { name: 'Fibula', region: 'leg', type: 'long', count: '2',
+    info: 'The thin bone on the outer side of the lower leg. It carries little weight but anchors muscles and forms the outer ankle bump (lateral malleolus).',
+    fact: 'Since it isn’t needed for weight-bearing, surgeons sometimes borrow a piece of the fibula to rebuild a damaged jaw.' },
+
+  // ---- foot ----
+  talus:     { name: 'Talus', region: 'foot', type: 'short', group: 'tarsals', count: '2', note: 'The ankle bone that sits between the tibia and fibula. No muscles attach to it at all.' },
+  calcaneus: { name: 'Calcaneus', aka: 'Heel bone', region: 'foot', type: 'short', group: 'tarsals', count: '2', note: 'The largest tarsal. The Achilles tendon, the strongest tendon in the body, attaches to it.' },
+  navicular: { name: 'Navicular', region: 'foot', type: 'short', group: 'tarsals', count: '2', note: 'Boat-shaped (navis = ship), on the inner side of the foot.' },
+  cuboid:    { name: 'Cuboid', region: 'foot', type: 'short', group: 'tarsals', count: '2', note: 'Cube-shaped, on the outer side of the foot.' },
+  cuneiform: { name: 'Cuneiform', region: 'foot', type: 'short', group: 'tarsals', count: '3 per foot', note: 'Three wedge-shaped bones (medial, intermediate and lateral) that help form the arch.' },
+  metatarsal: { name: 'Metatarsal', region: 'foot', type: 'long', count: '5 per foot',
+    info: 'Five long bones between the ankle and the toes. Together with the tarsals they form the arches of the foot.',
+    fact: 'Metatarsal stress fractures are common in runners and soldiers, and are nicknamed “march fractures”.' },
+  phalanxFoot: { name: 'Phalanx (toe bone)', region: 'foot', type: 'long', count: '14 per foot',
+    info: 'The big toe (hallux) has two phalanges and each other toe has three, for 14 per foot.',
+    fact: 'Your two feet hold 52 bones, about a quarter of all the bones in your body.' },
+};
+
+const BODY_COUNTS = [
+  ['Skull (cranium 8, face 14)', 22], ['Middle-ear ossicles', 6], ['Hyoid', 1], ['Vertebral column', 26],
+  ['Ribs and sternum', 25], ['Shoulder girdles', 4], ['Arms', 6], ['Hands', 54], ['Hip bones', 2], ['Legs', 8], ['Feet', 52],
+];
+
+/* =====================================================================
+   6. Scene and registry
+   ===================================================================== */
+const stage = document.getElementById('stage');
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+} catch (err) {
+  document.getElementById('fail').style.display = 'flex';
+  throw err;
+}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+stage.appendChild(renderer.domElement);
+
+const labelRenderer = new CSS2DRenderer({ element: document.getElementById('label-layer') });
+labelRenderer.setSize(window.innerWidth, window.innerHeight);
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(36, window.innerWidth / window.innerHeight, 0.01, 50);
+const HOME = { target: new THREE.Vector3(0, 0.9, 0), pos: new THREE.Vector3(1.15, 1.35, 3.1) };
+// Tall narrow screens (phones) need the camera farther back to fit the whole skeleton.
+const fitScale = () => Math.max(1, 0.75 / camera.aspect);
+const homePos = () => HOME.target.clone().add(HOME.pos.clone().sub(HOME.target).multiplyScalar(fitScale()));
+camera.position.copy(homePos());
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(HOME.target);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 0.12;
+controls.maxDistance = 7;
+controls.maxPolarAngle = Math.PI * 0.93;
+controls.autoRotateSpeed = 0.9;
+controls.update();
+
+scene.add(new THREE.HemisphereLight(0xe2ebff, 0x3a3226, 0.55));
+const key = new THREE.DirectionalLight(0xfff3e2, 2.1);
+key.position.set(2.2, 4, 3);
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x9cc8ff, 1.1);
+rim.position.set(-2.5, 2.2, -3);
+scene.add(rim);
+const fill = new THREE.DirectionalLight(0xffffff, 0.45);
+fill.position.set(-2, 0.5, 2.5);
+scene.add(fill);
+
+// Display base under the feet
+{
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.48, 0.035, 72),
+    new THREE.MeshStandardMaterial({ color: 0x1a2236, roughness: 0.45, metalness: 0.35 }));
+  base.position.y = -0.0175;
+  scene.add(base);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.46, 0.0025, 8, 120),
+    new THREE.MeshBasicMaterial({ color: 0x4fd1ff, transparent: true, opacity: 0.55 }));
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.0005;
+  scene.add(ring);
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const cx = cv.getContext('2d');
+  const grd = cx.createRadialGradient(64, 64, 4, 64, 64, 64);
+  grd.addColorStop(0, 'rgba(0,0,0,0.55)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+  cx.fillStyle = grd; cx.fillRect(0, 0, 128, 128);
+  const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.62),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false }));
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.set(0, 0.001, 0.04);
+  scene.add(shadow);
+}
+
+const skeleton = new THREE.Group();
+scene.add(skeleton);
+const bones = [];          // every pickable mesh
+const BONE_COLOR = new THREE.Color('#e9dcc2');
+const sharedCenter = new THREE.Vector3();
+
+function makeMaterial(type) {
+  if (type === 'cartilage') {
+    return new THREE.MeshStandardMaterial({ color: TYPES.cartilage.color, roughness: 0.35, metalness: 0, transparent: true, opacity: 0.82, vertexColors: true, envMapIntensity: 0.7 });
+  }
+  return new THREE.MeshStandardMaterial({ color: BONE_COLOR, roughness: 0.62, metalness: 0, vertexColors: true, envMapIntensity: 0.55 });
+}
+
+// side: 'Left' | 'Right' | ''   (the skeleton's own left, which is the viewer's right from the front)
+function addBone(geom, key, { side = '', name = null, detail = '' } = {}) {
+  const info = BONES[key];
+  if (!info) throw new Error('Unknown bone ' + key);
+  const mesh = new THREE.Mesh(geom, makeMaterial(info.type));
+  const baseName = name || info.name;
+  mesh.userData = {
+    key, side, detail, info,
+    region: info.region,
+    title: (side ? side + ' ' + baseName.charAt(0).toLowerCase() + baseName.slice(1) : baseName),
+    baseName,
+  };
+  geom.boundingBox.getCenter(sharedCenter);
+  mesh.userData.center = sharedCenter.clone();
+  skeleton.add(mesh);
+  bones.push(mesh);
+  return mesh;
+}
+function addPair(geomLeft, key, opts = {}) {
+  const l = addBone(geomLeft, key, { ...opts, side: 'Left' });
+  const r = addBone(mirrorGeometry(geomLeft), key, { ...opts, side: 'Right' });
+  return [l, r];
+}
+
+/* =====================================================================
+   7. Building the skeleton, region by region
+   Units are metres, feet on y = 0, facing +z. The skeleton's left is +x.
+   Bilateral bones are sculpted once on the left and mirrored.
+   ===================================================================== */
+const SPINE = {};   // filled by buildSpine: frames for each vertebra
+
+// ---------- Skull ----------
+function buildSkull() {
+  const O = [0, 1.675, 0];                  // reference point at the middle of the head
+  const L = (x, y, z) => [x + O[0], y + O[1], z + O[2]];
+  const both = (fn) => [fn(1), fn(-1)].flat();
+  const parts = [];
+  const put = (id, f, k) => parts.push({ id, f, k });
+  const BC = [0, -0.01, -0.006], BR = [0.069, 0.084, 0.095];   // braincase centre and radii
+
+  // Braincase. The base slopes down toward the back, like the real cranial floor.
+  put('brain', SD.clip(SD.ellipsoid(L(...BC), BR), [0, -1, 0.3], L(0, -0.046, 0), 0.024));
+  // Rounded cranial base underneath: occipital behind, temporal at the sides, sphenoid in front
+  put('occ', SD.ellipsoid(L(0, -0.044, -0.04), [0.046, 0.018, 0.048]));
+  put('sph', SD.ellipsoid(L(0, -0.05, 0.018), [0.034, 0.013, 0.024]));
+  both(s => {
+    put('temp' + s, SD.ellipsoid(L(s * 0.045, -0.047, -0.012), [0.02, 0.016, 0.03]));
+    put('occ', SD.ellipsoid(L(s * 0.013, -0.059, -0.012), [0.0055, 0.004, 0.009]));   // condyles that rest on the atlas
+  });
+  // Brow ridge and the forehead above the eyes
+  put('frontal', SD.ellipsoid(L(0, -0.004, 0.068), [0.055, 0.03, 0.027]));
+  put('frontal', SD.sphere(L(0, -0.016, 0.089), 0.0075));
+
+  // Rims around the eye sockets, split between the bones that really form them
+  both(s => {
+    const c = [s * 0.032, -0.031, 0.087];
+    const N = 12;
+    let prev = null;
+    for (let i = 0; i <= N; i++) {
+      const a = (i / N) * Math.PI * 2;
+      const lateral = Math.cos(a) * s;                        // +1 toward the side of the head
+      const p = L(c[0] + s * Math.cos(a) * 0.0195, c[1] + Math.sin(a) * 0.0175, c[2] - max(0, lateral) * 0.012 + (Math.sin(a) > 0 ? 0.002 : 0));
+      if (prev) {
+        const mid = a - Math.PI / N;
+        // top of the rim is frontal, the outer side zygomatic, the inner and lower side maxilla
+        const id = Math.sin(mid) > 0.35 ? 'frontal' : Math.cos(mid) > 0.2 ? 'zyg' + s : 'max';
+        put(id, SD.capsule(prev, p, 0.0042));
+      }
+      prev = p;
+    }
+    put('frontal', SD.capsule(L(s * 0.05, -0.013, 0.076), L(s * 0.013, -0.012, 0.089), 0.0058));
+  });
+
+  // Cheekbones and the arches that run back to the ears
+  both(s => {
+    put('zyg' + s, SD.ellipsoid(L(s * 0.05, -0.046, 0.066), [0.0065, 0.014, 0.013], basisFrom([s * 0.75, 0, 0.66], [0, 1, 0])));
+    // the arch is a flat bar: front half zygomatic, back half temporal
+    const a0 = L(s * 0.057, -0.044, 0.054), a1 = L(s * 0.057, -0.054, 0.054);
+    const b0 = L(s * 0.0655, -0.043, 0.016), b1 = L(s * 0.0655, -0.052, 0.016);
+    const c0 = L(s * 0.062, -0.042, -0.012), c1 = L(s * 0.062, -0.05, -0.012);
+    put('zyg' + s, SD.plate(a0, a1, b0, 0.0024));
+    put('zyg' + s, SD.plate(b0, a1, b1, 0.0024));
+    put('temp' + s, SD.plate(b0, b1, c0, 0.0024));
+    put('temp' + s, SD.plate(c0, b1, c1, 0.0024));
+    put('temp' + s, SD.ellipsoid(L(s * 0.058, -0.04, -0.028), [0.006, 0.009, 0.01]));
+    put('temp' + s, SD.ellipsoid(L(s * 0.05, -0.059, -0.04), [0.007, 0.011, 0.008]));
+  });
+
+  // Upper jaw: body, the horseshoe that holds the teeth, and the sides of the nose
+  put('max', SD.ellipsoid(L(0, -0.063, 0.058), [0.031, 0.023, 0.025]));
+  const arch = [[0.0295, -0.08, 0.036], [0.027, -0.0815, 0.058], [0.0165, -0.0825, 0.078], [0, -0.083, 0.086]];
+  const archFull = [...arch.map(p => L(...p)), ...arch.slice(0, 3).reverse().map(p => L(-p[0], p[1], p[2]))];
+  SD.chain(archFull, 0.0075).forEach(f => put('max', f));
+  both(s => {
+    put('max', SD.capsule(L(s * 0.012, -0.068, 0.092), L(s * 0.0105, -0.03, 0.089), 0.0045));
+    put('nas', SD.capsule(L(s * 0.003, -0.02, 0.094), L(s * 0.0068, -0.042, 0.103), 0.0036));
+  });
+  put('occ', SD.sphere(L(0, -0.028, -0.098), 0.0075));
+
+  const carve = [
+    ...both(s => [SD.ellipsoid(L(s * 0.031, -0.031, 0.076), [0.0165, 0.0148, 0.034])]),   // eye sockets
+    SD.ellipsoid(L(0, -0.058, 0.097), [0.0105, 0.016, 0.026]),                             // nasal opening
+    SD.sphere(L(0, -0.07, 0.097), 0.0115),
+    SD.sphere(L(0, -0.064, -0.02), 0.0135),                                                // foramen magnum
+    ...both(s => [SD.sphere(L(s * 0.064, -0.042, -0.028), 0.0036)]),                       // ear canals
+  ];
+
+  const relabel = (id, x, y, z) => {
+    const lx = x - O[0], ly = y - O[1], lz = z - O[2];
+    const side = lx >= 0 ? 'L' : 'R';
+    if (id === 'brain') {
+      const nx = lx / BR[0], ny = (ly - BC[1]) / BR[1], nz = (lz - BC[2]) / BR[2];
+      if (nz + 0.6 * ny < -0.55 || (ny < -0.42 && nz < -0.2)) return 'occipital';
+      if (abs(nx) > 0.62 && ny < 0.0 && nz > 0.1 && nz < 0.62) return 'sphenoid';
+      if (nz > 0.32 - 0.12 * ny && ny > -0.6) return 'frontal';
+      if (abs(nx) > 0.55 && ny < 0.3 - 0.35 * abs(nz)) return 'temporal' + side;
+      if (ny < -0.45) return 'sphenoid';
+      return 'parietal' + side;
+    }
+    if (id.startsWith('zyg')) return 'zygomatic' + side;
+    if (id.startsWith('temp')) return 'temporal' + side;
+    if (id === 'max') return 'maxilla' + side;
+    if (id === 'nas') return 'nasal';
+    if (id === 'occ') return 'occipital';
+    if (id === 'sph') return 'sphenoid';
+    return id;
+  };
+  const geoms = sculpt({ parts, carve, k: 0.0055, ck: 0.0035, h: 0.0015, relabel, ao: 0.0055 });
+  const map = {
+    frontal: ['frontal'], occipital: ['occipital'], sphenoid: ['sphenoid'], nasal: ['nasal'],
+    parietalL: ['parietal', 'Left'], parietalR: ['parietal', 'Right'], temporalL: ['temporal', 'Left'], temporalR: ['temporal', 'Right'],
+    zygomaticL: ['zygomatic', 'Left'], zygomaticR: ['zygomatic', 'Right'], maxillaL: ['maxilla', 'Left'], maxillaR: ['maxilla', 'Right'],
+  };
+  for (const [id, g] of geoms) {
+    const m = map[id];
+    if (m) addBone(g, m[0], { side: m[1] || '' });
+  }
+
+  // Lower jaw: a thin curved plate with a rounded lower border, plus the two rami
+  const mp = [];
+  const mput = f => mp.push({ id: 'm', f });
+  const alv = [[0.042, -0.098, 0.008], [0.034, -0.1, 0.022], [0.028, -0.101, 0.04], [0.025, -0.102, 0.054], [0.0195, -0.103, 0.066], [0.0105, -0.104, 0.075], [0, -0.104, 0.078]];
+  const low = [[0.049, -0.121, -0.002], [0.046, -0.125, 0.012], [0.041, -0.127, 0.03], [0.035, -0.129, 0.048], [0.026, -0.131, 0.064], [0.014, -0.133, 0.076], [0, -0.134, 0.08]];
+  const full = list => [...list.map(p => L(...p)), ...list.slice(0, -1).reverse().map(p => L(-p[0], p[1], p[2]))];
+  const A = full(alv), B = full(low);
+  for (let i = 0; i < A.length - 1; i++) {
+    mput(SD.plate(B[i], B[i + 1], A[i], 0.0034));
+    mput(SD.plate(A[i], B[i + 1], A[i + 1], 0.0034));
+  }
+  SD.chain(B, 0.0052).forEach(mput);
+  SD.chain(A, 0.0042).forEach(mput);
+  mput(SD.ellipsoid(L(0, -0.129, 0.081), [0.012, 0.0085, 0.0062]));
+  both(s => {
+    const angle = L(s * 0.049, -0.119, -0.0), back = L(s * 0.05, -0.094, -0.011), neck = L(s * 0.051, -0.064, -0.013);
+    const notch = L(s * 0.048, -0.077, 0.004), coro = L(s * 0.045, -0.06, 0.02), front = L(s * 0.042, -0.098, 0.008);
+    mput(SD.plate(angle, back, notch, 0.0026));
+    mput(SD.plate(back, neck, notch, 0.0026));
+    mput(SD.plate(angle, notch, front, 0.0026));
+    mput(SD.plate(notch, coro, front, 0.0026));
+    SD.chain([L(s * 0.046, -0.125, 0.012), angle, back, neck], [0.0048, 0.0048, 0.0042, 0.0042]).forEach(mput);
+    mput(SD.capsule(front, coro, 0.0036, 0.0022));
+    mput(SD.ellipsoid(L(s * 0.051, -0.056, -0.013), [0.0095, 0.0048, 0.0058]));
+  });
+  addBone(sculptOne({ parts: mp, k: 0.004, h: 0.0013, ao: 0.004 }), 'mandible');
+
+  // Teeth: simple crowns set along the two dental arches
+  const teeth = [];
+  const T = [0.1, 0.32, 0.56, 0.8, 1.0, 1.18, 1.34, 1.48];
+  const R = [0.0034, 0.003, 0.0035, 0.004, 0.004, 0.0052, 0.0052, 0.0048];
+  const H = [0.0058, 0.0052, 0.0078, 0.004, 0.004, 0.0016, 0.0016, 0.0016];
+  for (const s of [1, -1]) for (let i = 0; i < 8; i++) for (const upper of [true, false]) {
+    const t = T[i], sc = upper ? 1 : 0.92;
+    const r = R[i] * sc, half = H[i] / 2 + r;
+    const x = s * 0.0282 * Math.sin(t) * (upper ? 1 : 0.94);
+    const z = upper ? 0.084 - 0.046 * (1 - Math.cos(t)) : 0.0775 - 0.044 * (1 - Math.cos(t));
+    const g = new THREE.CapsuleGeometry(r, H[i], 3, 10);
+    if (i < 2) g.scale(1, 1, 0.6);
+    g.rotateY(s * t);
+    const y = upper ? -0.0955 + half : -0.0965 - half;     // crowns meet at the bite line
+    g.translate(...L(x, y, z));
+    teeth.push(prepStock(g));
+  }
+  addBone(mergeGeometries(teeth), 'teeth');
+
+  // Hyoid in the front of the neck
+  const hy = [];
+  hy.push({ id: 'h', f: SD.capsule([-0.009, 1.53, 0.032], [0.009, 1.53, 0.032], 0.0036) });
+  both(s => {
+    SD.chain([[s * 0.009, 1.53, 0.032], [s * 0.018, 1.533, 0.022], [s * 0.022, 1.537, 0.007]], [0.0028, 0.0022, 0.0018]).forEach(f => hy.push({ id: 'h', f }));
+    hy.push({ id: 'h', f: SD.sphere([s * 0.009, 1.5345, 0.029], 0.0022) });
+  });
+  addBone(sculptOne({ parts: hy, k: 0.003, h: 0.0009 }), 'hyoid');
+}
+
+// ---------- Vertebral column ----------
+const SPINE_POINTS = [
+  [0, 1.614, -0.014], [0, 1.565, -0.007], [0, 1.51, -0.015], [0, 1.455, -0.038], [0, 1.37, -0.064],
+  [0, 1.27, -0.072], [0, 1.18, -0.058], [0, 1.11, -0.038], [0, 1.05, -0.026], [0, 0.995, -0.034],
+];
+
+function vertebraList() {
+  const list = [];
+  list.push({ name: 'C1', key: 'atlas', kind: 'atlas', rx: 0.01, rz: 0.008, hh: 0.0055, gap: 0.0025 });
+  list.push({ name: 'C2', key: 'axis', kind: 'axis', rx: 0.0095, rz: 0.0082, hh: 0.0085, gap: 0.0038 });
+  for (let i = 3; i <= 7; i++) {
+    const t = (i - 3) / 4;
+    list.push({ name: 'C' + i, key: 'cervical', kind: 'cervical', rx: lerp(0.0105, 0.012, t), rz: lerp(0.0076, 0.0086, t), hh: 0.0062, gap: 0.0038 });
+  }
+  for (let i = 1; i <= 12; i++) {
+    const t = (i - 1) / 11;
+    list.push({ name: 'T' + i, key: 'thoracic', kind: 'thoracic', rx: lerp(0.0125, 0.0195, t), rz: lerp(0.0102, 0.0162, t), hh: lerp(0.0075, 0.0112, t), gap: lerp(0.0042, 0.0065, t), t });
+  }
+  for (let i = 1; i <= 5; i++) {
+    const t = (i - 1) / 4;
+    list.push({ name: 'L' + i, key: 'lumbar', kind: 'lumbar', rx: lerp(0.021, 0.025, t), rz: lerp(0.0158, 0.018, t), hh: lerp(0.0125, 0.013, t), gap: lerp(0.0078, 0.009, t) });
+  }
+  return list;
+}
+
+function vertebraParts(v) {
+  const P = [];
+  const put = (f, k) => P.push({ id: 'v', f, k });
+  const { rx, rz, hh } = v;
+  if (v.kind === 'atlas') {
+    const ant = [[-0.017, 0, 0.004], [-0.009, 0, 0.0115], [0, 0, 0.0135], [0.009, 0, 0.0115], [0.017, 0, 0.004]];
+    SD.chain(ant, 0.0034).forEach(f => put(f));
+    for (const s of [1, -1]) {
+      put(SD.ellipsoid([s * 0.0165, 0, -0.001], [0.0062, 0.0058, 0.0095]));
+      SD.chain([[s * 0.017, 0, -0.008], [s * 0.012, 0, -0.02], [0, 0, -0.026]], [0.0032, 0.003, 0.0032]).forEach(f => put(f));
+      put(SD.capsule([s * 0.02, 0, -0.002], [s * 0.035, -0.001, -0.004], 0.0036, 0.003));
+    }
+    put(SD.sphere([0, 0, -0.027], 0.0038));
+    put(SD.sphere([0, 0, 0.0145], 0.0035));
+    return P;
+  }
+  put(SD.ovalCylinder([0, 0, 0], rx, rz, hh, 0.0024));
+  const prm = {
+    axis:     { rp: 0.0028, cw: 0.0095, pl: 0.0045, lam: 0.009, spL: 0.017, spD: 0.006, spR: 0.0038, tpW: 0.02, tpB: 0.0, tpR: 0.0028, bifid: true },
+    cervical: { rp: 0.0026, cw: 0.0102, pl: 0.0045, lam: 0.0085, spL: 0.011, spD: 0.004, spR: 0.0026, tpW: 0.025, tpB: 0.0, tpR: 0.0028, bifid: true },
+    thoracic: { rp: 0.0033, cw: 0.0074, pl: 0.0065, lam: 0.0068, spL: 0.024, spD: 0.02, spR: 0.0032, tpW: 0.031, tpB: 0.012, tpR: 0.0034 },
+    lumbar:   { rp: 0.0046, cw: 0.0095, pl: 0.0085, lam: 0.0078, spL: 0.026, spD: 0.006, spR: 0.0052, tpW: 0.038, tpB: 0.004, tpR: 0.0036, hatchet: true },
+  }[v.kind];
+  let spD = prm.spD, spL = prm.spL;
+  if (v.kind === 'thoracic') {         // spines droop most in the middle of the back
+    const bell = Math.sin(Math.PI * v.t);
+    spD = 0.008 + 0.016 * bell; spL = 0.021 + 0.007 * bell;
+  }
+  const px = prm.cw + prm.rp;           // pedicles stand either side of the spinal canal
+  const zb = -rz * 0.72, zp = -rz - prm.pl, zl = zp - prm.lam;
+  for (const s of [1, -1]) {
+    put(SD.capsule([s * min(px, rx * 0.78), 0, zb], [s * px, 0, zp], prm.rp));
+    put(SD.capsule([s * px, 0, zp], [0, -hh * 0.2, zl], prm.rp * 0.9));
+    if (v.kind === 'cervical' || v.kind === 'axis') {
+      put(SD.capsule([s * rx * 0.75, 0.0005, -rz * 0.25], [s * prm.tpW, -0.001, -rz * 0.55], prm.tpR, prm.tpR * 0.8));
+    } else {
+      put(SD.capsule([s * px, 0.0005, zp + 0.002], [s * prm.tpW, 0.002, zp - prm.tpB], prm.tpR, prm.tpR * 0.85));
+    }
+    put(SD.sphere([s * px, hh * 0.95, zp], prm.rp * 1.05));
+    put(SD.sphere([s * px, -hh * 0.95, zp - 0.002], prm.rp));
+  }
+  const root = [0, -hh * 0.2, zl];
+  if (prm.bifid) {
+    const fork = [0, -spD * 0.6, zl - spL * 0.6];
+    put(SD.capsule(root, fork, prm.spR));
+    for (const s of [1, -1]) put(SD.capsule(fork, [s * 0.0038, -spD, zl - spL], prm.spR * 0.85, prm.spR * 0.7));
+  } else if (prm.hatchet) {
+    put(SD.capsule(root, [0, -spD, zl - spL], prm.spR, prm.spR * 0.9));
+    put(SD.ellipsoid([0, -spD * 0.6, zl - spL * 0.65], [0.0035, 0.0095, 0.011]));
+  } else {
+    put(SD.capsule(root, [0, -spD, zl - spL], prm.spR, prm.spR * 0.7));
+  }
+  if (v.kind === 'axis') put(SD.capsule([0, hh * 0.6, 0.0035], [0, hh + 0.0135, 0.0045], 0.0046, 0.0038));   // the dens
+  return P;
+}
+
+function buildSpine() {
+  const curve = new THREE.CatmullRomCurve3(SPINE_POINTS.map(p => new THREE.Vector3(...p)), false, 'centripetal');
+  const total = curve.getLength();
+  const list = vertebraList();
+  const solid = list.reduce((s, v) => s + 2 * v.hh, 0);
+  const gaps = list.slice(0, -1).reduce((s, v) => s + v.gap, 0);
+  const stretch = (total - solid - 0.004) / gaps;     // fit discs to the curve length
+  let s = 0;
+  const frameAt = (dist) => {
+    const u = clamp01(dist / total);
+    const P = curve.getPointAt(u);
+    const Y = curve.getTangentAt(u).negate();
+    const Z = new THREE.Vector3(0, 0, 1).addScaledVector(Y, -Y.z).normalize();
+    const X = new THREE.Vector3().crossVectors(Y, Z);
+    return { P, X, Y, Z, m: new THREE.Matrix4().makeBasis(X, Y, Z).setPosition(P) };
+  };
+  list.forEach((v, i) => {
+    s += v.hh;
+    const fr = frameAt(s);
+    v.frame = fr;
+    SPINE[v.name] = { ...fr, v };
+    const g = sculptOne({ parts: vertebraParts(v), k: 0.0028, h: v.kind === 'lumbar' ? 0.0015 : 0.0013 });
+    g.applyMatrix4(fr.m);
+    g.computeBoundingBox(); g.computeBoundingSphere();
+    const name = v.key === 'atlas' || v.key === 'axis' ? null : `${BONES[v.key].name} (${v.name})`;
+    addBone(g, v.key, { name, detail: v.name });
+    s += v.hh;
+    if (i < list.length - 1) {
+      const gap = v.gap * stretch;
+      if (i >= 1) {                             // no disc between C1 and C2
+        const n = list[i + 1];
+        const fr2 = frameAt(s + gap / 2);
+        const disc = new THREE.CylinderGeometry(1, 1, 1, 28, 1);
+        disc.scale((v.rx + n.rx) / 2 * 0.96, gap * 0.92, (v.rz + n.rz) / 2 * 0.96);
+        disc.applyMatrix4(fr2.m);
+        addBone(prepStock(disc), 'disc', { detail: `between ${v.name} and ${n.name}`, name: `Intervertebral disc (${v.name}–${n.name})` });
+      }
+      s += gap;
+    }
+  });
+  // where the sacrum begins
+  SPINE.sacrumTop = frameAt(total);
+}
+
+function buildSacrum() {
+  const top = SPINE.sacrumTop.P;
+  const y0 = top.y - 0.012, z0 = top.z - 0.004;          // centre of the first sacral segment
+  // Corners of the curved triangular plate (concave toward the front)
+  const aL = [0.046, y0 - 0.006, z0 - 0.014], mL = [0.027, y0 - 0.058, z0 - 0.03], apex = [0, y0 - 0.104, z0 - 0.034];
+  const aR = flipX(aL), mR = flipX(mL);
+  const parts = [];
+  const put = f => parts.push({ id: 's', f });
+  put(SD.plate(aL, aR, mL, 0.0062));
+  put(SD.plate(aR, mR, mL, 0.0062));
+  put(SD.plate(mL, mR, apex, 0.0048));
+  put(SD.ellipsoid([0, y0, z0], [0.024, 0.0115, 0.0165]));                       // body of S1
+  for (const s of [1, -1]) {
+    put(SD.ellipsoid([s * 0.033, y0 - 0.01, z0 - 0.017], [0.017, 0.017, 0.0135]));   // alae
+    put(SD.capsule([s * 0.046, y0 - 0.006, z0 - 0.016], [s * 0.027, y0 - 0.058, z0 - 0.032], 0.0058, 0.0045));
+    put(SD.capsule([s * 0.027, y0 - 0.058, z0 - 0.032], [0, y0 - 0.104, z0 - 0.034], 0.0045, 0.0035));
+  }
+  SD.chain([[0, y0 - 0.006, z0 - 0.027], [0, y0 - 0.04, z0 - 0.037], [0, y0 - 0.075, z0 - 0.039]], [0.0032, 0.0034, 0.0028]).forEach(put);
+  const plateZ = y => (y > y0 - 0.058 ? lerp(z0 - 0.014, z0 - 0.03, (y0 - 0.006 - y) / 0.052) : lerp(z0 - 0.03, z0 - 0.034, (y0 - 0.058 - y) / 0.046));
+  const carve = [SD.ellipsoid([0, y0 + 0.006, z0 - 0.02], [0.0085, 0.009, 0.0045])];   // top of the sacral canal
+  for (let i = 0; i < 4; i++) for (const s of [1, -1]) {
+    const y = y0 - 0.018 - 0.021 * i;
+    carve.push(SD.sphere([s * (0.0165 - 0.0018 * i), y, plateZ(y) + 0.0058], 0.0034 - 0.0003 * i));
+  }
+  addBone(sculptOne({ parts, carve, k: 0.006, ck: 0.0015, h: 0.0013 }), 'sacrum');
+
+  const cp = [];
+  const steps = [[0.0058, 0.0036, 0.0036], [0.0046, 0.0031, 0.0031], [0.0036, 0.0027, 0.0027], [0.0027, 0.0022, 0.0022]];
+  let c = [0, apex[1] - 0.0075, apex[2] + 0.002];
+  steps.forEach(r => {
+    cp.push({ id: 'c', f: SD.ellipsoid(c, r) });
+    c = [0, c[1] - 0.0062, c[2] + 0.0035];
+  });
+  addBone(sculptOne({ parts: cp, k: 0.0018, h: 0.0006 }), 'coccyx');
+}
+
+// ---------- Rib cage ----------
+function buildThorax() {
+  const ST = { top: [0, 1.447, 0.066], bottom: [0, 1.252, 0.106] };
+  const sternZ = y => lerp(ST.top[2], ST.bottom[2], (ST.top[1] - y) / (ST.top[1] - ST.bottom[1]));
+  // sternum: manubrium, body, xiphoid
+  const manu = sweep([[0, 1.447, 0.066], [0, 1.42, 0.071], [0, 1.394, 0.076]], {
+    seg: 16, ring: 18, up: [0, 0, 1], a: t => 0.026 - 0.012 * t + 0.003 * Math.sin(Math.PI * t), b: () => 0.0058 });
+  addBone(manu, 'sternum', { name: 'Sternum: manubrium', detail: 'manubrium' });
+  const body = sweep([[0, 1.391, 0.077], [0, 1.33, 0.09], [0, 1.255, 0.105]], {
+    seg: 24, ring: 18, up: [0, 0, 1], a: t => 0.0125 + 0.0065 * Math.sin(Math.PI * min(1, t * 1.1)), b: () => 0.0052 });
+  addBone(body, 'sternum', { name: 'Sternum: body', detail: 'body' });
+  const xiph = sweep([[0, 1.251, 0.106], [0, 1.232, 0.107], [0, 1.214, 0.103]], {
+    seg: 10, ring: 14, up: [0, 0, 1], a: t => 0.0085 * (1 - t) + 0.0022, b: t => 0.0028 * (1 - t * 0.5) });
+  addBone(xiph, 'sternum', { name: 'Sternum: xiphoid process', detail: 'xiphoid process' });
+
+  const W = [0.056, 0.083, 0.101, 0.113, 0.122, 0.128, 0.131, 0.132, 0.13, 0.124, 0.114, 0.097];
+  const drop = [0.022, 0.05, 0.064, 0.078, 0.092, 0.104, 0.116, 0.127, 0.137, 0.146, 0.1, 0.07];
+  const zF = [0.05, 0.074, 0.084, 0.092, 0.097, 0.099, 0.098, 0.087, 0.073, 0.058, 0.006, -0.03];
+  const xa = [0.035, 0.044, 0.05, 0.056, 0.062, 0.07, 0.08, 0.093, 0.103, 0.111, 0.113, 0.09];
+  const zc = [-0.012, -0.007, -0.002, 0.003, 0.006, 0.008, 0.008, 0.006, 0.003, -0.002, -0.022, -0.042];
+  const attachY = [1.426, 1.392, 1.36, 1.333, 1.306, 1.282, 1.262];
+  const attachX = [0.021, 0.016, 0.015, 0.015, 0.015, 0.014, 0.012];
+  const cartilage = [];
+  for (let i = 0; i < 12; i++) {
+    const fr = SPINE['T' + (i + 1)];
+    const yv = fr.P.y, zv = fr.P.z;
+    const pts = [
+      [0.0145, yv + 0.004, zv - 0.004],
+      [0.032, yv + 0.0015, zv - 0.024],
+      [0.058, yv - 0.004, zv - 0.036],
+    ];
+    if (i < 10) {
+      pts.push([W[i] * 0.86, yv - drop[i] * 0.24, lerp(zv - 0.036, zc[i], 0.62)]);
+      pts.push([W[i], yv - drop[i] * 0.5, zc[i]]);
+      pts.push([max(W[i] * 0.83, xa[i] + 0.012), yv - drop[i] * 0.8, lerp(zc[i], zF[i], 0.72)]);
+      pts.push([xa[i], yv - drop[i], zF[i]]);
+    } else {
+      pts.push([W[i] * 0.88, yv - drop[i] * 0.4, lerp(zv - 0.036, zc[i], 0.6)]);
+      pts.push([W[i], yv - drop[i] * 0.8, zc[i]]);
+      pts.push([xa[i], yv - drop[i], zF[i]]);
+    }
+    const flat = i === 0;
+    const geo = sweep(pts, {
+      seg: 64, ring: 10,
+      a: t => (flat ? 0.0062 : 0.0026) * (0.85 + 0.25 * Math.sin(Math.PI * t)) + (t < 0.08 ? 0.0012 : 0),
+      b: t => (flat ? 0.0028 : lerp(0.0036, 0.0068, clamp01(t * 3)) * (1 - 0.15 * t)),
+    });
+    const key = i < 7 ? 'trueRib' : i < 10 ? 'falseRib' : 'floatingRib';
+    addPair(geo, key, { name: `Rib ${i + 1} (${BONES[key].name.toLowerCase()})`, detail: `rib ${i + 1}` });
+
+    // costal cartilage
+    if (i < 10) {
+      const end = pts[pts.length - 1];
+      let cpts;
+      if (i < 7) {
+        const ay = attachY[i], target = [attachX[i], ay, sternZ(ay) - 0.001];
+        const midP = [lerp(end[0], target[0], 0.55), lerp(end[1], ay, 0.3), max(end[2], target[2]) + 0.004 + 0.002 * i];
+        cpts = [end, midP, target];
+      } else {
+        const prev = cartilage[i - 1];
+        const target = prev.at(0.62 - (i - 7) * 0.08);
+        const midP = [lerp(end[0], target[0], 0.5), lerp(end[1], target[1], 0.35), max(end[2], target[2]) + 0.004];
+        cpts = [end, midP, target];
+      }
+      const curve = new THREE.CatmullRomCurve3(cpts.map(p => new THREE.Vector3(...p)));
+      cartilage[i] = { at: t => curve.getPointAt(t).toArray() };
+      const geoC = sweep(cpts, { seg: 24, ring: 10, a: () => 0.0042, b: () => 0.0048 });
+      addPair(geoC, 'costal', { name: `Costal cartilage (rib ${i + 1})`, detail: `rib ${i + 1}` });
+    }
+  }
+}
+
+// ---------- Shoulder girdle ----------
+function buildShoulder() {
+  const cl = [];
+  SD.chain([[0.021, 1.438, 0.066], [0.05, 1.446, 0.07], [0.09, 1.453, 0.058], [0.125, 1.453, 0.031], [0.153, 1.448, 0.002], [0.176, 1.443, -0.021]],
+    [0.0074, 0.0066, 0.006, 0.0058, 0.006, 0.0066]).forEach(f => cl.push({ id: 'c', f }));
+  cl.push({ id: 'c', f: SD.sphere([0.022, 1.438, 0.066], 0.0084) });
+  cl.push({ id: 'c', f: SD.ellipsoid([0.171, 1.444, -0.016], [0.011, 0.0048, 0.01]) });
+  addPair(sculptOne({ parts: cl, k: 0.005, h: 0.0015 }), 'clavicle');
+
+  const S = [0.07, 1.41, -0.124], I = [0.085, 1.245, -0.117], G = [0.162, 1.385, -0.074], Gn = [0.148, 1.376, -0.086];
+  const gDir = unit([0.85, 0, 0.52]);
+  const sp = [];
+  const put = f => sp.push({ id: 's', f });
+  put(SD.plate(S, I, Gn, 0.0032));
+  put(SD.capsule(S, I, 0.0042));
+  put(SD.capsule(Gn, I, 0.0068, 0.0042));
+  put(SD.capsule(S, [0.13, 1.395, -0.1], 0.0034));
+  put(SD.capsule(G, Gn, 0.0085));
+  SD.chain([[0.074, 1.362, -0.127], [0.13, 1.395, -0.115], [0.172, 1.428, -0.074], [0.186, 1.436, -0.052]], [0.0028, 0.0055, 0.0062, 0.0058]).forEach(put);
+  put(SD.plate([0.074, 1.362, -0.124], [0.13, 1.393, -0.112], [0.14, 1.372, -0.1], 0.0024));
+  put(SD.ellipsoid([0.19, 1.437, -0.042], [0.019, 0.0055, 0.015]));
+  SD.chain([[0.15, 1.394, -0.074], [0.153, 1.405, -0.048], [0.142, 1.399, -0.027]], [0.0055, 0.005, 0.0038]).forEach(put);
+  put(SD.ellipsoid(G, [0.008, 0.0195, 0.0135], basisFrom(gDir, [0, 1, 0])));
+  const carve = [SD.sphere(add(G, mul(gDir, 0.0265)), 0.021)];
+  const scap = sculptOne({ parts: sp, carve, k: 0.006, ck: 0.002, h: 0.0016 });
+  addPair(scap, 'scapula');
+  return add(G, mul(gDir, 0.0215));                 // where the humeral head sits
+}
+
+// ---------- Arms ----------
+function buildArm(head) {
+  // humerus
+  const hp = [];
+  const put = (arr, f) => arr.push({ id: 'b', f });
+  put(hp, SD.sphere(head, 0.022));
+  put(hp, SD.ellipsoid([0.2, 1.384, -0.05], [0.012, 0.016, 0.014]));
+  put(hp, SD.sphere([0.193, 1.376, -0.037], 0.0068));
+  put(hp, SD.capsule([0.195, 1.362, -0.054], [0.2, 1.25, -0.048], 0.0128, 0.011));
+  put(hp, SD.capsule([0.2, 1.25, -0.048], [0.205, 1.12, -0.045], 0.011, 0.0102));
+  put(hp, SD.ellipsoid([0.207, 1.265, -0.047], [0.0085, 0.02, 0.0085]));
+  put(hp, SD.ellipsoid([0.206, 1.104, -0.045], [0.028, 0.022, 0.0105]));
+  put(hp, SD.sphere([0.176, 1.097, -0.05], 0.0072));
+  put(hp, SD.sphere([0.234, 1.1, -0.046], 0.0058));
+  put(hp, SD.ellipsoid([0.197, 1.084, -0.042], [0.0115, 0.011, 0.011]));
+  put(hp, SD.sphere([0.222, 1.086, -0.037], 0.0095));
+  const hCarve = [SD.sphere([0.205, 1.101, -0.063], 0.0088), SD.sphere([0.203, 1.106, -0.027], 0.0058)];
+  addPair(sculptOne({ parts: hp, carve: hCarve, k: 0.008, ck: 0.003, h: 0.0021 }), 'humerus');
+
+  // ulna
+  const up = [];
+  put(up, SD.ellipsoid([0.197, 1.091, -0.06], [0.0085, 0.0135, 0.0085]));
+  put(up, SD.ellipsoid([0.199, 1.071, -0.03], [0.0068, 0.0058, 0.0072]));
+  put(up, SD.capsule([0.197, 1.076, -0.052], [0.201, 1.03, -0.045], 0.0088));
+  put(up, SD.capsule([0.201, 1.03, -0.045], [0.228, 0.852, -0.032], 0.0078, 0.0048));
+  put(up, SD.sphere([0.229, 0.843, -0.031], 0.0064));
+  put(up, SD.capsule([0.229, 0.843, -0.035], [0.226, 0.832, -0.038], 0.0026));
+  const uCarve = [SD.sphere([0.197, 1.084, -0.042], 0.0118), SD.sphere([0.222, 1.069, -0.036], 0.0102)];
+  addPair(sculptOne({ parts: up, carve: uCarve, k: 0.006, ck: 0.002, h: 0.0016 }), 'ulna');
+
+  // radius
+  const rp = [];
+  const rAxis = unit(sub([0.222, 1.069, -0.036], [0.255, 0.86, -0.024]));
+  put(rp, SD.cylinder([0.222, 1.068, -0.036], rAxis, 0.0094, 0.0042, 0.0018));
+  put(rp, SD.capsule([0.222, 1.064, -0.036], [0.224, 1.034, -0.034], 0.0055));
+  put(rp, SD.sphere([0.219, 1.03, -0.03], 0.0048));
+  put(rp, SD.capsule([0.224, 1.034, -0.034], [0.255, 0.862, -0.024], 0.0064, 0.0085));
+  put(rp, SD.ellipsoid([0.258, 0.85, -0.022], [0.016, 0.0105, 0.011]));
+  put(rp, SD.capsule([0.268, 0.85, -0.022], [0.272, 0.836, -0.022], 0.0034));
+  const rCarve = [SD.sphere([0.222, 1.086, -0.037], 0.0097)];
+  addPair(sculptOne({ parts: rp, carve: rCarve, k: 0.006, ck: 0.002, h: 0.0016 }), 'radius');
+}
+
+// a small long bone (finger, toe, palm or sole bone) from a to b
+function littleLongBone(a, b, rBase, rShaft, rHead, tuft = false) {
+  const d = unit(sub(b, a));
+  const pa = add(a, mul(d, rBase)), pb = sub(b, mul(d, rHead));
+  const parts = [
+    { id: 'b', f: SD.sphere(pa, rBase) },
+    { id: 'b', f: SD.capsule(pa, pb, rShaft, rShaft * 0.92) },
+    { id: 'b', f: tuft ? SD.ellipsoid(pb, [rHead * 1.15, rHead, rHead * 0.75], basisFrom([1, 0, 0], d)) : SD.sphere(pb, rHead) },
+  ];
+  return sculptOne({ parts, k: rShaft * 0.9, h: max(0.0008, rShaft * 0.38), ao: 0.002 });
+}
+
+// rotate direction d toward +z by angle (curl fingers/toes forward)
+function curl(d, ang) {
+  const v = new THREE.Vector3(...d);
+  const axis = new THREE.Vector3().crossVectors(v, new THREE.Vector3(0, 0, 1));
+  if (axis.lengthSq() < 1e-8) return d;
+  v.applyAxisAngle(axis.normalize(), ang);
+  return v.toArray();
+}
+
+// ---------- Hands ----------
+function buildHand() {
+  const carpals = [
+    ['scaphoid',   [0.262, 0.826, -0.02],  [0.0075, 0.0055, 0.0056]],
+    ['lunate',     [0.249, 0.828, -0.022], [0.0056, 0.0056, 0.0062]],
+    ['triquetrum', [0.237, 0.826, -0.024], [0.0052, 0.0052, 0.0056]],
+    ['pisiform',   [0.234, 0.826, -0.0145], [0.0038, 0.0038, 0.0036]],
+    ['trapezium',  [0.268, 0.812, -0.018], [0.0056, 0.006, 0.0056]],
+    ['trapezoid',  [0.257, 0.811, -0.02],  [0.0046, 0.0056, 0.005]],
+    ['capitate',   [0.246, 0.808, -0.022], [0.0056, 0.0086, 0.006]],
+    ['hamate',     [0.2345, 0.811, -0.024], [0.0055, 0.0072, 0.0058]],
+  ];
+  for (const [key, c0, r0] of carpals) {
+    const c = [c0[0], c0[1] + (c0[1] > 0.82 ? 0.0025 : 0.0005), c0[2]], r = mul(r0, 1.16);
+    const parts = [{ id: 'b', f: SD.ellipsoid(c, r) }];
+    if (key === 'hamate') parts.push({ id: 'b', f: SD.capsule(c, [c[0] - 0.001, c[1] - 0.002, c[2] + 0.0075], 0.0024) });
+    if (key === 'scaphoid') parts.push({ id: 'b', f: SD.ellipsoid([c[0] + 0.003, c[1] - 0.004, c[2] + 0.003], [0.0035, 0.004, 0.004]) });
+    addPair(sculptOne({ parts, k: 0.003, h: 0.0008, ao: 0.0015 }), key);
+  }
+  const rays = [
+    { base: [0.2715, 0.803, -0.014], head: [0.29, 0.765, 0.0], r: [0.006, 0.0042, 0.0055], ph: [0.031, 0.024], pr: [0.0036, 0.003] },
+    { base: [0.257, 0.799, -0.021], head: [0.261, 0.733, -0.019], r: [0.0052, 0.0034, 0.0048], ph: [0.04, 0.023, 0.017], pr: [0.0032, 0.0028, 0.0024] },
+    { base: [0.246, 0.799, -0.022], head: [0.247, 0.731, -0.02], r: [0.0055, 0.0035, 0.005], ph: [0.045, 0.027, 0.018], pr: [0.0034, 0.0029, 0.0024] },
+    { base: [0.236, 0.799, -0.023], head: [0.234, 0.737, -0.021], r: [0.005, 0.0031, 0.0046], ph: [0.042, 0.026, 0.018], pr: [0.0031, 0.0027, 0.0023] },
+    { base: [0.227, 0.799, -0.024], head: [0.222, 0.745, -0.022], r: [0.005, 0.0029, 0.0044], ph: [0.033, 0.019, 0.016], pr: [0.0029, 0.0025, 0.0021] },
+  ];
+  const fingerName = ['thumb', 'index finger', 'middle finger', 'ring finger', 'little finger'];
+  const roman = ['I', 'II', 'III', 'IV', 'V'];
+  rays.forEach((ray, i) => {
+    addPair(littleLongBone(ray.base, ray.head, ray.r[0], ray.r[1], ray.r[2]), 'metacarpal',
+      { name: `Metacarpal ${roman[i]} (${fingerName[i]})`, detail: roman[i] });
+    let d = unit(sub(ray.head, ray.base));
+    let p = add(ray.head, mul(d, 0.0015));
+    const names = ray.ph.length === 2 ? ['proximal', 'distal'] : ['proximal', 'middle', 'distal'];
+    ray.ph.forEach((len, j) => {
+      d = curl(d, i === 0 ? 0.12 : 0.16);
+      const end = add(p, mul(d, len));
+      const r = ray.pr[j];
+      const last = j === ray.ph.length - 1;
+      addPair(littleLongBone(p, end, r * 1.45, r, last ? r * 1.05 : r * 1.2, last), 'phalanxHand',
+        { name: `Phalanx: ${names[j]} (${fingerName[i]})`, detail: `${names[j]}, ${fingerName[i]}` });
+      p = add(end, mul(d, 0.0018));
+    });
+  });
+}
+
+// ---------- Pelvic girdle ----------
+function buildPelvis() {
+  const A = [0.088, 0.93, 0.005], ad = unit([0.8, -0.35, 0.45]);
+  const head = add(A, mul(ad, 0.006));
+  const ASIS = [0.122, 0.998, 0.05], PSIS = [0.052, 0.99, -0.078];
+  const wingBasis = basisFrom(sub(PSIS, ASIS), unit([0.38, 1, 0]));
+  const P = [];
+  const put = (id, f, k) => P.push({ id, f, k });
+  put('il', SD.ellipsoid([0.101, 1.0, -0.012], [0.071, 0.05, 0.0062], wingBasis));
+  SD.chain([ASIS, [0.137, 1.03, 0.023], [0.14, 1.047, -0.012], [0.124, 1.05, -0.045], [0.09, 1.036, -0.07], PSIS],
+    [0.0062, 0.0074, 0.0085, 0.0085, 0.0075, 0.007]).forEach(f => put('il', f));
+  put('il', SD.ellipsoid([0.092, 0.952, -0.004], [0.021, 0.026, 0.024]));
+  put('il', SD.sphere([0.108, 0.966, 0.04], 0.0058));
+  SD.chain([PSIS, [0.052, 0.97, -0.074], [0.068, 0.944, -0.052], [0.071, 0.912, -0.041]], [0.007, 0.0065, 0.006, 0.0045]).forEach(f => put('il', f));
+  put('il', SD.ellipsoid([0.06, 0.978, -0.062], [0.012, 0.02, 0.016]));
+  put('is', SD.capsule([0.084, 0.91, -0.014], [0.072, 0.851, -0.028], 0.0118, 0.011));
+  put('is', SD.ellipsoid([0.072, 0.843, -0.026], [0.012, 0.016, 0.016]));
+  put('is', SD.sphere([0.07, 0.902, -0.04], 0.0042));
+  put('is', SD.capsule([0.068, 0.836, -0.012], [0.048, 0.845, 0.03], 0.0068, 0.0064));
+  put('pu', SD.capsule([0.075, 0.925, 0.022], [0.022, 0.9, 0.062], 0.0088, 0.0084));
+  put('pu', SD.ellipsoid([0.016, 0.888, 0.064], [0.0105, 0.02, 0.011]));
+  put('pu', SD.capsule([0.02, 0.872, 0.058], [0.048, 0.845, 0.03], 0.0064));
+  put('pu', SD.sphere([0.024, 0.9, 0.07], 0.0042));
+  // hip socket: a cup behind the femoral head with a rounded rim
+  put('ac', SD.sphere(sub(head, mul(ad, 0.012)), 0.028));
+  put('ac', SD.torus(add(head, mul(ad, 0.003)), ad, 0.0236, 0.0032));
+  const carve = [SD.sphere(head, 0.0238)];
+  const relabel = (id, x, y, z) => {
+    if (id !== 'ac') return id;
+    if (y > A[1] - 0.004) return 'il';
+    return z > A[2] + 0.002 ? 'pu' : 'is';
+  };
+  const geoms = sculpt({ parts: P, carve, k: 0.008, ck: 0.005, h: 0.0021, relabel });
+  const keys = { il: 'ilium', is: 'ischium', pu: 'pubis' };
+  for (const [id, g] of geoms) if (keys[id]) addPair(g, keys[id], { name: `${BONES[keys[id]].name} (hip bone)` });
+
+  const sym = prepStock(new THREE.SphereGeometry(1, 20, 14));
+  sym.scale(0.0055, 0.018, 0.0095);
+  sym.translate(0, 0.888, 0.064);
+  sym.computeBoundingBox(); sym.computeBoundingSphere();
+  addBone(sym, 'symphysis');
+  return head;
+}
+
+// ---------- Legs ----------
+function buildLeg(head) {
+  const put = (arr, f) => arr.push({ id: 'b', f });
+  const fp = [];
+  put(fp, SD.sphere(head, 0.0225));
+  put(fp, SD.capsule(head, [0.135, 0.893, 0.0], 0.0142, 0.016));
+  put(fp, SD.ellipsoid([0.15, 0.905, -0.008], [0.013, 0.02, 0.016]));
+  put(fp, SD.ellipsoid([0.117, 0.858, -0.013], [0.0075, 0.0075, 0.0075]));
+  put(fp, SD.capsule([0.14, 0.886, -0.003], [0.125, 0.71, 0.003], 0.0155, 0.0145));
+  put(fp, SD.capsule([0.125, 0.71, 0.003], [0.104, 0.545, -0.005], 0.0145, 0.015));
+  put(fp, SD.ellipsoid([0.101, 0.522, -0.006], [0.033, 0.03, 0.022]));
+  put(fp, SD.ellipsoid([0.08, 0.498, -0.012], [0.016, 0.021, 0.026]));
+  put(fp, SD.ellipsoid([0.122, 0.5, -0.012], [0.016, 0.0205, 0.026]));
+  const fCarve = [SD.capsule([0.101, 0.488, -0.036], [0.101, 0.49, -0.004], 0.0068), SD.capsule([0.101, 0.497, 0.016], [0.101, 0.53, 0.013], 0.0055)];
+  addPair(sculptOne({ parts: fp, carve: fCarve, k: 0.01, ck: 0.003, h: 0.0024 }), 'femur');
+
+  const pp = [];
+  put(pp, SD.ellipsoid([0.101, 0.509, 0.031], [0.02, 0.023, 0.0095]));
+  put(pp, SD.sphere([0.101, 0.49, 0.03], 0.0075));
+  addPair(sculptOne({ parts: pp, k: 0.008, h: 0.0015 }), 'patella');
+
+  const tp = [];
+  put(tp, SD.ellipsoid([0.101, 0.461, -0.01], [0.037, 0.0145, 0.026]));
+  put(tp, SD.ellipsoid([0.103, 0.43, 0.012], [0.009, 0.012, 0.006]));
+  put(tp, SD.capsule([0.101, 0.455, -0.01], [0.099, 0.4, -0.006], 0.026, 0.0165));
+  put(tp, SD.capsule([0.099, 0.4, -0.006], [0.094, 0.11, -0.014], 0.0165, 0.012));
+  put(tp, SD.ellipsoid([0.094, 0.088, -0.013], [0.021, 0.016, 0.02]));
+  put(tp, SD.capsule([0.078, 0.09, -0.012], [0.076, 0.061, -0.01], 0.0066));
+  const tCarve = [SD.sphere([0.08, 0.497, -0.012], 0.0218), SD.sphere([0.122, 0.499, -0.012], 0.021)];
+  addPair(sculptOne({ parts: tp, carve: tCarve, k: 0.009, ck: 0.003, h: 0.0023 }), 'tibia');
+
+  const fb = [];
+  put(fb, SD.ellipsoid([0.132, 0.438, -0.025], [0.0098, 0.012, 0.0098]));
+  put(fb, SD.capsule([0.132, 0.43, -0.025], [0.126, 0.09, -0.027], 0.0055, 0.0058));
+  put(fb, SD.ellipsoid([0.125, 0.064, -0.028], [0.0078, 0.02, 0.0098]));
+  addPair(sculptOne({ parts: fb, k: 0.006, h: 0.0016 }), 'fibula');
+}
+
+// ---------- Feet ----------
+function buildFoot() {
+  const tarsal = (key, prims, opts = {}) => {
+    const parts = prims.map(f => ({ id: 'b', f }));
+    return addPair(sculptOne({ parts, k: 0.005, h: 0.0013, ao: 0.002 }), key, opts);
+  };
+  tarsal('talus', [SD.ellipsoid([0.096, 0.058, -0.016], [0.016, 0.013, 0.019]), SD.capsule([0.094, 0.056, 0.0], [0.09, 0.05, 0.015], 0.0088), SD.sphere([0.089, 0.05, 0.017], 0.0102)]);
+  tarsal('calcaneus', [SD.ellipsoid([0.1, 0.032, -0.035], [0.016, 0.017, 0.032]), SD.sphere([0.1, 0.03, -0.064], 0.017), SD.sphere([0.086, 0.041, -0.022], 0.006), SD.sphere([0.106, 0.03, 0.0], 0.01)]);
+  tarsal('navicular', [SD.ellipsoid([0.083, 0.048, 0.031], [0.014, 0.012, 0.0062])]);
+  tarsal('cuboid', [SD.ellipsoid([0.115, 0.027, 0.025], [0.0108, 0.0108, 0.0128])]);
+  tarsal('cuneiform', [SD.ellipsoid([0.073, 0.037, 0.0455], [0.0068, 0.012, 0.0088])], { name: 'Medial cuneiform', detail: 'medial' });
+  tarsal('cuneiform', [SD.ellipsoid([0.086, 0.042, 0.045], [0.0054, 0.009, 0.0068])], { name: 'Intermediate cuneiform', detail: 'intermediate' });
+  tarsal('cuneiform', [SD.ellipsoid([0.0985, 0.038, 0.0445], [0.0063, 0.0094, 0.0082])], { name: 'Lateral cuneiform', detail: 'lateral' });
+
+  const rays = [
+    { base: [0.073, 0.033, 0.056], head: [0.068, 0.0125, 0.12], r: [0.009, 0.0064, 0.0094], ph: [0.03, 0.024], pr: [0.0062, 0.0054] },
+    { base: [0.0862, 0.035, 0.0555], head: [0.083, 0.011, 0.133], r: [0.006, 0.0041, 0.006], ph: [0.026, 0.012, 0.01], pr: [0.0039, 0.0034, 0.003] },
+    { base: [0.098, 0.033, 0.0555], head: [0.097, 0.011, 0.128], r: [0.0058, 0.004, 0.0058], ph: [0.024, 0.011, 0.0095], pr: [0.0037, 0.0032, 0.0029] },
+    { base: [0.109, 0.029, 0.051], head: [0.109, 0.0105, 0.121], r: [0.0058, 0.0039, 0.0056], ph: [0.022, 0.01, 0.009], pr: [0.0036, 0.0031, 0.0028] },
+    { base: [0.1205, 0.024, 0.043], head: [0.123, 0.0095, 0.112], r: [0.0075, 0.0038, 0.0054], ph: [0.019, 0.0085, 0.008], pr: [0.0035, 0.003, 0.0027] },
+  ];
+  const toe = ['big toe', '2nd toe', '3rd toe', '4th toe', 'little toe'];
+  const roman = ['I', 'II', 'III', 'IV', 'V'];
+  rays.forEach((ray, i) => {
+    addPair(littleLongBone(ray.base, ray.head, ray.r[0], ray.r[1], ray.r[2]), 'metatarsal',
+      { name: `Metatarsal ${roman[i]} (${toe[i]})`, detail: roman[i] });
+    const md = unit(sub(ray.head, ray.base));
+    let p = add(ray.head, mul(md, 0.0016));
+    const names = ray.ph.length === 2 ? ['proximal', 'distal'] : ['proximal', 'middle', 'distal'];
+    ray.ph.forEach((len, j) => {
+      const d = unit([md[0], j === 0 ? 0.04 : -0.14, md[2]]);
+      const end = add(p, mul(d, len));
+      const r = ray.pr[j];
+      const last = j === ray.ph.length - 1;
+      addPair(littleLongBone(p, end, r * 1.4, r * (i === 0 ? 0.85 : 1), last ? r * 1.05 : r * 1.15, last), 'phalanxFoot',
+        { name: `Phalanx: ${names[j]} (${toe[i]})`, detail: `${names[j]}, ${toe[i]}` });
+      p = add(end, mul(d, 0.0016));
+    });
+  });
+}
+
+/* =====================================================================
+   8. Labels (CSS overlay) for the bones students meet first
+   ===================================================================== */
+const LABELS = [
+  ['frontal', '', 'Frontal'], ['parietal', 'Left', 'Parietal'], ['temporal', 'Left', 'Temporal'],
+  ['mandible', '', 'Mandible'], ['maxilla', 'Right', 'Maxilla'],
+  ['clavicle', 'Left', 'Clavicle'], ['scapula', 'Right', 'Scapula'],
+  ['sternum', '', 'Sternum', 'body'], ['trueRib', 'Left', 'True rib', 'rib 5'], ['floatingRib', 'Right', 'Floating rib', 'rib 12'],
+  ['cervical', '', 'Cervical vertebrae', 'C5'], ['lumbar', '', 'Lumbar vertebrae', 'L3'],
+  ['humerus', 'Left', 'Humerus'], ['radius', 'Left', 'Radius'], ['ulna', 'Right', 'Ulna'],
+  ['capitate', 'Left', 'Carpals'], ['metacarpal', 'Right', 'Metacarpals', 'III'], ['phalanxHand', 'Left', 'Phalanges', 'middle, middle finger'],
+  ['ilium', 'Left', 'Ilium'], ['sacrum', '', 'Sacrum'], ['pubis', 'Right', 'Pubis'],
+  ['femur', 'Left', 'Femur'], ['patella', 'Right', 'Patella'], ['tibia', 'Right', 'Tibia'], ['fibula', 'Left', 'Fibula'],
+  ['calcaneus', 'Left', 'Tarsals'], ['metatarsal', 'Right', 'Metatarsals', 'III'],
+];
+const labelObjects = [];
+function buildLabels() {
+  for (const [key, side, text, detail] of LABELS) {
+    const mesh = bones.find(m => m.userData.key === key && m.userData.side === side && (!detail || m.userData.detail === detail));
+    if (!mesh) continue;
+    const c = mesh.userData.center;
+    // labels go on the side of the screen the bone is on (front view)
+    const right = c.x > 0.002 || (c.x > -0.002 && ['sternum', 'mandible', 'sacrum', 'cervical'].includes(key));
+    const el = document.createElement('div');
+    el.className = 'lbl' + (right ? '' : ' flip');
+    el.innerHTML = `<span class="dot"></span><span class="bar"></span><span class="txt">${text}</span>`;
+    const obj = new CSS2DObject(el);
+    obj.center.set(right ? 0 : 1, 0.5);
+    const anchor = c.clone();
+    if (key === 'scapula') anchor.set(c.x - 0.02, c.y, c.z - 0.01);
+    if (key === 'cervical' || key === 'lumbar') anchor.z -= 0.03;
+    if (key === 'femur') anchor.y -= 0.09;
+    if (key === 'trueRib') anchor.y -= 0.02;
+    obj.position.copy(anchor);
+    obj.visible = false;
+    mesh.add(obj);
+    labelObjects.push({ obj, mesh });
+  }
+}
+
+/* =====================================================================
+   9. Interaction state
+   ===================================================================== */
+const state = {
+  colorMode: 'natural',
+  regionOn: Object.fromEntries(Object.keys(REGIONS).map(r => [r, true])),
+  cartilage: true,
+  labels: false,
+  explode: 0,
+  isolate: null,          // Set of meshes or null
+  hovered: null,
+  selected: null,
+  flashes: new Map(),     // mesh -> { color, until }
+  tab: 'explore',
+};
+const $ = id => document.getElementById(id);
+const tip = $('tip');
+const info = $('info');
+
+function baseColorFor(mesh) {
+  const { info: b, region } = mesh.userData;
+  switch (state.colorMode) {
+    case 'region': return b.type === 'cartilage' ? TYPES.cartilage.color : REGIONS[region].color;
+    case 'type': return TYPES[b.type].color;
+    case 'division': return b.type === 'cartilage' || b.type === 'notbone' ? TYPES[b.type].color : DIVISIONS[REGIONS[region].division].color;
+    default: return b.type === 'cartilage' ? TYPES.cartilage.color : b.type === 'notbone' ? TYPES.notbone.color : BONE_COLOR;
+  }
+}
+function applyColors() {
+  for (const m of bones) m.material.color.set(baseColorFor(m));
+  renderLegend();
+}
+
+function isVisible(m) {
+  if (!state.regionOn[m.userData.region]) return false;
+  if (!state.cartilage && m.userData.info.type === 'cartilage') return false;
+  if (state.isolate && !state.isolate.has(m)) return false;
+  return true;
+}
+function applyVisibility() {
+  for (const m of bones) m.visible = isVisible(m);
+  for (const l of labelObjects) l.obj.visible = state.labels && !quiz.active && l.mesh.visible;
+  if (state.selected && !state.selected.visible) select(null);
+  renderRegions();
+}
+
+// Exploded view: bones drift away from their own group's centre, and whole groups
+// drift sideways from the body's midline and upward from the floor.
+function computeExplodeVectors() {
+  const groups = new Map();
+  for (const m of bones) {
+    const g = m.userData.region + '|' + (m.userData.side || 'mid') + '|' + (m.userData.info.group === 'hipbone' ? 'hip' : '');
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(m);
+  }
+  for (const list of groups.values()) {
+    const gc = new THREE.Vector3();
+    list.forEach(m => gc.add(m.userData.center));
+    gc.divideScalar(list.length);
+    for (const m of list) {
+      const local = m.userData.center.clone().sub(gc).multiplyScalar(0.5);
+      const outward = new THREE.Vector3(gc.x * 0.9, gc.y * 0.12, gc.z * 0.4);
+      m.userData.explode = local.add(outward);
+    }
+  }
+}
+function applyExplode() {
+  const e = state.explode;
+  for (const m of bones) m.position.copy(m.userData.explode).multiplyScalar(e * e * 0.6 + e * 0.4);
+}
+
+/* ---------- picking ---------- */
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let pointerDirty = false, pointerInside = false;
+let downAt = null;
+const lastClient = { x: 0, y: 0 };
+
+function pick() {
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(bones.filter(m => m.visible), false);
+  return hits.length ? hits[0].object : null;
+}
+
+renderer.domElement.addEventListener('pointermove', e => {
+  pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+  lastClient.x = e.clientX; lastClient.y = e.clientY;
+  pointerDirty = true; pointerInside = true;
+});
+renderer.domElement.addEventListener('pointerleave', () => { pointerInside = false; setHover(null); });
+renderer.domElement.addEventListener('pointerdown', e => { downAt = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downAt) return;
+  const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
+  downAt = null;
+  if (moved > 6) return;
+  pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+  const hit = pick();
+  if (quiz.active) { quizClick(hit); return; }
+  select(hit);
+});
+
+function setHover(mesh) {
+  state.hovered = mesh;
+  if (!mesh) { tip.style.display = 'none'; renderer.domElement.style.cursor = ''; return; }
+  renderer.domElement.style.cursor = 'pointer';
+  if (quiz.active) {
+    tip.innerHTML = quiz.mode === 'find' && !quiz.locked ? 'Click to answer' : '?';
+  } else {
+    const r = REGIONS[mesh.userData.region];
+    tip.innerHTML = `${mesh.userData.title}<small>${r.name}</small>`;
+  }
+  tip.style.display = 'block';
+}
+
+/* ---------- selection & info panel ---------- */
+function select(mesh, { focus = false } = {}) {
+  state.selected = mesh;
+  renderInfo();
+  if (mesh && focus) focusOn([mesh]);
+}
+
+function chip(color, text) { return `<span class="chip"><i style="background:${color}"></i>${text}</span>`; }
+
+function renderInfo() {
+  const m = state.selected;
+  if (quiz.active) { info.style.display = 'none'; return; }
+  info.style.display = '';
+  if (!m) {
+    // On phones the overview would cover the skeleton, so it only appears on wide screens.
+    if (window.innerWidth <= 860) { info.style.display = 'none'; return; }
+    info.innerHTML = overviewHTML();
+    return;
+  }
+  const { info: b, region, title, detail } = m.userData;
+  const g = b.group ? GROUPS[b.group] : null;
+  const r = REGIONS[region], t = TYPES[b.type];
+  const div = DIVISIONS[r.division];
+  const about = b.info || (g && g.info) || '';
+  const fact = b.fact || (g && g.fact) || '';
+  const chips = [chip(r.color, r.name), chip(t.color, t.name)];
+  if (b.type !== 'cartilage' && b.type !== 'notbone') chips.push(chip(div.color, div.name.replace(' skeleton', '')));
+  const aka = b.aka ? `<div class="aka">${b.aka}</div>` : '';
+  let groupLine = '';
+  if (b.group === 'carpals') groupLine = 'One of the 8 carpals (wrist bones).';
+  if (b.group === 'tarsals') groupLine = 'One of the 7 tarsals (ankle bones).';
+  if (b.group === 'hipbone') groupLine = 'One of the three parts that fuse into each hip bone.';
+  const note = b.note ? `<div class="note">${b.note}</div>` : '';
+  const countLine = g ? `${b.count}<br><span class="muted">${g.name}: ${g.count}</span>` : b.count;
+  info.innerHTML = `
+    <div class="chips">${chips.join('')}</div>
+    <h2>${title}</h2>${aka}
+    ${groupLine ? `<p class="muted" style="margin-top:0">${groupLine}</p>` : ''}
+    ${note}
+    <p>${about}</p>
+    ${fact ? `<div class="fact"><b>Did you know?</b> ${fact}</div>` : ''}
+    <dl class="meta"><dt>In your body</dt><dd>${countLine}</dd>
+    ${b.type !== 'cartilage' && b.type !== 'notbone' ? `<dt>Bone type</dt><dd>${t.name}</dd>` : ''}</dl>
+    <div class="row-btns">
+      <button class="btn small" id="b-focus">Zoom to it</button>
+      <button class="btn small" id="b-iso">${state.isolate ? 'Show everything' : 'Show only this'}</button>
+      <button class="btn small" id="b-clear">Close</button>
+    </div>`;
+  $('b-focus').onclick = () => focusOn([m]);
+  $('b-iso').onclick = () => {
+    state.isolate = state.isolate ? null : new Set([m]);
+    applyVisibility(); renderInfo();
+    if (state.isolate) focusOn([m]);
+  };
+  $('b-clear').onclick = () => select(null);
+  info.classList.remove('collapsed');
+}
+
+function overviewHTML() {
+  const total = BODY_COUNTS.reduce((s, r) => s + r[1], 0);
+  const rows = BODY_COUNTS.map(([n, c]) => `<tr><td>${n}</td><td>${c}</td></tr>`).join('');
+  const typeList = ['long', 'short', 'flat', 'irregular', 'sesamoid'].map(k =>
+    `<li><i style="background:${TYPES[k].color}"></i><span><b>${TYPES[k].name}.</b> ${TYPES[k].about}</span></li>`).join('');
+  return `
+    <h2>Your skeleton</h2>
+    <p>An adult skeleton has <b>${total} bones</b>. Babies are born with around 270 to 300; many fuse together as you grow (the skull, sacrum and hip bones are good examples).</p>
+    <p class="muted">Hover over a bone to see its name, click it to read about it, or search on the left.</p>
+    <table class="counts">${rows}<tr class="total"><td>Total</td><td>${total}</td></tr></table>
+    <h3 style="font-size:11px;letter-spacing:1.1px;text-transform:uppercase;color:var(--muted);margin:14px 0 2px">Five bone shapes</h3>
+    <ul class="types">${typeList}</ul>
+    <p class="muted" style="margin-top:12px">Two big divisions: the <b style="color:${DIVISIONS.axial.color}">axial</b> skeleton (80 bones) and the <b style="color:${DIVISIONS.appendicular.color}">appendicular</b> skeleton (126). Try “Colour by” on the left.</p>
+    <p class="muted">“Left” and “right” always mean the skeleton’s own sides, like a patient facing you.</p>`;
+}
+
+/* ---------- camera moves ---------- */
+let flight = null;
+function flyTo(target, position, dur = 0.9) {
+  flight = { t0: performance.now(), dur: dur * 1000, fromT: controls.target.clone(), fromP: camera.position.clone(), toT: target.clone(), toP: position.clone() };
+}
+function focusOn(meshes) {
+  const box = new THREE.Box3();
+  meshes.forEach(m => box.expandByObject(m));
+  if (box.isEmpty()) return;
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  const dist = Math.max(sphere.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.35, 0.16);
+  flyTo(sphere.center, sphere.center.clone().addScaledVector(dir, dist));
+}
+function viewFrom(name) {
+  const t = HOME.target.clone();
+  const views = { front: [0, 1.05, 3.3], side: [3.3, 1.05, 0.0], back: [0, 1.05, -3.3], reset: HOME.pos.toArray(), quiz: [1.0, 1.3, 3.9] };
+  if (name === 'quiz') t.y = 1.15;        // leave room for the question card at the top
+  const p = new THREE.Vector3(...views[name]);
+  flyTo(t, t.clone().add(p.sub(t).multiplyScalar(fitScale())));
+}
+controls.addEventListener('start', () => { flight = null; });
+
+/* =====================================================================
+   10. Panels: regions, colour legend, search, toggles
+   ===================================================================== */
+function renderRegions() {
+  const host = $('regions');
+  if (!host.children.length) {
+    for (const [id, r] of Object.entries(REGIONS)) {
+      const row = document.createElement('div');
+      row.className = 'region';
+      row.innerHTML = `<input type="checkbox" checked data-r="${id}"><span class="swatch" style="background:${r.color}"></span><span class="name" data-focus="${id}">${r.name}</span><span class="count" data-c="${id}"></span>`;
+      host.appendChild(row);
+    }
+    host.addEventListener('change', e => {
+      const id = e.target.dataset.r;
+      if (!id) return;
+      state.regionOn[id] = e.target.checked;
+      state.isolate = null;
+      applyVisibility();
+      renderInfo();
+    });
+    host.addEventListener('click', e => {
+      const id = e.target.dataset.focus;
+      if (!id) return;
+      if (!state.regionOn[id]) { state.regionOn[id] = true; applyVisibility(); }
+      focusOn(bones.filter(m => m.userData.region === id && m.visible));
+    });
+  }
+  for (const [id] of Object.entries(REGIONS)) {
+    host.querySelector(`[data-r="${id}"]`).checked = state.regionOn[id];
+    const n = bones.filter(m => m.userData.region === id && m.userData.info.type !== 'cartilage' && m.userData.info.type !== 'notbone').length;
+    host.querySelector(`[data-c="${id}"]`).textContent = n ? n : '';
+  }
+}
+
+function renderLegend() {
+  const host = $('legend');
+  let items = [];
+  if (state.colorMode === 'region') items = Object.values(REGIONS).map(r => [r.color, r.name]);
+  if (state.colorMode === 'type') items = ['long', 'short', 'flat', 'irregular', 'sesamoid', 'cartilage'].map(k => [TYPES[k].color, TYPES[k].name]);
+  if (state.colorMode === 'division') items = [[DIVISIONS.axial.color, 'Axial'], [DIVISIONS.appendicular.color, 'Appendicular'], [TYPES.cartilage.color, 'Cartilage']];
+  if (state.colorMode === 'natural') items = [['#e9dcc2', 'Bone'], [TYPES.cartilage.color, 'Cartilage'], [TYPES.notbone.color, 'Teeth']];
+  host.innerHTML = items.map(([c, n]) => `<span><i class="swatch" style="background:${c}"></i>${n}</span>`).join('');
+}
+
+$('color-modes').addEventListener('click', e => {
+  const mode = e.target.dataset.mode;
+  if (!mode) return;
+  state.colorMode = mode;
+  [...$('color-modes').children].forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+  applyColors();
+});
+$('show-all').onclick = () => { Object.keys(state.regionOn).forEach(r => (state.regionOn[r] = true)); state.isolate = null; applyVisibility(); renderInfo(); };
+$('only-axial').onclick = () => { Object.keys(state.regionOn).forEach(r => (state.regionOn[r] = REGIONS[r].division === 'axial')); state.isolate = null; applyVisibility(); renderInfo(); };
+$('only-app').onclick = () => { Object.keys(state.regionOn).forEach(r => (state.regionOn[r] = REGIONS[r].division === 'appendicular')); state.isolate = null; applyVisibility(); renderInfo(); };
+$('opt-labels').onchange = e => { state.labels = e.target.checked; applyVisibility(); };
+$('opt-cartilage').onchange = e => { state.cartilage = e.target.checked; applyVisibility(); };
+$('opt-rotate').onchange = e => { controls.autoRotate = e.target.checked; };
+$('explode').oninput = e => { state.explode = +e.target.value; applyExplode(); };
+document.querySelectorAll('[data-view]').forEach(b => (b.onclick = () => viewFrom(b.dataset.view)));
+$('menu-btn').onclick = () => $('side').classList.toggle('open');
+
+// search
+let searchIndex = [];
+function buildSearchIndex() {
+  const seen = new Set();
+  for (const m of bones) {
+    const { baseName, info: b, key, side } = m.userData;
+    if (seen.has(baseName)) {
+      // prefer the left-side mesh when both sides share a name
+      if (side === 'Left') { const e = searchIndex.find(s => s.label === baseName); if (e) e.mesh = m; }
+      continue;
+    }
+    seen.add(baseName);
+    const extra = [b.aka || '', b.group ? GROUPS[b.group].name : '', key, m.userData.detail].join(' ');
+    searchIndex.push({ label: baseName, hay: (baseName + ' ' + extra).toLowerCase(), mesh: m, sub: REGIONS[b.region].name });
+  }
+}
+let searchHits = [], searchSel = 0;
+function runSearch(q) {
+  const box = $('search-results');
+  q = q.trim().toLowerCase();
+  if (!q) { box.style.display = 'none'; return; }
+  const words = q.split(/\s+/);
+  searchHits = searchIndex
+    .map(e => {
+      if (!words.every(w => e.hay.includes(w))) return null;
+      const lab = e.label.toLowerCase();
+      const score = (lab.startsWith(q) ? 0 : lab.includes(q) ? 1 : 2) + e.label.length / 200;
+      return { e, score };
+    })
+    .filter(Boolean).sort((a, b) => a.score - b.score).slice(0, 8).map(x => x.e);
+  searchSel = 0;
+  if (!searchHits.length) { box.innerHTML = '<button disabled>No bones match</button>'; box.style.display = 'block'; return; }
+  box.innerHTML = searchHits.map((h, i) => `<button data-i="${i}" class="${i === 0 ? 'hi' : ''}">${h.label}<small>${h.sub}</small></button>`).join('');
+  box.style.display = 'block';
+}
+function chooseSearch(i) {
+  const h = searchHits[i];
+  if (!h) return;
+  $('search-results').style.display = 'none';
+  $('search').value = h.label;
+  if (!state.regionOn[h.mesh.userData.region]) { state.regionOn[h.mesh.userData.region] = true; }
+  state.isolate = null;
+  applyVisibility();
+  select(h.mesh, { focus: true });
+  $('side').classList.remove('open');
+}
+$('search').addEventListener('input', e => runSearch(e.target.value));
+$('search').addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    searchSel = (searchSel + (e.key === 'ArrowDown' ? 1 : -1) + searchHits.length) % max(1, searchHits.length);
+    [...$('search-results').children].forEach((b, i) => b.classList.toggle('hi', i === searchSel));
+  } else if (e.key === 'Enter') chooseSearch(searchSel);
+  else if (e.key === 'Escape') { $('search-results').style.display = 'none'; e.target.blur(); }
+});
+$('search-results').addEventListener('mousedown', e => {
+  const b = e.target.closest('button');
+  if (b && b.dataset.i) { e.preventDefault(); chooseSearch(+b.dataset.i); }
+});
+$('search').addEventListener('blur', () => setTimeout(() => ($('search-results').style.display = 'none'), 150));
+
+// tabs
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  const tab = t.dataset.tab;
+  if (tab === state.tab) return;
+  state.tab = tab;
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x.dataset.tab === tab));
+  $('tab-explore').style.display = tab === 'explore' ? '' : 'none';
+  $('tab-quiz').style.display = tab === 'quiz' ? '' : 'none';
+  if (tab === 'explore' && quiz.active) stopQuiz();
+});
+
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'Escape') { if (quiz.active) return; state.isolate = null; applyVisibility(); select(null); }
+  if (e.key === 'l' || e.key === 'L') { $('opt-labels').click(); }
+  if (e.key === 'r' || e.key === 'R') viewFrom('reset');
+  if (e.key === 'Enter' && quiz.active && quiz.locked) nextQuestion();
+});
+
+/* =====================================================================
+   11. Quiz
+   ===================================================================== */
+const QUIZ_ITEMS = [
+  { label: 'Frontal bone', hint: 'forehead', match: m => m.userData.key === 'frontal' },
+  { label: 'Parietal bone', match: m => m.userData.key === 'parietal' },
+  { label: 'Temporal bone', match: m => m.userData.key === 'temporal' },
+  { label: 'Occipital bone', match: m => m.userData.key === 'occipital' },
+  { label: 'Mandible', hint: 'lower jaw', match: m => m.userData.key === 'mandible' },
+  { label: 'Maxilla', hint: 'upper jaw', match: m => m.userData.key === 'maxilla' },
+  { label: 'Zygomatic bone', hint: 'cheekbone', match: m => m.userData.key === 'zygomatic' },
+  { label: 'Clavicle', hint: 'collarbone', match: m => m.userData.key === 'clavicle' },
+  { label: 'Scapula', hint: 'shoulder blade', match: m => m.userData.key === 'scapula' },
+  { label: 'Sternum', hint: 'breastbone', match: m => m.userData.key === 'sternum' },
+  { label: 'True rib', hint: 'ribs 1–7', match: m => m.userData.key === 'trueRib' },
+  { label: 'Floating rib', hint: 'ribs 11–12', match: m => m.userData.key === 'floatingRib' },
+  { label: 'Humerus', hint: 'upper arm', match: m => m.userData.key === 'humerus' },
+  { label: 'Radius', hint: 'thumb side of forearm', match: m => m.userData.key === 'radius' },
+  { label: 'Ulna', hint: 'little-finger side of forearm', match: m => m.userData.key === 'ulna' },
+  { label: 'Metacarpal', hint: 'palm', match: m => m.userData.key === 'metacarpal' },
+  { label: 'Phalanx of a finger', hint: 'finger bone', match: m => m.userData.key === 'phalanxHand' },
+  { label: 'Sacrum', match: m => m.userData.key === 'sacrum' },
+  { label: 'Coccyx', hint: 'tailbone', match: m => m.userData.key === 'coccyx' },
+  { label: 'Ilium', hint: 'top of the hip bone', match: m => m.userData.key === 'ilium' },
+  { label: 'Pubis', hint: 'front of the hip bone', match: m => m.userData.key === 'pubis' },
+  { label: 'Ischium', hint: 'sit bone', match: m => m.userData.key === 'ischium' },
+  { label: 'Femur', hint: 'thigh bone', match: m => m.userData.key === 'femur' },
+  { label: 'Patella', hint: 'kneecap', match: m => m.userData.key === 'patella' },
+  { label: 'Tibia', hint: 'shinbone', match: m => m.userData.key === 'tibia' },
+  { label: 'Fibula', hint: 'outer lower leg', match: m => m.userData.key === 'fibula' },
+  { label: 'Calcaneus', hint: 'heel bone', match: m => m.userData.key === 'calcaneus' },
+  { label: 'Metatarsal', hint: 'middle of the foot', match: m => m.userData.key === 'metatarsal' },
+  { label: 'Phalanx of a toe', hint: 'toe bone', match: m => m.userData.key === 'phalanxFoot' },
+  { label: 'Cervical vertebra', hint: 'neck', match: m => m.userData.info.group === 'cervical' },
+  { label: 'Lumbar vertebra', hint: 'lower back', match: m => m.userData.key === 'lumbar' },
+  // harder ones
+  { hard: true, label: 'Thoracic vertebra', hint: 'mid back', match: m => m.userData.key === 'thoracic' },
+  { hard: true, label: 'False rib', hint: 'ribs 8–10', match: m => m.userData.key === 'falseRib' },
+  { hard: true, label: 'Atlas (C1)', match: m => m.userData.key === 'atlas' },
+  { hard: true, label: 'Hyoid bone', match: m => m.userData.key === 'hyoid' },
+  { hard: true, label: 'Sphenoid bone', match: m => m.userData.key === 'sphenoid' },
+  { hard: true, label: 'Nasal bone', match: m => m.userData.key === 'nasal' },
+  { hard: true, label: 'Carpal (any wrist bone)', match: m => m.userData.info.group === 'carpals' },
+  { hard: true, label: 'Scaphoid', match: m => m.userData.key === 'scaphoid' },
+  { hard: true, label: 'Capitate', match: m => m.userData.key === 'capitate' },
+  { hard: true, label: 'Talus', match: m => m.userData.key === 'talus' },
+  { hard: true, label: 'Navicular', match: m => m.userData.key === 'navicular' },
+  { hard: true, label: 'Cuboid', match: m => m.userData.key === 'cuboid' },
+];
+const quiz = { active: false, mode: 'find', round: 0, total: 10, score: 0, items: [], current: null, target: null, locked: false, results: [] };
+const lowerFirst = t => t.charAt(0).toLowerCase() + t.slice(1);
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+function startQuiz(mode) {
+  quiz.active = true; quiz.mode = mode; quiz.round = 0; quiz.score = 0; quiz.results = [];
+  const hard = $('quiz-hard').checked;
+  quiz.items = shuffle(QUIZ_ITEMS.filter(q => hard || !q.hard)).slice(0, quiz.total);
+  Object.keys(state.regionOn).forEach(r => (state.regionOn[r] = true));
+  state.isolate = null;
+  state.explode = 0; $('explode').value = 0; applyExplode();
+  $('color-modes').querySelector('[data-mode="natural"]').click();   // so the quiz glow stands out
+  select(null);
+  applyVisibility();
+  $('quizbar').style.display = 'block';
+  $('side').classList.remove('open');
+  renderInfo();
+  nextQuestion(true);
+}
+function stopQuiz() {
+  quiz.active = false;
+  quiz.target = null;
+  state.flashes.clear();
+  $('quizbar').style.display = 'none';
+  applyVisibility();
+  renderInfo();
+  viewFrom('reset');
+}
+function renderDots() {
+  $('quiz-dots').innerHTML = Array.from({ length: quiz.total }, (_, i) => {
+    const r = quiz.results[i];
+    return `<i class="${r === true ? 'ok' : r === false ? 'no' : ''}${i === quiz.round - 1 && r === undefined ? ' now' : ''}"></i>`;
+  }).join('');
+  $('quiz-score').textContent = `Score ${quiz.score} / ${quiz.results.length}`;
+}
+function nextQuestion(first = false) {
+  if (!first && quiz.round >= quiz.total) return finishQuiz();
+  quiz.round++;
+  quiz.locked = false;
+  quiz.current = quiz.items[quiz.round - 1];
+  state.flashes.clear();
+  $('quiz-feedback').innerHTML = '';
+  $('quiz-actions').innerHTML = `<button class="btn small" id="q-stop">End quiz</button>`;
+  $('q-stop').onclick = () => { stopQuiz(); };
+  $('quiz-mode').textContent = `${quiz.mode === 'find' ? 'Find the bone' : 'Name the bone'} · Question ${quiz.round} of ${quiz.total}`;
+  const item = quiz.current;
+  if (quiz.mode === 'find') {
+    $('quiz-prompt').innerHTML = `Click the <b>${item.label}</b>${item.hint ? ` <span class="muted">(${item.hint})</span>` : ''}`;
+    $('quiz-options').innerHTML = '';
+    quiz.target = null;
+    viewFrom('quiz');
+  } else {
+    const candidates = bones.filter(item.match);
+    quiz.target = candidates[(Math.random() * candidates.length) | 0];
+    $('quiz-prompt').innerHTML = 'Which bone is <b>glowing</b>?';
+    const pool = shuffle(QUIZ_ITEMS.filter(q => q !== item && !q.match(quiz.target)));
+    const sameRegion = pool.filter(q => bones.some(m => q.match(m) && m.userData.region === quiz.target.userData.region));
+    const others = [...sameRegion, ...pool.filter(q => !sameRegion.includes(q))].slice(0, 3);
+    const options = shuffle([item, ...others]);
+    $('quiz-options').innerHTML = options.map((o, i) => `<button data-i="${i}">${o.label}</button>`).join('');
+    $('quiz-options').querySelectorAll('button').forEach((b, i) => b.onclick = () => answerName(options[i], b));
+    focusOn([quiz.target]);
+    const center = flight.toT, pos = flight.toP;
+    const d = pos.clone().sub(center);
+    d.setLength(Math.max(d.length(), 0.42));
+    flyTo(center, center.clone().add(d));
+  }
+  renderDots();
+}
+function lockQuestion(correct, message) {
+  quiz.locked = true;
+  quiz.results.push(correct);
+  if (correct) quiz.score++;
+  const fact = (quiz.current && bones.find(quiz.current.match)) ? (bones.find(quiz.current.match).userData.info.fact || (GROUPS[bones.find(quiz.current.match).userData.info.group] || {}).fact || '') : '';
+  $('quiz-feedback').innerHTML = `${message}${fact ? `<div class="muted" style="margin-top:4px">${fact}</div>` : ''}`;
+  $('quiz-actions').innerHTML = `<button class="btn primary small" id="q-next">${quiz.round >= quiz.total ? 'See results' : 'Next question'} →</button><button class="btn small" id="q-stop">End quiz</button>`;
+  $('q-next').onclick = () => nextQuestion();
+  $('q-stop').onclick = () => stopQuiz();
+  renderDots();
+}
+function quizClick(hit) {
+  if (quiz.mode !== 'find' || quiz.locked || !hit) return;
+  const item = quiz.current;
+  const now = performance.now();
+  if (item.match(hit)) {
+    state.flashes.set(hit, { color: new THREE.Color('#38e08c'), until: now + 1e9 });
+    lockQuestion(true, `<span class="ok">Correct!</span> That’s the ${lowerFirst(hit.userData.title)}.`);
+  } else {
+    state.flashes.set(hit, { color: new THREE.Color('#ff4d5e'), until: now + 1e9 });
+    const right = bones.filter(item.match);
+    right.forEach(m => state.flashes.set(m, { color: new THREE.Color('#ffd166'), until: now + 1e9 }));
+    lockQuestion(false, `<span class="no">Not quite.</span> You clicked the ${lowerFirst(hit.userData.title)}. The ${lowerFirst(item.label)} is glowing yellow.`);
+  }
+}
+function answerName(option, btn) {
+  if (quiz.locked) return;
+  const item = quiz.current;
+  const ok = option === item;
+  $('quiz-options').querySelectorAll('button').forEach(b => { b.disabled = true; });
+  btn.classList.add(ok ? 'right' : 'wrong');
+  if (!ok) {
+    const idx = [...$('quiz-options').children].find(b => b.textContent === item.label);
+    if (idx) idx.classList.add('right');
+  }
+  lockQuestion(ok, ok ? `<span class="ok">Correct!</span> It’s the ${lowerFirst(quiz.target.userData.title)}.`
+    : `<span class="no">Not quite.</span> It’s the ${lowerFirst(quiz.target.userData.title)}.`);
+}
+function finishQuiz() {
+  quiz.locked = true;
+  quiz.target = null;
+  state.flashes.clear();
+  const pct = Math.round((quiz.score / quiz.total) * 100);
+  const msg = pct === 100 ? 'Perfect score! 🦴' : pct >= 80 ? 'Great work!' : pct >= 50 ? 'Good effort. Explore a bit more and try again.' : 'Keep practising: explore the skeleton and try again.';
+  $('quiz-mode').textContent = quiz.mode === 'find' ? 'Find the bone · Results' : 'Name the bone · Results';
+  $('quiz-prompt').innerHTML = `You scored <b>${quiz.score} / ${quiz.total}</b>`;
+  $('quiz-options').innerHTML = '';
+  $('quiz-feedback').innerHTML = msg;
+  $('quiz-actions').innerHTML = `<button class="btn primary small" id="q-again">Play again</button><button class="btn small" id="q-stop">Back to exploring</button>`;
+  $('q-again').onclick = () => startQuiz(quiz.mode);
+  $('q-stop').onclick = () => { stopQuiz(); document.querySelector('.tab[data-tab="explore"]').click(); };
+  try {
+    const k = 'skeleton-best-' + quiz.mode;
+    const best = +(localStorage.getItem(k) || 0);
+    if (quiz.score > best) localStorage.setItem(k, quiz.score);
+  } catch (e) { /* storage may be unavailable */ }
+  showBest();
+  renderDots();
+  viewFrom('reset');
+}
+function showBest() {
+  let txt = '';
+  try {
+    const f = localStorage.getItem('skeleton-best-find'), n = localStorage.getItem('skeleton-best-name');
+    if (f || n) txt = `Best scores on this device: Find ${f || 0}/10 · Name ${n || 0}/10`;
+  } catch (e) { /* ignore */ }
+  $('best').textContent = txt;
+}
+document.querySelectorAll('.quiz-card').forEach(c => c.onclick = () => startQuiz(c.dataset.quiz));
+
+/* =====================================================================
+   12. Per-frame highlight, camera flight, render
+   ===================================================================== */
+const HOVER = new THREE.Color('#ffb35c'), SELECT = new THREE.Color('#38c9ff'), GROUP = new THREE.Color('#2a7fa8'), QUIZ_GLOW = new THREE.Color('#ff3df0');
+function updateHighlights(time) {
+  const pulse = 0.5 + 0.5 * Math.sin(time * 0.006);
+  const sel = state.selected;
+  const selGroup = sel && sel.userData.info.group && sel.userData.info.group !== 'hipbone' ? sel.userData.info.group : null;
+  const selKey = sel ? sel.userData.key : null;
+  for (const m of bones) {
+    const e = m.material.emissive;
+    let intensity = 0;
+    const flash = state.flashes.get(m);
+    if (flash) { e.copy(flash.color); intensity = 0.45 + 0.25 * pulse; }
+    else if (quiz.active && m === quiz.target) { e.copy(QUIZ_GLOW); intensity = 0.5 + 0.5 * pulse; }
+    else if (m === sel) { e.copy(SELECT); intensity = 0.3 + 0.25 * pulse; }
+    else if (m === state.hovered && !(quiz.active && quiz.mode === 'name')) { e.copy(HOVER); intensity = 0.32; }
+    else if (sel && !quiz.active && (selGroup ? m.userData.info.group === selGroup : (m.userData.key === selKey && ['metacarpal', 'phalanxHand', 'metatarsal', 'phalanxFoot', 'cuneiform', 'disc', 'costal', 'sternum'].includes(selKey)))) {
+      e.copy(GROUP); intensity = 0.22;
+    }
+    m.material.emissiveIntensity = intensity;
+    if (!intensity) e.setRGB(0, 0, 0);
+  }
+}
+
+function frame(time) {
+  requestAnimationFrame(frame);
+  if (flight) {
+    const t = clamp01((performance.now() - flight.t0) / flight.dur);
+    const k = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    controls.target.lerpVectors(flight.fromT, flight.toT, k);
+    camera.position.lerpVectors(flight.fromP, flight.toP, k);
+    if (t >= 1) flight = null;
+  }
+  controls.update();
+  if (pointerDirty && pointerInside && !downAt) {
+    pointerDirty = false;
+    const hit = pick();
+    if (hit !== state.hovered) setHover(hit);
+  }
+  if (state.hovered) { tip.style.left = lastClient.x + 'px'; tip.style.top = lastClient.y + 'px'; }
+  updateHighlights(time);
+  renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  labelRenderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* =====================================================================
+   13. Boot: sculpt each region, letting the page paint in between
+   ===================================================================== */
+const nextFrame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+async function boot() {
+  renderInfo();
+  renderLegend();
+  requestAnimationFrame(frame);
+  let humeralHead, femoralHead;
+  const steps = [
+    ['Stacking the vertebrae', () => { buildSpine(); buildSacrum(); }],
+    ['Shaping the skull', buildSkull],
+    ['Bending the ribs', buildThorax],
+    ['Fitting the shoulders', () => { humeralHead = buildShoulder(); }],
+    ['Building the arms', () => buildArm(humeralHead)],
+    ['Assembling the hands', buildHand],
+    ['Joining the pelvis', () => { femoralHead = buildPelvis(); }],
+    ['Building the legs', () => buildLeg(femoralHead)],
+    ['Arching the feet', buildFoot],
+  ];
+  const t0 = performance.now();
+  const stepMs = [];
+  for (let i = 0; i < steps.length; i++) {
+    $('loader-text').textContent = steps[i][0] + '…';
+    $('loader-fill').style.width = `${(i / steps.length) * 100}%`;
+    await nextFrame();
+    const ts = performance.now();
+    steps[i][1]();
+    stepMs.push(steps[i][0] + ' ' + Math.round(performance.now() - ts));
+    applyColors();
+  }
+  $('loader-fill').style.width = '100%';
+  computeExplodeVectors();
+  buildLabels();
+  buildSearchIndex();
+  applyVisibility();
+  applyColors();
+  showBest();
+  window.__skeleton = { bones, camera, controls, select, focusOn, viewFrom, state, pick, pointer, buildMs: Math.round(performance.now() - t0), stepMs };
+  setTimeout(() => { $('loader').style.display = 'none'; $('hint').style.display = 'block'; }, 250);
+  setTimeout(() => { $('hint').style.opacity = '0.6'; }, 8000);
+}
+boot().catch(err => {
+  console.error(err);
+  $('fail').style.display = 'flex';
+  $('fail-msg').textContent = 'Something went wrong while building the skeleton: ' + err.message;
+});
+</script>
+</body>
+</html>
